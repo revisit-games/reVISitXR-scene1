@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>reVISitXR WebXR Starter</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: radial-gradient(circle at top, #21324a 0%, #0b1320 55%, #06080d 100%);
+        color: #eef3ff;
+      }
+
+      #hud {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        max-width: 340px;
+        padding: 14px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 14px;
+        background: rgba(8, 12, 20, 0.72);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
+        z-index: 10;
+      }
+
+      #hud h1 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+        font-weight: 700;
+      }
+
+      #hud p {
+        margin: 0;
+        font-size: 0.92rem;
+        line-height: 1.45;
+      }
+
+      #hud p + p {
+        margin-top: 8px;
+        color: rgba(238, 243, 255, 0.78);
+      }
+
+      #ARButton {
+        left: 20px !important;
+        width: 180px !important;
+        bottom: 20px !important;
+      }
+
+      #VRButton {
+        left: 220px !important;
+        width: 180px !important;
+        bottom: 20px !important;
+      }
+
+      @media (max-width: 520px) {
+        #VRButton {
+          left: 20px !important;
+          bottom: 76px !important;
+        }
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-CR-vYfNB.js"></script>
+  </head>
+  <body>
+    <div id="hud">
+      <h1 id="hud-title">Desktop Debug Mode</h1>
+      <p id="hud-body">Drag the cube with your mouse on desktop. In VR, point with a controller and hold the trigger to grab it.</p>
+      <p id="hud-note">Use HTTPS on Quest. If AR is supported by the current browser/device, a START AR button will appear and the real-world passthrough should remain visible behind the cube.</p>
+    </div>
+  </body>
+</html>
