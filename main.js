@@ -95,6 +95,7 @@ const desktopGrabber = { type: 'desktop-pointer' };
 
 const tempWorldPosition = new THREE.Vector3();
 const tempWorldQuaternion = new THREE.Quaternion();
+const tempDirection = new THREE.Vector3();
 const tempRight = new THREE.Vector3();
 const tempUp = new THREE.Vector3();
 const dragPoint = new THREE.Vector3();
@@ -117,6 +118,11 @@ const idleColor = 0x000000;
 const defaultRayLength = 5;
 const mousePanFactor = 0.003;
 const mouseRotateFactor = 0.005;
+const keyboardMoveSpeed = 2.4;
+const wheelMoveStep = 0.45;
+
+const pressedKeys = new Set();
+const clock = new THREE.Clock();
 
 let currentMode = 'desktop';
 
@@ -343,6 +349,64 @@ function rotateDesktopCamera( deltaX, deltaY ) {
 
 }
 
+function moveCameraForward( distance ) {
+
+  tempDirection.set( 0, 0, - 1 ).applyQuaternion( camera.quaternion ).normalize();
+  camera.position.addScaledVector( tempDirection, distance );
+  camera.updateMatrixWorld( true );
+
+}
+
+function moveCameraRight( distance ) {
+
+  tempRight.set( 1, 0, 0 ).applyQuaternion( camera.quaternion ).normalize();
+  camera.position.addScaledVector( tempRight, distance );
+  camera.updateMatrixWorld( true );
+
+}
+
+function updateKeyboardMovement( deltaSeconds ) {
+
+  const keyboardBlockedByPointer =
+    desktopState.mode === 'object' ||
+    desktopState.mode === 'pan';
+
+  if ( renderer.xr.isPresenting || keyboardBlockedByPointer || pressedKeys.size === 0 ) {
+
+    return;
+
+  }
+
+  let forward = 0;
+  let right = 0;
+
+  if ( pressedKeys.has( 'KeyW' ) ) forward += 1;
+  if ( pressedKeys.has( 'KeyS' ) ) forward -= 1;
+  if ( pressedKeys.has( 'KeyD' ) ) right += 1;
+  if ( pressedKeys.has( 'KeyA' ) ) right -= 1;
+
+  if ( forward === 0 && right === 0 ) {
+
+    return;
+
+  }
+
+  const distance = keyboardMoveSpeed * deltaSeconds;
+
+  if ( forward !== 0 ) {
+
+    moveCameraForward( forward * distance );
+
+  }
+
+  if ( right !== 0 ) {
+
+    moveCameraRight( right * distance );
+
+  }
+
+}
+
 function updateDesktopHover() {
 
   if ( renderer.xr.isPresenting || desktopState.mode !== null ) {
@@ -522,6 +586,57 @@ function onPointerCancel() {
 
 }
 
+function onKeyDown( event ) {
+
+  if ( renderer.xr.isPresenting ) {
+
+    return;
+
+  }
+
+  if ( event.code === 'KeyW' || event.code === 'KeyA' || event.code === 'KeyS' || event.code === 'KeyD' ) {
+
+    pressedKeys.add( event.code );
+    event.preventDefault();
+
+  }
+
+}
+
+function onKeyUp( event ) {
+
+  pressedKeys.delete( event.code );
+
+}
+
+function onWindowBlur() {
+
+  pressedKeys.clear();
+  onPointerCancel();
+
+}
+
+function onWheel( event ) {
+
+  if ( renderer.xr.isPresenting ) {
+
+    return;
+
+  }
+
+  const direction = Math.sign( event.deltaY );
+
+  if ( direction === 0 ) {
+
+    return;
+
+  }
+
+  moveCameraForward( - direction * wheelMoveStep );
+  event.preventDefault();
+
+}
+
 function startXRObjectGrab( controller, object ) {
 
   object.userData.grabbedBy = controller;
@@ -691,6 +806,9 @@ function updateControllerState( controller ) {
 
 function animate() {
 
+  const deltaSeconds = Math.min( clock.getDelta(), 0.05 );
+  updateKeyboardMovement( deltaSeconds );
+
   for ( const controller of controllers ) {
 
     updateControllerState( controller );
@@ -748,11 +866,14 @@ buildController( 1 );
 updateHud();
 
 window.addEventListener( 'resize', onWindowResize );
-window.addEventListener( 'blur', onPointerCancel );
+window.addEventListener( 'blur', onWindowBlur );
+window.addEventListener( 'keydown', onKeyDown );
+window.addEventListener( 'keyup', onKeyUp );
 renderer.domElement.addEventListener( 'contextmenu', ( event ) => event.preventDefault() );
 renderer.domElement.addEventListener( 'pointerdown', onPointerDown );
 renderer.domElement.addEventListener( 'pointermove', onPointerMove );
 renderer.domElement.addEventListener( 'pointerup', onPointerUp );
 renderer.domElement.addEventListener( 'pointercancel', onPointerCancel );
 renderer.domElement.addEventListener( 'pointerleave', onPointerLeave );
+renderer.domElement.addEventListener( 'wheel', onWheel, { passive: false } );
 renderer.setAnimationLoop( animate );
