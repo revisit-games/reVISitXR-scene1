@@ -27,7 +27,10 @@ function getLocalIPv4s() {
 
 const domains = getLocalIPv4s();
 
-export default defineConfig( {
+export default defineConfig( ( { command } ) => ( {
+  // Use relative asset paths for production builds so the bundle can live under
+  // ReVISit's public/<study>/assets/... subdirectories without broken imports.
+  base: command === 'build' ? './' : '/',
   plugins: [
     basicSsl( {
       name: 'revisitxr-dev',
@@ -45,4 +48,4 @@ export default defineConfig( {
     port: 4173,
     https: true,
   },
-} );
+} ) );
