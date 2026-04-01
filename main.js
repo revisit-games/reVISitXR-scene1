@@ -9,8 +9,16 @@ const defaultFog = new THREE.Fog( 0x0b1320, 6, 18 );
 scene.background = defaultBackground;
 scene.fog = defaultFog;
 
+const initialDesktopCameraPosition = new THREE.Vector3( 0, 1.6, 3 );
+const initialDesktopCameraQuaternion = new THREE.Quaternion();
+
 const camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.1, 100 );
-camera.position.set( 0, 1.6, 3 );
+camera.position.copy( initialDesktopCameraPosition );
+camera.quaternion.copy( initialDesktopCameraQuaternion );
+
+const xrOrigin = new THREE.Group();
+scene.add( xrOrigin );
+xrOrigin.add( camera );
 
 const renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
 renderer.setPixelRatio( window.devicePixelRatio );
@@ -84,21 +92,31 @@ const raycaster = new THREE.Raycaster();
 const controllerModelFactory = new XRControllerModelFactory();
 const pointer = new THREE.Vector2();
 const desktopGrabber = { type: 'desktop-pointer' };
+
+const tempWorldPosition = new THREE.Vector3();
+const tempWorldQuaternion = new THREE.Quaternion();
+const tempRight = new THREE.Vector3();
+const tempUp = new THREE.Vector3();
 const dragPoint = new THREE.Vector3();
 const dragNormal = new THREE.Vector3();
+const desktopEuler = new THREE.Euler( 0, 0, 0, 'YXZ' );
 
 const desktopState = {
   activePointerId: null,
   hovered: null,
   selected: null,
+  mode: null,
   dragPlane: new THREE.Plane(),
   dragOffset: new THREE.Vector3(),
+  lastPointer: new THREE.Vector2(),
 };
 
 const hoverColor = 0x163244;
 const grabbedColor = 0x235f7d;
 const idleColor = 0x000000;
 const defaultRayLength = 5;
+const mousePanFactor = 0.003;
+const mouseRotateFactor = 0.005;
 
 let currentMode = 'desktop';
 
@@ -146,8 +164,8 @@ function updateHud() {
   if ( currentMode === 'immersive-vr' ) {
 
     hudTitle.textContent = 'WebXR VR Mode';
-    hudBody.textContent = 'Point at the cube with a controller. Hold the trigger to grab it, and look for the bright cursor dot at the end of the ray when you are on target.';
-    hudNote.textContent = 'Desktop mouse dragging is paused while an XR session is active.';
+    hudBody.textContent = 'Point at the cube with either controller and hold the trigger to grab it. The bright dot shows where the controller ray hits.';
+    hudNote.textContent = 'When you exit VR, desktop mode inherits the last headset pose. The next VR or AR entry starts from the fixed initial XR origin again.';
     return;
 
   }
@@ -155,15 +173,15 @@ function updateHud() {
   if ( currentMode === 'immersive-ar' ) {
 
     hudTitle.textContent = 'WebXR AR Mode';
-    hudBody.textContent = 'AR, VR, and desktop now share the same scene state. The cube and pedestal should stay exactly where you left them, while passthrough remains visible behind the virtual content.';
-    hudNote.textContent = 'If the AR button says AR NOT SUPPORTED, your current Quest Browser build is not exposing immersive-ar on this device.';
+    hudBody.textContent = 'AR, VR, and desktop share the same scene state. The cube and pedestal stay where you leave them, while passthrough remains visible behind the virtual content.';
+    hudNote.textContent = 'Point at the cube with either controller and hold the trigger to grab it. If the browser reports AR NOT SUPPORTED, immersive-ar is not exposed on this device.';
     return;
 
   }
 
   hudTitle.textContent = 'Desktop Debug Mode';
-  hudBody.textContent = 'Drag the cube with your mouse on desktop. Enter VR to test controller grabbing, or try AR if your browser/device exposes immersive-ar.';
-  hudNote.textContent = 'Use HTTPS on Quest. The AR behavior here is a minimal passthrough-style setup intended for fast iteration, not yet a full spatial anchoring workflow.';
+  hudBody.textContent = 'Left drag the cube to move it. Left drag empty space pans the camera. Right drag rotates the camera view.';
+  hudNote.textContent = 'In a normal Quest browser page, controller-specific pose/button data is not reliably exposed to the webpage outside an immersive XR session. Desktop pointer controls remain available, and the Quest browser may map its page cursor to them.';
 
 }
 
@@ -189,6 +207,38 @@ function setPresentationMode( mode ) {
 
 }
 
+function resetXROriginToInitial() {
+
+  xrOrigin.position.set( 0, 0, 0 );
+  xrOrigin.quaternion.identity();
+  xrOrigin.scale.set( 1, 1, 1 );
+
+}
+
+function resetCameraForXRSession() {
+
+  resetXROriginToInitial();
+  camera.position.set( 0, 0, 0 );
+  camera.quaternion.identity();
+  camera.scale.set( 1, 1, 1 );
+  camera.updateMatrixWorld( true );
+
+}
+
+function flattenXRToDesktopCamera() {
+
+  camera.updateMatrixWorld( true );
+  camera.getWorldPosition( tempWorldPosition );
+  camera.getWorldQuaternion( tempWorldQuaternion );
+
+  resetXROriginToInitial();
+
+  camera.position.copy( tempWorldPosition );
+  camera.quaternion.copy( tempWorldQuaternion );
+  camera.updateMatrixWorld( true );
+
+}
+
 async function alignARViewToFloor() {
 
   const session = renderer.xr.getSession();
@@ -207,54 +257,6 @@ async function alignARViewToFloor() {
   } catch ( error ) {
 
     console.warn( 'AR local-floor reference space unavailable, keeping default local space.', error );
-
-  }
-
-}
-
-function releaseDesktopDrag() {
-
-  if ( desktopState.selected ) {
-
-    desktopState.selected.userData.grabbedBy = null;
-
-  }
-
-  desktopState.selected = null;
-  desktopState.activePointerId = null;
-  renderer.domElement.style.cursor = desktopState.hovered ? 'grab' : 'default';
-
-}
-
-function releaseControllerObject( controller ) {
-
-  const selected = controller.userData.selected;
-
-  if ( ! selected ) {
-
-    return;
-
-  }
-
-  scene.attach( selected );
-  selected.userData.grabbedBy = null;
-  controller.userData.selected = null;
-
-}
-
-function releaseAllXRSelections() {
-
-  for ( const controller of controllers ) {
-
-    releaseControllerObject( controller );
-    controller.userData.hovered = null;
-
-    const cursor = controller.getObjectByName( 'cursor' );
-    if ( cursor ) {
-
-      cursor.visible = false;
-
-    }
 
   }
 
@@ -295,6 +297,7 @@ function setPointerFromEvent( event ) {
 
 function getDesktopIntersections() {
 
+  camera.updateMatrixWorld( true );
   raycaster.setFromCamera( pointer, camera );
   return raycaster.intersectObjects( interactables, false ).filter( ( hit ) => {
 
@@ -315,9 +318,34 @@ function getXRIntersections( controller ) {
 
 }
 
+function panDesktopCamera( deltaX, deltaY ) {
+
+  const panScale = mousePanFactor * Math.max( camera.position.distanceTo( cube.position ), 1.5 );
+
+  tempRight.set( 1, 0, 0 ).applyQuaternion( camera.quaternion );
+  tempUp.set( 0, 1, 0 ).applyQuaternion( camera.quaternion );
+
+  camera.position.addScaledVector( tempRight, - deltaX * panScale );
+  camera.position.addScaledVector( tempUp, deltaY * panScale );
+  camera.updateMatrixWorld( true );
+
+}
+
+function rotateDesktopCamera( deltaX, deltaY ) {
+
+  desktopEuler.setFromQuaternion( camera.quaternion );
+  desktopEuler.y -= deltaX * mouseRotateFactor;
+  desktopEuler.x -= deltaY * mouseRotateFactor;
+  desktopEuler.x = THREE.MathUtils.clamp( desktopEuler.x, - Math.PI / 2 + 0.05, Math.PI / 2 - 0.05 );
+
+  camera.quaternion.setFromEuler( desktopEuler );
+  camera.updateMatrixWorld( true );
+
+}
+
 function updateDesktopHover() {
 
-  if ( renderer.xr.isPresenting || desktopState.selected ) {
+  if ( renderer.xr.isPresenting || desktopState.mode !== null ) {
 
     return;
 
@@ -326,6 +354,74 @@ function updateDesktopHover() {
   const intersections = getDesktopIntersections();
   desktopState.hovered = intersections[ 0 ]?.object ?? null;
   renderer.domElement.style.cursor = desktopState.hovered ? 'grab' : 'default';
+
+}
+
+function releaseDesktopInteraction() {
+
+  if ( desktopState.mode === 'object' && desktopState.selected ) {
+
+    desktopState.selected.userData.grabbedBy = null;
+
+  }
+
+  desktopState.mode = null;
+  desktopState.selected = null;
+  desktopState.activePointerId = null;
+  renderer.domElement.style.cursor = desktopState.hovered ? 'grab' : 'default';
+
+}
+
+function onPointerDown( event ) {
+
+  if ( renderer.xr.isPresenting ) {
+
+    return;
+
+  }
+
+  if ( event.button !== 0 && event.button !== 2 ) {
+
+    return;
+
+  }
+
+  setPointerFromEvent( event );
+  desktopState.activePointerId = event.pointerId;
+  desktopState.lastPointer.set( event.clientX, event.clientY );
+
+  if ( event.button === 2 ) {
+
+    desktopState.mode = 'rotate';
+    renderer.domElement.setPointerCapture( event.pointerId );
+    renderer.domElement.style.cursor = 'grabbing';
+    return;
+
+  }
+
+  const intersections = getDesktopIntersections();
+
+  if ( intersections.length > 0 ) {
+
+    const hit = intersections[ 0 ];
+    desktopState.mode = 'object';
+    desktopState.selected = hit.object;
+    desktopState.hovered = hit.object;
+    hit.object.userData.grabbedBy = desktopGrabber;
+
+    camera.getWorldDirection( dragNormal );
+    desktopState.dragPlane.setFromNormalAndCoplanarPoint( dragNormal, hit.object.position );
+    desktopState.dragOffset.copy( hit.object.position ).sub( hit.point );
+
+    renderer.domElement.setPointerCapture( event.pointerId );
+    renderer.domElement.style.cursor = 'grabbing';
+    return;
+
+  }
+
+  desktopState.mode = 'pan';
+  renderer.domElement.setPointerCapture( event.pointerId );
+  renderer.domElement.style.cursor = 'grabbing';
 
 }
 
@@ -339,8 +435,20 @@ function onPointerMove( event ) {
 
   setPointerFromEvent( event );
 
-  if ( desktopState.selected ) {
+  if ( desktopState.activePointerId !== event.pointerId || desktopState.mode === null ) {
 
+    updateDesktopHover();
+    return;
+
+  }
+
+  const deltaX = event.clientX - desktopState.lastPointer.x;
+  const deltaY = event.clientY - desktopState.lastPointer.y;
+  desktopState.lastPointer.set( event.clientX, event.clientY );
+
+  if ( desktopState.mode === 'object' && desktopState.selected ) {
+
+    camera.updateMatrixWorld( true );
     raycaster.setFromCamera( pointer, camera );
 
     if ( raycaster.ray.intersectPlane( desktopState.dragPlane, dragPoint ) ) {
@@ -349,47 +457,22 @@ function onPointerMove( event ) {
 
     }
 
-    renderer.domElement.style.cursor = 'grabbing';
     return;
 
   }
 
-  updateDesktopHover();
+  if ( desktopState.mode === 'pan' ) {
 
-}
-
-function onPointerDown( event ) {
-
-  if ( renderer.xr.isPresenting || event.button !== 0 ) {
-
+    panDesktopCamera( deltaX, deltaY );
     return;
 
   }
 
-  setPointerFromEvent( event );
-  const intersections = getDesktopIntersections();
+  if ( desktopState.mode === 'rotate' ) {
 
-  if ( intersections.length === 0 ) {
-
-    desktopState.hovered = null;
-    renderer.domElement.style.cursor = 'default';
-    return;
+    rotateDesktopCamera( deltaX, deltaY );
 
   }
-
-  const hit = intersections[ 0 ];
-  const object = hit.object;
-  desktopState.activePointerId = event.pointerId;
-  desktopState.selected = object;
-  desktopState.hovered = object;
-  object.userData.grabbedBy = desktopGrabber;
-
-  camera.getWorldDirection( dragNormal );
-  desktopState.dragPlane.setFromNormalAndCoplanarPoint( dragNormal, object.position );
-  desktopState.dragOffset.copy( object.position ).sub( hit.point );
-
-  renderer.domElement.setPointerCapture( event.pointerId );
-  renderer.domElement.style.cursor = 'grabbing';
 
 }
 
@@ -407,14 +490,14 @@ function onPointerUp( event ) {
 
   }
 
-  releaseDesktopDrag();
+  releaseDesktopInteraction();
   updateDesktopHover();
 
 }
 
 function onPointerLeave() {
 
-  if ( renderer.xr.isPresenting || desktopState.selected ) {
+  if ( renderer.xr.isPresenting || desktopState.mode !== null ) {
 
     return;
 
@@ -425,11 +508,85 @@ function onPointerLeave() {
 
 }
 
+function onPointerCancel() {
+
+  if ( desktopState.activePointerId !== null && renderer.domElement.hasPointerCapture( desktopState.activePointerId ) ) {
+
+    renderer.domElement.releasePointerCapture( desktopState.activePointerId );
+
+  }
+
+  releaseDesktopInteraction();
+  desktopState.hovered = null;
+  renderer.domElement.style.cursor = 'default';
+
+}
+
+function startXRObjectGrab( controller, object ) {
+
+  object.userData.grabbedBy = controller;
+  controller.attach( object );
+  controller.userData.selected = object;
+  controller.userData.mode = 'object';
+  controller.userData.hovered = null;
+
+}
+
+function releaseControllerObject( controller ) {
+
+  const selected = controller.userData.selected;
+
+  if ( ! selected ) {
+
+    return;
+
+  }
+
+  scene.attach( selected );
+  selected.userData.grabbedBy = null;
+  controller.userData.selected = null;
+
+}
+
+function releaseControllerAction( controller ) {
+
+  if ( controller.userData.mode === 'object' ) {
+
+    releaseControllerObject( controller );
+
+  }
+
+  controller.userData.mode = null;
+  controller.userData.hovered = null;
+
+  const cursor = controller.getObjectByName( 'cursor' );
+  if ( cursor ) {
+
+    cursor.visible = false;
+
+  }
+
+}
+
+function releaseAllXRControllerActions() {
+
+  for ( const controller of controllers ) {
+
+    releaseControllerAction( controller );
+
+  }
+
+}
+
 function buildController( index ) {
 
   const controller = renderer.xr.getController( index );
+  controller.userData.index = index;
+  controller.userData.mode = null;
   controller.userData.selected = null;
   controller.userData.hovered = null;
+  controller.addEventListener( 'disconnected', () => releaseControllerAction( controller ) );
+
   controller.addEventListener( 'selectstart', onSelectStart );
   controller.addEventListener( 'selectend', onSelectEnd );
 
@@ -464,6 +621,13 @@ function buildController( index ) {
 function onSelectStart( event ) {
 
   const controller = event.target;
+
+  if ( ! renderer.xr.isPresenting ) {
+
+    return;
+
+  }
+
   const intersections = getXRIntersections( controller );
 
   if ( intersections.length === 0 ) {
@@ -472,24 +636,13 @@ function onSelectStart( event ) {
 
   }
 
-  const object = intersections[ 0 ].object;
-  object.userData.grabbedBy = controller;
-  controller.attach( object );
-  controller.userData.selected = object;
-  controller.userData.hovered = null;
-
-  const cursor = controller.getObjectByName( 'cursor' );
-  if ( cursor ) {
-
-    cursor.visible = false;
-
-  }
+  startXRObjectGrab( controller, intersections[ 0 ].object );
 
 }
 
 function onSelectEnd( event ) {
 
-  releaseControllerObject( event.target );
+  releaseControllerAction( event.target );
 
 }
 
@@ -498,9 +651,18 @@ function updateControllerState( controller ) {
   const line = controller.getObjectByName( 'ray' );
   const cursor = controller.getObjectByName( 'cursor' );
 
-  if ( controller.userData.selected ) {
+  if ( ! renderer.xr.isPresenting ) {
 
     controller.userData.hovered = null;
+    controller.userData.mode = null;
+    line.scale.z = defaultRayLength;
+    cursor.visible = false;
+    return;
+
+  }
+
+  if ( controller.userData.mode === 'object' ) {
+
     line.scale.z = 0.6;
     cursor.visible = false;
     return;
@@ -550,12 +712,15 @@ function onWindowResize() {
 
 renderer.xr.addEventListener( 'sessionstart', () => {
 
-  releaseDesktopDrag();
+  releaseDesktopInteraction();
   desktopState.hovered = null;
   renderer.domElement.style.cursor = 'default';
 
+  resetCameraForXRSession();
+
   const blendMode = renderer.xr.getEnvironmentBlendMode();
   const isPassthroughStyle = blendMode === 'alpha-blend' || blendMode === 'additive';
+
   setPresentationMode( isPassthroughStyle ? 'immersive-ar' : 'immersive-vr' );
 
   if ( isPassthroughStyle ) {
@@ -568,7 +733,8 @@ renderer.xr.addEventListener( 'sessionstart', () => {
 
 renderer.xr.addEventListener( 'sessionend', () => {
 
-  releaseAllXRSelections();
+  releaseAllXRControllerActions();
+  flattenXRToDesktopCamera();
   desktopState.hovered = null;
   renderer.xr.setReferenceSpace( null );
   renderer.xr.setReferenceSpaceType( 'local-floor' );
@@ -582,9 +748,11 @@ buildController( 1 );
 updateHud();
 
 window.addEventListener( 'resize', onWindowResize );
-window.addEventListener( 'blur', releaseDesktopDrag );
-renderer.domElement.addEventListener( 'pointermove', onPointerMove );
+window.addEventListener( 'blur', onPointerCancel );
+renderer.domElement.addEventListener( 'contextmenu', ( event ) => event.preventDefault() );
 renderer.domElement.addEventListener( 'pointerdown', onPointerDown );
+renderer.domElement.addEventListener( 'pointermove', onPointerMove );
 renderer.domElement.addEventListener( 'pointerup', onPointerUp );
+renderer.domElement.addEventListener( 'pointercancel', onPointerCancel );
 renderer.domElement.addEventListener( 'pointerleave', onPointerLeave );
 renderer.setAnimationLoop( animate );
