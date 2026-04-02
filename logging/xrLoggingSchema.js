@@ -17,6 +17,30 @@ export const INTERACTORS = Object.freeze( {
   CONTROLLER_1: 'controller-1',
 } );
 
+export const REPLAY_POINTER_IDS = Object.freeze( [
+  INTERACTORS.CONTROLLER_0,
+  INTERACTORS.CONTROLLER_1,
+] );
+
+export const POINTER_MODES = Object.freeze( {
+  HOVER: 'hover',
+  GRAB: 'grab',
+  HIDDEN: 'hidden',
+} );
+
+export const ANALYSIS_MODES = Object.freeze( {
+  STUDY: 'study',
+  ANALYSIS: 'analysis',
+} );
+
+export const DEFAULT_ANALYSIS_CONTROL = Object.freeze( {
+  mode: ANALYSIS_MODES.STUDY,
+  isPlaying: false,
+  participantId: null,
+  trialId: null,
+  allowLocalInteractionWhenPaused: true,
+} );
+
 export const SUMMARY_RESPONSE_KEYS = Object.freeze( {
   XR_MODE: 'xrMode',
   XR_INTERACTION_PHASE: 'xrInteractionPhase',
@@ -29,8 +53,12 @@ export const SUMMARY_RESPONSE_KEYS = Object.freeze( {
 export const SAMPLING_CONFIG = Object.freeze( {
   objectMinIntervalMs: 200,
   cameraMinIntervalMs: 300,
+  pointerMinIntervalMs: 120,
   positionEpsilon: 0.01,
   quaternionAngleThresholdDeg: 2,
+  pointerPositionEpsilon: 0.02,
+  pointerRayLengthEpsilon: 0.02,
+  enablePointerSampling: true,
 } );
 
 export const ACTION_TYPES = Object.freeze( {
@@ -42,6 +70,7 @@ export const ACTION_TYPES = Object.freeze( {
   OBJECT_GRAB_END: 'object-grab-end',
   CAMERA_TRANSFORM_SAMPLE: 'camera-transform-sample',
   CAMERA_RESET: 'camera-reset',
+  POINTER_STATE_SAMPLE: 'pointer-state-sample',
 } );
 
 function cloneTransform( transform = {} ) {
@@ -49,6 +78,41 @@ function cloneTransform( transform = {} ) {
   return {
     position: [ ...( transform.position || [ 0, 0, 0 ] ) ],
     quaternion: [ ...( transform.quaternion || [ 0, 0, 0, 1 ] ) ],
+  };
+
+}
+
+export function createHiddenReplayPointer( interactor ) {
+
+  return {
+    visible: false,
+    interactor,
+    origin: [ 0, 0, 0 ],
+    target: [ 0, 0, 0 ],
+    rayLength: 0,
+    mode: POINTER_MODES.HIDDEN,
+  };
+
+}
+
+function cloneReplayPointer( pointer = {}, fallback = createHiddenReplayPointer( null ) ) {
+
+  return {
+    visible: pointer.visible === true,
+    interactor: typeof pointer.interactor === 'string' ? pointer.interactor : fallback.interactor,
+    origin: [ ...( pointer.origin || fallback.origin ) ],
+    target: [ ...( pointer.target || fallback.target ) ],
+    rayLength: typeof pointer.rayLength === 'number' ? pointer.rayLength : fallback.rayLength,
+    mode: typeof pointer.mode === 'string' ? pointer.mode : fallback.mode,
+  };
+
+}
+
+export function createInitialReplayPointers() {
+
+  return {
+    [ INTERACTORS.CONTROLLER_0 ]: createHiddenReplayPointer( INTERACTORS.CONTROLLER_0 ),
+    [ INTERACTORS.CONTROLLER_1 ]: createHiddenReplayPointer( INTERACTORS.CONTROLLER_1 ),
   };
 
 }
@@ -95,13 +159,31 @@ export function getGrabEndLabel( interactor ) {
 
 }
 
+export function getPointerSampleLabel() {
+
+  return 'Sample Pointer State';
+
+}
+
 export function createInitialXRLoggingState( sceneSnapshot, timestamp = Date.now() ) {
+
+  const replayPointers = createInitialReplayPointers();
 
   return {
     presentationMode: sceneSnapshot.presentationMode || PRESENTATION_MODES.DESKTOP,
     cube: cloneTransform( sceneSnapshot.cube ),
     camera: cloneTransform( sceneSnapshot.camera ),
     xrOrigin: cloneTransform( sceneSnapshot.xrOrigin ),
+    replayPointers: {
+      [ INTERACTORS.CONTROLLER_0 ]: cloneReplayPointer(
+        sceneSnapshot.replayPointers?.[ INTERACTORS.CONTROLLER_0 ],
+        replayPointers[ INTERACTORS.CONTROLLER_0 ],
+      ),
+      [ INTERACTORS.CONTROLLER_1 ]: cloneReplayPointer(
+        sceneSnapshot.replayPointers?.[ INTERACTORS.CONTROLLER_1 ],
+        replayPointers[ INTERACTORS.CONTROLLER_1 ],
+      ),
+    },
     activeInteractor: null,
     interactionPhase: INTERACTION_PHASES.IDLE,
     metrics: {

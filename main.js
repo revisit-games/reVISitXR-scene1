@@ -5,7 +5,9 @@ import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFa
 import { createRevisitBridge } from './logging/revisitBridge.js';
 import {
   INTERACTORS,
+  POINTER_MODES,
   PRESENTATION_MODES,
+  REPLAY_POINTER_IDS,
 } from './logging/xrLoggingSchema.js';
 import { createXRStudyLogger } from './logging/xrStudyLogger.js';
 import {
@@ -112,6 +114,8 @@ const tempRight = new THREE.Vector3();
 const tempUp = new THREE.Vector3();
 const dragPoint = new THREE.Vector3();
 const dragNormal = new THREE.Vector3();
+const tempReplayPointerOrigin = new THREE.Vector3();
+const tempReplayPointerTarget = new THREE.Vector3();
 const desktopEuler = new THREE.Euler( 0, 0, 0, 'YXZ' );
 
 const desktopState = {
@@ -128,6 +132,10 @@ const hoverColor = 0x163244;
 const grabbedColor = 0x235f7d;
 const idleColor = 0x000000;
 const defaultRayLength = 5;
+const replayPointerColors = Object.freeze( {
+  [ INTERACTORS.CONTROLLER_0 ]: 0xff6b6b,
+  [ INTERACTORS.CONTROLLER_1 ]: 0x4ecdc4,
+} );
 const mousePanFactor = 0.003;
 const mouseRotateFactor = 0.005;
 const keyboardMoveSpeed = 2.4;
@@ -141,6 +149,9 @@ const revisitBridge = createRevisitBridge();
 let currentMode = PRESENTATION_MODES.DESKTOP;
 let studyLogger = null;
 let cameraSamplingRequested = false;
+let replayGhostPointersHiddenByViewer = false;
+
+const replayPointerVisuals = {};
 
 function applyButtonPlacement( button, left ) {
 
@@ -162,6 +173,165 @@ const vrButton = VRButton.createButton( renderer, {
 applyButtonPlacement( vrButton, '220px' );
 document.body.appendChild( vrButton );
 
+function createGhostReplayPointer( interactor ) {
+
+  const color = replayPointerColors[ interactor ] || 0xffffff;
+  const positions = new Float32Array( 6 );
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+
+  const line = new THREE.Line(
+    geometry,
+    new THREE.LineBasicMaterial( {
+      color,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false,
+      toneMapped: false,
+    } ),
+  );
+  line.frustumCulled = false;
+  line.renderOrder = 20;
+
+  const originMarker = new THREE.Mesh(
+    new THREE.SphereGeometry( 0.018, 12, 12 ),
+    new THREE.MeshBasicMaterial( {
+      color,
+      transparent: true,
+      opacity: 0.45,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    } ),
+  );
+  originMarker.renderOrder = 21;
+
+  const hitMarker = new THREE.Mesh(
+    new THREE.SphereGeometry( 0.026, 14, 14 ),
+    new THREE.MeshBasicMaterial( {
+      color,
+      transparent: true,
+      opacity: 0.95,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    } ),
+  );
+  hitMarker.renderOrder = 21;
+
+  const group = new THREE.Group();
+  group.name = `ghost-replay-pointer-${interactor}`;
+  group.visible = false;
+  group.add( line );
+  group.add( originMarker );
+  group.add( hitMarker );
+  scene.add( group );
+
+  replayPointerVisuals[ interactor ] = {
+    group,
+    line,
+    originMarker,
+    hitMarker,
+    positions,
+  };
+
+}
+
+function setGhostReplayPointerVisibility( interactor, visible ) {
+
+  const visuals = replayPointerVisuals[ interactor ];
+
+  if ( visuals ) {
+
+    visuals.group.visible = visible;
+
+  }
+
+}
+
+function hideAllGhostReplayPointers() {
+
+  for ( const interactor of REPLAY_POINTER_IDS ) {
+
+    setGhostReplayPointerVisibility( interactor, false );
+
+  }
+
+}
+
+function updateGhostReplayPointer( interactor, pointerState ) {
+
+  const visuals = replayPointerVisuals[ interactor ];
+
+  if ( ! visuals ) {
+
+    return;
+
+  }
+
+  if ( replayGhostPointersHiddenByViewer || ! pointerState?.visible ) {
+
+    visuals.group.visible = false;
+    return;
+
+  }
+
+  visuals.positions[ 0 ] = pointerState.origin[ 0 ];
+  visuals.positions[ 1 ] = pointerState.origin[ 1 ];
+  visuals.positions[ 2 ] = pointerState.origin[ 2 ];
+  visuals.positions[ 3 ] = pointerState.target[ 0 ];
+  visuals.positions[ 4 ] = pointerState.target[ 1 ];
+  visuals.positions[ 5 ] = pointerState.target[ 2 ];
+  visuals.line.geometry.attributes.position.needsUpdate = true;
+  visuals.line.geometry.computeBoundingSphere();
+  visuals.originMarker.position.fromArray( pointerState.origin );
+  visuals.hitMarker.position.fromArray( pointerState.target );
+  visuals.group.visible = true;
+
+}
+
+function updateGhostReplayPointersFromState( replayPointers ) {
+
+  for ( const interactor of REPLAY_POINTER_IDS ) {
+
+    updateGhostReplayPointer( interactor, replayPointers?.[ interactor ] );
+
+  }
+
+}
+
+function getGhostReplayPointerDebugState() {
+
+  return Object.fromEntries( REPLAY_POINTER_IDS.map( ( interactor ) => {
+
+    const visuals = replayPointerVisuals[ interactor ];
+
+    return [
+      interactor,
+      {
+        visible: visuals?.group.visible ?? false,
+        origin: visuals ? vector3ToArray( visuals.originMarker.position ) : null,
+        target: visuals ? vector3ToArray( visuals.hitMarker.position ) : null,
+      },
+    ];
+
+  } ) );
+
+}
+
+function hideReplayGhostPointersForLocalInteraction() {
+
+  if ( ! studyLogger?.isAnalysisSession() || ! studyLogger.canInteract() ) {
+
+    return;
+
+  }
+
+  replayGhostPointersHiddenByViewer = true;
+  hideAllGhostReplayPointers();
+
+}
+
 function isLocalInteractionBlocked() {
 
   return studyLogger ? ! studyLogger.canInteract() : false;
@@ -170,9 +340,9 @@ function isLocalInteractionBlocked() {
 
 function updateBridgeLockStateUI() {
 
-  const blocked = isLocalInteractionBlocked();
-  const pointerEvents = blocked ? 'none' : 'auto';
-  const opacity = blocked ? '0.45' : '1';
+  const immersiveBlocked = studyLogger ? ! studyLogger.canEnterImmersiveSession() : false;
+  const pointerEvents = immersiveBlocked ? 'none' : 'auto';
+  const opacity = immersiveBlocked ? '0.45' : '1';
 
   arButton.style.pointerEvents = pointerEvents;
   arButton.style.opacity = opacity;
@@ -217,6 +387,73 @@ function getActiveGrabInteractorId() {
 
 }
 
+function getControllerReplayPointerState( controller ) {
+
+  const interactor = getControllerInteractorId( controller );
+
+  if ( ! interactor || ! renderer.xr.isPresenting ) {
+
+    return {
+      visible: false,
+      interactor,
+      origin: [ 0, 0, 0 ],
+      target: [ 0, 0, 0 ],
+      rayLength: 0,
+      mode: POINTER_MODES.HIDDEN,
+    };
+
+  }
+
+  controller.updateMatrixWorld( true );
+  controller.getWorldPosition( tempReplayPointerOrigin );
+
+  let pointerMode = POINTER_MODES.HIDDEN;
+
+  if ( controller.userData.mode === 'object' && controller.userData.selected === cube ) {
+
+    cube.getWorldPosition( tempReplayPointerTarget );
+    pointerMode = POINTER_MODES.GRAB;
+
+  } else if ( Array.isArray( controller.userData.pointerTarget ) ) {
+
+    tempReplayPointerTarget.fromArray( controller.userData.pointerTarget );
+    pointerMode = POINTER_MODES.HOVER;
+
+  }
+
+  if ( pointerMode === POINTER_MODES.HIDDEN ) {
+
+    return {
+      visible: false,
+      interactor,
+      origin: [ 0, 0, 0 ],
+      target: [ 0, 0, 0 ],
+      rayLength: 0,
+      mode: POINTER_MODES.HIDDEN,
+    };
+
+  }
+
+  return {
+    visible: true,
+    interactor,
+    origin: vector3ToArray( tempReplayPointerOrigin ),
+    target: vector3ToArray( tempReplayPointerTarget ),
+    rayLength: tempReplayPointerOrigin.distanceTo( tempReplayPointerTarget ),
+    mode: pointerMode,
+  };
+
+}
+
+function getReplayPointerSnapshot() {
+
+  return {
+    [ INTERACTORS.CONTROLLER_0 ]: getControllerReplayPointerState( controllers[ 0 ] ),
+    [ INTERACTORS.CONTROLLER_1 ]: getControllerReplayPointerState( controllers[ 1 ] ),
+  };
+
+}
+
 function getSceneSnapshot() {
 
   scene.updateMatrixWorld( true );
@@ -237,6 +474,7 @@ function getSceneSnapshot() {
       position: vector3ToArray( xrOrigin.position ),
       quaternion: quaternionToArray( xrOrigin.quaternion ),
     },
+    replayPointers: getReplayPointerSnapshot(),
   };
 
 }
@@ -258,6 +496,19 @@ function updateHud() {
 
   if ( ! hudTitle || ! hudBody || ! hudNote ) {
 
+    return;
+
+  }
+
+  const interactionPolicy = studyLogger?.getInteractionPolicy?.();
+
+  if ( interactionPolicy?.isAnalysisSession ) {
+
+    hudTitle.textContent = 'Analysis Replay Mode';
+    hudBody.textContent = interactionPolicy.analysisPlaybackActive
+      ? 'Replay playback is actively advancing, so desktop interaction is temporarily locked while participant state drives the scene.'
+      : 'Replay playback is paused. You can temporarily inspect and manipulate the desktop scene; the next replay snapshot will overwrite local changes.';
+    hudNote.textContent = 'Analysis mode never records new participant data. AR and VR entry buttons stay disabled, and ghost controller rays show the participant aim when replay pointer samples are available.';
     return;
 
   }
@@ -559,6 +810,8 @@ function onPointerDown( event ) {
 
   }
 
+  hideReplayGhostPointersForLocalInteraction();
+
   setPointerFromEvent( event );
   desktopState.activePointerId = event.pointerId;
   desktopState.lastPointer.set( event.clientX, event.clientY );
@@ -727,6 +980,7 @@ function onKeyDown( event ) {
 
   if ( event.code === 'KeyW' || event.code === 'KeyA' || event.code === 'KeyS' || event.code === 'KeyD' ) {
 
+    hideReplayGhostPointersForLocalInteraction();
     pressedKeys.add( event.code );
     event.preventDefault();
 
@@ -763,6 +1017,7 @@ function onWheel( event ) {
 
   }
 
+  hideReplayGhostPointersForLocalInteraction();
   moveCameraForward( - direction * wheelMoveStep );
   event.preventDefault();
 
@@ -804,6 +1059,7 @@ function releaseControllerAction( controller ) {
 
   controller.userData.mode = null;
   controller.userData.hovered = null;
+  controller.userData.pointerTarget = null;
 
   const cursor = controller.getObjectByName( 'cursor' );
   if ( cursor ) {
@@ -831,6 +1087,7 @@ function buildController( index ) {
   controller.userData.mode = null;
   controller.userData.selected = null;
   controller.userData.hovered = null;
+  controller.userData.pointerTarget = null;
   controller.addEventListener( 'disconnected', () => releaseControllerAction( controller ) );
 
   controller.addEventListener( 'selectstart', onSelectStart );
@@ -917,6 +1174,7 @@ function updateControllerState( controller ) {
   if ( ! renderer.xr.isPresenting ) {
 
     controller.userData.hovered = null;
+    controller.userData.pointerTarget = null;
     if ( controller.userData.mode !== 'object' ) {
 
       controller.userData.mode = null;
@@ -930,6 +1188,8 @@ function updateControllerState( controller ) {
 
   if ( controller.userData.mode === 'object' ) {
 
+    cube.getWorldPosition( tempReplayPointerTarget );
+    controller.userData.pointerTarget = vector3ToArray( tempReplayPointerTarget );
     line.scale.z = 0.6;
     cursor.visible = false;
     return;
@@ -942,6 +1202,7 @@ function updateControllerState( controller ) {
   if ( hit ) {
 
     controller.userData.hovered = hit.object;
+    controller.userData.pointerTarget = vector3ToArray( hit.point );
     line.scale.z = hit.distance;
     cursor.position.set( 0, 0, - Math.max( 0.04, hit.distance - 0.01 ) );
     cursor.visible = true;
@@ -949,6 +1210,7 @@ function updateControllerState( controller ) {
   } else {
 
     controller.userData.hovered = null;
+    controller.userData.pointerTarget = null;
     line.scale.z = defaultRayLength;
     cursor.visible = false;
 
@@ -969,6 +1231,7 @@ function applyReplayInteractionState( replayState ) {
     controller.userData.selected = null;
     controller.userData.mode = null;
     controller.userData.hovered = null;
+    controller.userData.pointerTarget = null;
 
     const cursor = controller.getObjectByName( 'cursor' );
     if ( cursor ) {
@@ -1022,7 +1285,7 @@ function applyReplayState( replayState ) {
   pressedKeys.clear();
   onPointerCancel();
   releaseAllXRControllerActions();
-  updateBridgeLockStateUI();
+  replayGhostPointersHiddenByViewer = false;
 
   scene.attach( cube );
   cube.userData.grabbedBy = null;
@@ -1040,10 +1303,46 @@ function applyReplayState( replayState ) {
 
   setPresentationMode( replayState.presentationMode );
   applyReplayInteractionState( replayState );
+  updateGhostReplayPointersFromState( replayState.replayPointers );
 
   scene.updateMatrixWorld( true );
   refreshInteractableAppearance();
   renderer.render( scene, camera );
+
+}
+
+function handleInteractionPolicyChange( policy ) {
+
+  if ( policy.isAnalysisSession && renderer.xr.isPresenting ) {
+
+    void renderer.xr.getSession()?.end().catch( ( error ) => {
+
+      console.warn( 'Unable to end XR session while entering analysis mode.', error );
+
+    } );
+
+  }
+
+  if ( ! policy.canInteract ) {
+
+    pressedKeys.clear();
+    onPointerCancel();
+    releaseAllXRControllerActions();
+    desktopState.hovered = null;
+    renderer.domElement.style.cursor = 'default';
+
+  }
+
+  if ( ! policy.isAnalysisSession || ! policy.hasReceivedReplayState ) {
+
+    replayGhostPointersHiddenByViewer = false;
+    hideAllGhostReplayPointers();
+
+  }
+
+  updateHud();
+  updateBridgeLockStateUI();
+  refreshInteractableAppearance();
 
 }
 
@@ -1053,13 +1352,9 @@ function animate() {
   const deltaSeconds = Math.min( timer.getDelta(), 0.05 );
   updateKeyboardMovement( deltaSeconds );
 
-  if ( ! studyLogger?.isReplayControlled() ) {
+  for ( const controller of controllers ) {
 
-    for ( const controller of controllers ) {
-
-      updateControllerState( controller );
-
-    }
+    updateControllerState( controller );
 
   }
 
@@ -1088,6 +1383,14 @@ function animate() {
 
   }
 
+  if ( renderer.xr.isPresenting ) {
+
+    studyLogger?.samplePointerStateIfNeeded( {
+      source: 'xr-pointer',
+    } );
+
+  }
+
   refreshInteractableAppearance();
   renderer.render( scene, camera );
 
@@ -1103,7 +1406,7 @@ function onWindowResize() {
 
 renderer.xr.addEventListener( 'sessionstart', () => {
 
-  if ( isLocalInteractionBlocked() ) {
+  if ( studyLogger && ! studyLogger.canEnterImmersiveSession() ) {
 
     return;
 
@@ -1161,20 +1464,32 @@ initializeSceneLayout();
 buildController( 0 );
 buildController( 1 );
 
+for ( const interactor of REPLAY_POINTER_IDS ) {
+
+  createGhostReplayPointer( interactor );
+
+}
+
 studyLogger = createXRStudyLogger( {
   bridge: revisitBridge,
   getSceneSnapshot,
   applyReplayState,
 } );
 
+studyLogger.onInteractionPolicyChange( handleInteractionPolicyChange );
+
 if ( import.meta.env.DEV ) {
 
   window.__revisitXRDebug = {
     getState: () => studyLogger.getState(),
+    getLiveSceneSnapshot: () => getSceneSnapshot(),
     getGraph: () => studyLogger.getGraph(),
     exportAnswers: () => studyLogger.exportAnswers(),
     applyReplayState: ( state ) => studyLogger.applyReplayStateSnapshot( state ),
     isReplayControlled: () => studyLogger.isReplayControlled(),
+    getInteractionPolicy: () => studyLogger.getInteractionPolicy(),
+    setAnalysisControl: ( control ) => studyLogger.setAnalysisControl( control ),
+    getReplayPointerVisuals: () => getGhostReplayPointerDebugState(),
     getStudyData: () => studyLogger.getStudyData(),
   };
 

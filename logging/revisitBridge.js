@@ -23,6 +23,7 @@ export function createRevisitBridge() {
   const studyDataListeners = createListenerSet();
   const provenanceListeners = createListenerSet();
   const answersListeners = createListenerSet();
+  const analysisControlListeners = createListenerSet();
 
   function sendMessage( tag, message ) {
 
@@ -77,6 +78,13 @@ export function createRevisitBridge() {
     if ( data.type === `${PREFIX}/ANSWERS` ) {
 
       dispatchToListeners( answersListeners, data.message );
+      return;
+
+    }
+
+    if ( data.type === `${PREFIX}/ANALYSIS_CONTROL` ) {
+
+      dispatchToListeners( analysisControlListeners, data.message );
 
     }
 
@@ -136,6 +144,11 @@ export function createRevisitBridge() {
     onAnswersReceive( fn ) {
 
       return addListener( answersListeners, fn );
+
+    },
+    onAnalysisControlReceive( fn ) {
+
+      return addListener( analysisControlListeners, fn );
 
     },
   };

@@ -1,7 +1,10 @@
 import {
   INTERACTION_PHASES,
+  POINTER_MODES,
   PRESENTATION_MODES,
+  REPLAY_POINTER_IDS,
   SUMMARY_RESPONSE_KEYS,
+  createHiddenReplayPointer,
   createInitialXRLoggingState,
 } from './xrLoggingSchema.js';
 
@@ -103,6 +106,81 @@ export function transformChanged( transformA, transformB, samplingConfig ) {
 
 }
 
+export function normalizeReplayPointer( value, fallback = createHiddenReplayPointer( null ) ) {
+
+  const mode = Object.values( POINTER_MODES ).includes( value?.mode )
+    ? value.mode
+    : fallback.mode;
+  const visible = value?.visible === true && mode !== POINTER_MODES.HIDDEN;
+
+  return {
+    visible,
+    interactor: typeof value?.interactor === 'string' ? value.interactor : fallback.interactor,
+    origin: normalizeVector3Array( value?.origin, fallback.origin ),
+    target: normalizeVector3Array( value?.target, fallback.target ),
+    rayLength: isFiniteNumber( value?.rayLength ) ? Math.max( 0, value.rayLength ) : fallback.rayLength,
+    mode: visible ? mode : POINTER_MODES.HIDDEN,
+  };
+
+}
+
+export function normalizeReplayPointers( value, fallback ) {
+
+  const replayPointers = {};
+
+  for ( const interactor of REPLAY_POINTER_IDS ) {
+
+    replayPointers[ interactor ] = normalizeReplayPointer(
+      value?.[ interactor ],
+      fallback[ interactor ] || createHiddenReplayPointer( interactor ),
+    );
+
+  }
+
+  return replayPointers;
+
+}
+
+export function replayPointerChanged( pointerA, pointerB, samplingConfig ) {
+
+  if (
+    pointerA.visible !== pointerB.visible ||
+    pointerA.mode !== pointerB.mode ||
+    pointerA.interactor !== pointerB.interactor
+  ) {
+
+    return true;
+
+  }
+
+  if ( ! pointerA.visible && ! pointerB.visible ) {
+
+    return false;
+
+  }
+
+  return (
+    positionDistance( pointerA.origin, pointerB.origin ) > samplingConfig.pointerPositionEpsilon ||
+    positionDistance( pointerA.target, pointerB.target ) > samplingConfig.pointerPositionEpsilon ||
+    Math.abs( pointerA.rayLength - pointerB.rayLength ) > samplingConfig.pointerRayLengthEpsilon
+  );
+
+}
+
+export function replayPointersChanged( sceneSnapshot, currentState, samplingConfig ) {
+
+  return REPLAY_POINTER_IDS.some( ( interactor ) => {
+
+    return replayPointerChanged(
+      sceneSnapshot.replayPointers[ interactor ],
+      currentState.replayPointers[ interactor ],
+      samplingConfig,
+    );
+
+  } );
+
+}
+
 export function objectTransformChanged( sceneSnapshot, currentState, samplingConfig ) {
 
   return transformChanged( sceneSnapshot.cube, currentState.cube, samplingConfig );
@@ -120,12 +198,17 @@ export function cameraTransformChanged( sceneSnapshot, currentState, samplingCon
 
 export function buildCompactStateSummary( state ) {
 
+  const visiblePointers = REPLAY_POINTER_IDS
+    .filter( ( interactor ) => state.replayPointers[ interactor ]?.visible )
+    .map( ( interactor ) => `${interactor}:${state.replayPointers[ interactor ].mode}` );
+
   return JSON.stringify( {
     mode: state.presentationMode,
     phase: state.interactionPhase,
     interactor: state.activeInteractor,
     sessions: state.metrics.sessionCount,
     grabs: state.metrics.grabCount,
+    pointers: visiblePointers.length > 0 ? visiblePointers : [ 'none' ],
     cubePos: roundArray( state.cube.position, 2 ),
     cameraPos: roundArray( state.camera.position, 2 ),
     xrOriginPos: roundArray( state.xrOrigin.position, 2 ),
@@ -175,6 +258,7 @@ export function normalizeReplayState( candidateState, fallbackState ) {
     cube: fallbackState.cube,
     camera: fallbackState.camera,
     xrOrigin: fallbackState.xrOrigin,
+    replayPointers: fallbackState.replayPointers,
   };
 
   const normalizedBase = createInitialXRLoggingState(
@@ -202,6 +286,10 @@ export function normalizeReplayState( candidateState, fallbackState ) {
     cube: normalizeTransform( candidateState?.cube, fallbackState.cube || normalizedBase.cube ),
     camera: normalizeTransform( candidateState?.camera, fallbackState.camera || normalizedBase.camera ),
     xrOrigin: normalizeTransform( candidateState?.xrOrigin, fallbackState.xrOrigin || normalizedBase.xrOrigin ),
+    replayPointers: normalizeReplayPointers(
+      candidateState?.replayPointers,
+      fallbackState.replayPointers || normalizedBase.replayPointers,
+    ),
     activeInteractor,
     interactionPhase,
     metrics: normalizeMetrics( candidateState?.metrics, fallbackState.metrics || normalizedBase.metrics ),

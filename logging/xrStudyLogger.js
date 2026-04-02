@@ -1,26 +1,51 @@
 import { Registry, initializeTrrack } from '@trrack/core';
 import {
   ACTION_TYPES,
+  ANALYSIS_MODES,
+  DEFAULT_ANALYSIS_CONTROL,
   INTERACTION_PHASES,
   PRESENTATION_MODES,
+  REPLAY_POINTER_IDS,
   SAMPLING_CONFIG,
+  createHiddenReplayPointer,
   createInitialXRLoggingState,
   getGrabEndLabel,
   getGrabStartLabel,
   getModeChangeLabel,
+  getPointerSampleLabel,
   getSessionEndLabel,
   getSessionStartLabel,
 } from './xrLoggingSchema.js';
 import {
   buildAnswerPayload,
   cameraTransformChanged,
+  normalizeReplayPointers,
   normalizeReplayState,
   objectTransformChanged,
+  replayPointersChanged,
 } from './xrSerialization.js';
 
 function cloneValue( value ) {
 
   return structuredClone( value );
+
+}
+
+function createListenerSet() {
+
+  return new Set();
+
+}
+
+function notifyListeners( listeners, value ) {
+
+  const payload = cloneValue( value );
+
+  for ( const listener of listeners ) {
+
+    listener( payload );
+
+  }
 
 }
 
@@ -33,6 +58,21 @@ function applySceneSnapshotToState( state, sceneSnapshot ) {
   state.camera.quaternion = [ ...sceneSnapshot.camera.quaternion ];
   state.xrOrigin.position = [ ...sceneSnapshot.xrOrigin.position ];
   state.xrOrigin.quaternion = [ ...sceneSnapshot.xrOrigin.quaternion ];
+
+  for ( const interactor of REPLAY_POINTER_IDS ) {
+
+    const nextPointer = sceneSnapshot.replayPointers?.[ interactor ] || createHiddenReplayPointer( interactor );
+
+    state.replayPointers[ interactor ] = {
+      visible: nextPointer.visible,
+      interactor: nextPointer.interactor,
+      origin: [ ...nextPointer.origin ],
+      target: [ ...nextPointer.target ],
+      rayLength: nextPointer.rayLength,
+      mode: nextPointer.mode,
+    };
+
+  }
 
 }
 
@@ -47,6 +87,20 @@ function createLoggerActionPayload( getSceneSnapshot, {
     source,
     interactor,
     timestamp: Date.now(),
+  };
+
+}
+
+function normalizeAnalysisControl( control ) {
+
+  return {
+    ...DEFAULT_ANALYSIS_CONTROL,
+    ...( control || {} ),
+    mode: control?.mode === ANALYSIS_MODES.ANALYSIS ? ANALYSIS_MODES.ANALYSIS : ANALYSIS_MODES.STUDY,
+    isPlaying: control?.isPlaying === true,
+    participantId: typeof control?.participantId === 'string' ? control.participantId : null,
+    trialId: typeof control?.trialId === 'string' ? control.trialId : null,
+    allowLocalInteractionWhenPaused: control?.allowLocalInteractionWhenPaused !== false,
   };
 
 }
@@ -178,24 +232,120 @@ export function createXRStudyLogger( {
 
   }, { eventType: ACTION_TYPES.CAMERA_RESET, label: 'Camera Reset' } );
 
+  const pointerStateSampleAction = registry.register( ACTION_TYPES.POINTER_STATE_SAMPLE, ( state, payload ) => {
+
+    applySceneSnapshotToState( state, payload.sceneSnapshot );
+    state.lastEvent = {
+      type: ACTION_TYPES.POINTER_STATE_SAMPLE,
+      timestamp: payload.timestamp,
+      source: payload.source,
+    };
+
+  }, { eventType: ACTION_TYPES.POINTER_STATE_SAMPLE, label: 'Pointer State Sample' } );
+
   const trrack = initializeTrrack( {
     registry,
     initialState: createInitialXRLoggingState( getSceneSnapshot() ),
   } );
 
+  const interactionPolicyListeners = createListenerSet();
+
   let currentState = cloneValue( trrack.getState() );
   let latestStudyData = null;
   let latestIncomingAnswers = null;
+  let latestAnalysisControl = normalizeAnalysisControl( null );
+  let hasAnalysisControl = bridge.isStandalone;
   let lastObjectSampleAt = 0;
   let lastCameraSampleAt = 0;
+  let lastPointerSampleAt = 0;
   let isApplyingReplayState = false;
-  let isReplayControlled = false;
+  let hasReceivedReplayState = false;
+
+  function getIsAnalysisSession() {
+
+    return latestAnalysisControl.mode === ANALYSIS_MODES.ANALYSIS;
+
+  }
+
+  function getIsAnalysisPlaybackActive() {
+
+    return getIsAnalysisSession() && latestAnalysisControl.isPlaying;
+
+  }
+
+  function canRecord() {
+
+    return (
+      ! isApplyingReplayState &&
+      ! getIsAnalysisSession() &&
+      ( hasAnalysisControl || ! bridge.isEnabled )
+    );
+
+  }
+
+  function canInteract() {
+
+    if ( isApplyingReplayState ) {
+
+      return false;
+
+    }
+
+    if ( ! getIsAnalysisSession() ) {
+
+      return true;
+
+    }
+
+    return latestAnalysisControl.allowLocalInteractionWhenPaused && ! latestAnalysisControl.isPlaying;
+
+  }
+
+  function canEnterImmersiveSession() {
+
+    return ! getIsAnalysisSession() && ! isApplyingReplayState;
+
+  }
+
+  function buildInteractionPolicy() {
+
+    return {
+      isAnalysisSession: getIsAnalysisSession(),
+      analysisPlaybackActive: getIsAnalysisPlaybackActive(),
+      isApplyingReplayState,
+      hasReceivedReplayState,
+      canRecord: canRecord(),
+      canInteract: canInteract(),
+      canEnterImmersiveSession: canEnterImmersiveSession(),
+      allowLocalInteractionWhenPaused: latestAnalysisControl.allowLocalInteractionWhenPaused,
+      analysisControl: latestAnalysisControl,
+    };
+
+  }
+
+  function notifyInteractionPolicyChange() {
+
+    notifyListeners( interactionPolicyListeners, buildInteractionPolicy() );
+
+  }
+
+  function addInteractionPolicyListener( fn ) {
+
+    interactionPolicyListeners.add( fn );
+    fn( cloneValue( buildInteractionPolicy() ) );
+    return () => interactionPolicyListeners.delete( fn );
+
+  }
 
   function syncOutboundState() {
 
     currentState = cloneValue( trrack.getState() );
 
-    if ( isApplyingReplayState || isReplayControlled ) {
+    if (
+      isApplyingReplayState ||
+      getIsAnalysisSession() ||
+      ( bridge.isEnabled && ! hasAnalysisControl )
+    ) {
 
       return;
 
@@ -203,12 +353,6 @@ export function createXRStudyLogger( {
 
     bridge.postProvenance( trrack.graph.backend );
     bridge.postAnswers( buildAnswerPayload( currentState ) );
-
-  }
-
-  function canRecord() {
-
-    return ! isApplyingReplayState && ! isReplayControlled;
 
   }
 
@@ -222,6 +366,73 @@ export function createXRStudyLogger( {
 
     trrack.apply( label, action );
     return true;
+
+  }
+
+  function applyAnalysisControl( control ) {
+
+    const nextControl = normalizeAnalysisControl( control );
+    const prevPolicy = JSON.stringify( buildInteractionPolicy() );
+
+    latestAnalysisControl = nextControl;
+    hasAnalysisControl = true;
+
+    if ( nextControl.mode !== ANALYSIS_MODES.ANALYSIS ) {
+
+      hasReceivedReplayState = false;
+
+    }
+
+    const nextPolicy = JSON.stringify( buildInteractionPolicy() );
+
+    if ( prevPolicy !== nextPolicy ) {
+
+      notifyInteractionPolicyChange();
+
+    }
+
+    if ( nextControl.mode === ANALYSIS_MODES.STUDY ) {
+
+      syncOutboundState();
+
+    }
+
+    return cloneValue( nextControl );
+
+  }
+
+  function applyNormalizedReplayState( normalizedState ) {
+
+    const prevPolicy = JSON.stringify( buildInteractionPolicy() );
+
+    hasReceivedReplayState = true;
+    currentState = cloneValue( normalizedState );
+    isApplyingReplayState = true;
+
+    if ( prevPolicy !== JSON.stringify( buildInteractionPolicy() ) ) {
+
+      notifyInteractionPolicyChange();
+
+    }
+
+    try {
+
+      applyReplayState( normalizedState );
+
+    } finally {
+
+      const policyBeforeFinish = JSON.stringify( buildInteractionPolicy() );
+      isApplyingReplayState = false;
+
+      if ( policyBeforeFinish !== JSON.stringify( buildInteractionPolicy() ) ) {
+
+        notifyInteractionPolicyChange();
+
+      }
+
+    }
+
+    return cloneValue( normalizedState );
 
   }
 
@@ -243,26 +454,24 @@ export function createXRStudyLogger( {
 
   } );
 
-  bridge.onProvenanceReceive( ( incomingState ) => {
+  bridge.onAnalysisControlReceive( ( control ) => {
 
-    isReplayControlled = true;
-
-    const normalizedState = normalizeReplayState( incomingState, currentState );
-    currentState = cloneValue( normalizedState );
-
-    isApplyingReplayState = true;
-
-    try {
-
-      applyReplayState( normalizedState );
-
-    } finally {
-
-      isApplyingReplayState = false;
-
-    }
+    applyAnalysisControl( control );
 
   } );
+
+  bridge.onProvenanceReceive( ( incomingState ) => {
+
+    const normalizedState = normalizeReplayState( incomingState, currentState );
+    applyNormalizedReplayState( normalizedState );
+
+  } );
+
+  if ( bridge.isStandalone ) {
+
+    notifyInteractionPolicyChange();
+
+  }
 
   syncOutboundState();
 
@@ -292,6 +501,31 @@ export function createXRStudyLogger( {
       return latestIncomingAnswers;
 
     },
+    getAnalysisControl() {
+
+      return cloneValue( latestAnalysisControl );
+
+    },
+    getInteractionPolicy() {
+
+      return cloneValue( buildInteractionPolicy() );
+
+    },
+    onInteractionPolicyChange( fn ) {
+
+      return addInteractionPolicyListener( fn );
+
+    },
+    setAnalysisControl( control ) {
+
+      return applyAnalysisControl( control );
+
+    },
+    isAnalysisSession() {
+
+      return getIsAnalysisSession();
+
+    },
     isApplyingReplayState() {
 
       return isApplyingReplayState;
@@ -299,33 +533,28 @@ export function createXRStudyLogger( {
     },
     isReplayControlled() {
 
-      return isReplayControlled;
+      return hasReceivedReplayState;
+
+    },
+    canRecord() {
+
+      return canRecord();
 
     },
     canInteract() {
 
-      return ! isReplayControlled && ! isApplyingReplayState;
+      return canInteract();
+
+    },
+    canEnterImmersiveSession() {
+
+      return canEnterImmersiveSession();
 
     },
     applyReplayStateSnapshot( incomingState ) {
 
       const normalizedState = normalizeReplayState( incomingState, currentState );
-      isReplayControlled = true;
-      currentState = cloneValue( normalizedState );
-
-      isApplyingReplayState = true;
-
-      try {
-
-        applyReplayState( normalizedState );
-
-      } finally {
-
-        isApplyingReplayState = false;
-
-      }
-
-      return cloneValue( normalizedState );
+      return applyNormalizedReplayState( normalizedState );
 
     },
     recordModeChange( { mode, source = 'system' } ) {
@@ -468,6 +697,49 @@ export function createXRStudyLogger( {
         'Sample Camera Transform',
         cameraTransformSampleAction( createLoggerActionPayload( getSceneSnapshot, {
           interactor,
+          source,
+          sceneSnapshot,
+        } ) ),
+      );
+
+      return 'logged';
+
+    },
+    samplePointerStateIfNeeded( {
+      source = 'xr-pointer',
+      now = performance.now(),
+    } = {} ) {
+
+      if ( ! canRecord() || ! SAMPLING_CONFIG.enablePointerSampling ) {
+
+        return 'unchanged';
+
+      }
+
+      const sceneSnapshot = getSceneSnapshot();
+      sceneSnapshot.replayPointers = normalizeReplayPointers(
+        sceneSnapshot.replayPointers,
+        currentState.replayPointers,
+      );
+
+      if ( ! replayPointersChanged( sceneSnapshot, currentState, SAMPLING_CONFIG ) ) {
+
+        return 'unchanged';
+
+      }
+
+      if ( now - lastPointerSampleAt < SAMPLING_CONFIG.pointerMinIntervalMs ) {
+
+        return 'pending';
+
+      }
+
+      lastPointerSampleAt = now;
+
+      runAction(
+        getPointerSampleLabel(),
+        pointerStateSampleAction( createLoggerActionPayload( getSceneSnapshot, {
+          interactor: null,
           source,
           sceneSnapshot,
         } ) ),
