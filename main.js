@@ -2,6 +2,16 @@ import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { createRevisitBridge } from './logging/revisitBridge.js';
+import {
+  INTERACTORS,
+  PRESENTATION_MODES,
+} from './logging/xrLoggingSchema.js';
+import { createXRStudyLogger } from './logging/xrStudyLogger.js';
+import {
+  quaternionToArray,
+  vector3ToArray,
+} from './logging/xrSerialization.js';
 
 const scene = new THREE.Scene();
 const defaultBackground = new THREE.Color( 0x0b1320 );
@@ -52,7 +62,7 @@ const floor = new THREE.Mesh(
     color: 0x263449,
     roughness: 0.96,
     metalness: 0.05,
-  } )
+  } ),
 );
 floor.rotation.x = - Math.PI / 2;
 floor.receiveShadow = true;
@@ -81,7 +91,7 @@ const pedestal = new THREE.Mesh(
     color: 0xb8c7dc,
     roughness: 0.82,
     metalness: 0.18,
-  } )
+  } ),
 );
 pedestal.receiveShadow = true;
 scene.add( pedestal );
@@ -91,10 +101,12 @@ const controllers = [];
 const raycaster = new THREE.Raycaster();
 const controllerModelFactory = new XRControllerModelFactory();
 const pointer = new THREE.Vector2();
-const desktopGrabber = { type: 'desktop-pointer' };
+const desktopGrabber = { type: INTERACTORS.DESKTOP_POINTER };
 
 const tempWorldPosition = new THREE.Vector3();
 const tempWorldQuaternion = new THREE.Quaternion();
+const tempCubeWorldPosition = new THREE.Vector3();
+const tempCubeWorldQuaternion = new THREE.Quaternion();
 const tempDirection = new THREE.Vector3();
 const tempRight = new THREE.Vector3();
 const tempUp = new THREE.Vector3();
@@ -122,9 +134,13 @@ const keyboardMoveSpeed = 2.4;
 const wheelMoveStep = 0.45;
 
 const pressedKeys = new Set();
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
+timer.connect( document );
+const revisitBridge = createRevisitBridge();
 
-let currentMode = 'desktop';
+let currentMode = PRESENTATION_MODES.DESKTOP;
+let studyLogger = null;
+let cameraSamplingRequested = false;
 
 function applyButtonPlacement( button, left ) {
 
@@ -145,6 +161,85 @@ const vrButton = VRButton.createButton( renderer, {
 } );
 applyButtonPlacement( vrButton, '220px' );
 document.body.appendChild( vrButton );
+
+function isLocalInteractionBlocked() {
+
+  return studyLogger ? ! studyLogger.canInteract() : false;
+
+}
+
+function updateBridgeLockStateUI() {
+
+  const blocked = isLocalInteractionBlocked();
+  const pointerEvents = blocked ? 'none' : 'auto';
+  const opacity = blocked ? '0.45' : '1';
+
+  arButton.style.pointerEvents = pointerEvents;
+  arButton.style.opacity = opacity;
+  vrButton.style.pointerEvents = pointerEvents;
+  vrButton.style.opacity = opacity;
+
+}
+
+function markCameraForSampling() {
+
+  cameraSamplingRequested = true;
+
+}
+
+function getControllerInteractorId( controller ) {
+
+  if ( controller?.userData?.index === 0 ) {
+
+    return INTERACTORS.CONTROLLER_0;
+
+  }
+
+  if ( controller?.userData?.index === 1 ) {
+
+    return INTERACTORS.CONTROLLER_1;
+
+  }
+
+  return null;
+
+}
+
+function getActiveGrabInteractorId() {
+
+  if ( cube.userData.grabbedBy === desktopGrabber ) {
+
+    return INTERACTORS.DESKTOP_POINTER;
+
+  }
+
+  return getControllerInteractorId( cube.userData.grabbedBy );
+
+}
+
+function getSceneSnapshot() {
+
+  scene.updateMatrixWorld( true );
+  cube.getWorldPosition( tempCubeWorldPosition );
+  cube.getWorldQuaternion( tempCubeWorldQuaternion );
+
+  return {
+    presentationMode: currentMode,
+    cube: {
+      position: vector3ToArray( tempCubeWorldPosition ),
+      quaternion: quaternionToArray( tempCubeWorldQuaternion ),
+    },
+    camera: {
+      position: vector3ToArray( camera.position ),
+      quaternion: quaternionToArray( camera.quaternion ),
+    },
+    xrOrigin: {
+      position: vector3ToArray( xrOrigin.position ),
+      quaternion: quaternionToArray( xrOrigin.quaternion ),
+    },
+  };
+
+}
 
 function initializeSceneLayout() {
 
@@ -167,7 +262,7 @@ function updateHud() {
 
   }
 
-  if ( currentMode === 'immersive-vr' ) {
+  if ( currentMode === PRESENTATION_MODES.IMMERSIVE_VR ) {
 
     hudTitle.textContent = 'WebXR VR Mode';
     hudBody.textContent = 'Point at the cube with either controller and hold the trigger to grab it. The bright dot shows where the controller ray hits.';
@@ -176,18 +271,18 @@ function updateHud() {
 
   }
 
-  if ( currentMode === 'immersive-ar' ) {
+  if ( currentMode === PRESENTATION_MODES.IMMERSIVE_AR ) {
 
     hudTitle.textContent = 'WebXR AR Mode';
     hudBody.textContent = 'AR, VR, and desktop share the same scene state. The cube and pedestal stay where you leave them, while passthrough remains visible behind the virtual content.';
-    hudNote.textContent = 'Point at the cube with either controller and hold the trigger to grab it. If the browser reports AR NOT SUPPORTED, immersive-ar is not exposed on this device.';
+    hudNote.textContent = 'AR replay renders the saved state on desktop without re-entering an immersive session. Local interaction is disabled while replay drives the scene.';
     return;
 
   }
 
   hudTitle.textContent = 'Desktop Debug Mode';
   hudBody.textContent = 'Left drag the cube to move it. Left drag empty space pans the camera. Right drag rotates the camera view.';
-  hudNote.textContent = 'In a normal Quest browser page, controller-specific pose/button data is not reliably exposed to the webpage outside an immersive XR session. Desktop pointer controls remain available, and the Quest browser may map its page cursor to them.';
+  hudNote.textContent = 'In a normal Quest browser page, controller-specific pose/button data is not reliably exposed to the webpage outside an immersive XR session. Desktop pointer controls remain available, and replay mode suppresses new local logging.';
 
 }
 
@@ -195,7 +290,7 @@ function setPresentationMode( mode ) {
 
   currentMode = mode;
 
-  if ( mode === 'immersive-ar' ) {
+  if ( mode === PRESENTATION_MODES.IMMERSIVE_AR ) {
 
     scene.background = null;
     scene.fog = null;
@@ -210,6 +305,7 @@ function setPresentationMode( mode ) {
   }
 
   updateHud();
+  studyLogger?.recordModeChange( { mode } );
 
 }
 
@@ -305,6 +401,7 @@ function getDesktopIntersections() {
 
   camera.updateMatrixWorld( true );
   raycaster.setFromCamera( pointer, camera );
+
   return raycaster.intersectObjects( interactables, false ).filter( ( hit ) => {
 
     return hit.object.userData.grabbedBy === null || hit.object.userData.grabbedBy === desktopGrabber;
@@ -316,6 +413,7 @@ function getDesktopIntersections() {
 function getXRIntersections( controller ) {
 
   raycaster.setFromXRController( controller );
+
   return raycaster.intersectObjects( interactables, false ).filter( ( hit ) => {
 
     return hit.object.userData.grabbedBy === null || hit.object.userData.grabbedBy === controller;
@@ -334,6 +432,7 @@ function panDesktopCamera( deltaX, deltaY ) {
   camera.position.addScaledVector( tempRight, - deltaX * panScale );
   camera.position.addScaledVector( tempUp, deltaY * panScale );
   camera.updateMatrixWorld( true );
+  markCameraForSampling();
 
 }
 
@@ -346,6 +445,7 @@ function rotateDesktopCamera( deltaX, deltaY ) {
 
   camera.quaternion.setFromEuler( desktopEuler );
   camera.updateMatrixWorld( true );
+  markCameraForSampling();
 
 }
 
@@ -354,6 +454,7 @@ function moveCameraForward( distance ) {
   tempDirection.set( 0, 0, - 1 ).applyQuaternion( camera.quaternion ).normalize();
   camera.position.addScaledVector( tempDirection, distance );
   camera.updateMatrixWorld( true );
+  markCameraForSampling();
 
 }
 
@@ -362,6 +463,7 @@ function moveCameraRight( distance ) {
   tempRight.set( 1, 0, 0 ).applyQuaternion( camera.quaternion ).normalize();
   camera.position.addScaledVector( tempRight, distance );
   camera.updateMatrixWorld( true );
+  markCameraForSampling();
 
 }
 
@@ -371,7 +473,12 @@ function updateKeyboardMovement( deltaSeconds ) {
     desktopState.mode === 'object' ||
     desktopState.mode === 'pan';
 
-  if ( renderer.xr.isPresenting || keyboardBlockedByPointer || pressedKeys.size === 0 ) {
+  if (
+    renderer.xr.isPresenting ||
+    keyboardBlockedByPointer ||
+    pressedKeys.size === 0 ||
+    isLocalInteractionBlocked()
+  ) {
 
     return;
 
@@ -409,8 +516,10 @@ function updateKeyboardMovement( deltaSeconds ) {
 
 function updateDesktopHover() {
 
-  if ( renderer.xr.isPresenting || desktopState.mode !== null ) {
+  if ( renderer.xr.isPresenting || desktopState.mode !== null || isLocalInteractionBlocked() ) {
 
+    desktopState.hovered = null;
+    renderer.domElement.style.cursor = 'default';
     return;
 
   }
@@ -438,7 +547,7 @@ function releaseDesktopInteraction() {
 
 function onPointerDown( event ) {
 
-  if ( renderer.xr.isPresenting ) {
+  if ( renderer.xr.isPresenting || isLocalInteractionBlocked() ) {
 
     return;
 
@@ -479,6 +588,10 @@ function onPointerDown( event ) {
 
     renderer.domElement.setPointerCapture( event.pointerId );
     renderer.domElement.style.cursor = 'grabbing';
+    studyLogger?.recordObjectGrabStart( {
+      interactor: INTERACTORS.DESKTOP_POINTER,
+      source: INTERACTORS.DESKTOP_POINTER,
+    } );
     return;
 
   }
@@ -491,7 +604,7 @@ function onPointerDown( event ) {
 
 function onPointerMove( event ) {
 
-  if ( renderer.xr.isPresenting ) {
+  if ( renderer.xr.isPresenting || isLocalInteractionBlocked() ) {
 
     return;
 
@@ -542,15 +655,33 @@ function onPointerMove( event ) {
 
 function onPointerUp( event ) {
 
+  if ( isLocalInteractionBlocked() ) {
+
+    onPointerCancel();
+    return;
+
+  }
+
   if ( desktopState.activePointerId !== event.pointerId ) {
 
     return;
 
   }
 
+  const shouldLogGrabEnd = desktopState.mode === 'object' && desktopState.selected;
+
   if ( renderer.domElement.hasPointerCapture( event.pointerId ) ) {
 
     renderer.domElement.releasePointerCapture( event.pointerId );
+
+  }
+
+  if ( shouldLogGrabEnd ) {
+
+    studyLogger?.recordObjectGrabEnd( {
+      interactor: INTERACTORS.DESKTOP_POINTER,
+      source: INTERACTORS.DESKTOP_POINTER,
+    } );
 
   }
 
@@ -561,7 +692,7 @@ function onPointerUp( event ) {
 
 function onPointerLeave() {
 
-  if ( renderer.xr.isPresenting || desktopState.mode !== null ) {
+  if ( renderer.xr.isPresenting || desktopState.mode !== null || isLocalInteractionBlocked() ) {
 
     return;
 
@@ -588,7 +719,7 @@ function onPointerCancel() {
 
 function onKeyDown( event ) {
 
-  if ( renderer.xr.isPresenting ) {
+  if ( renderer.xr.isPresenting || isLocalInteractionBlocked() ) {
 
     return;
 
@@ -618,7 +749,7 @@ function onWindowBlur() {
 
 function onWheel( event ) {
 
-  if ( renderer.xr.isPresenting ) {
+  if ( renderer.xr.isPresenting || isLocalInteractionBlocked() ) {
 
     return;
 
@@ -710,7 +841,7 @@ function buildController( index ) {
       new THREE.Vector3( 0, 0, 0 ),
       new THREE.Vector3( 0, 0, - 1 ),
     ] ),
-    new THREE.LineBasicMaterial( { color: 0xffffff, transparent: true, opacity: 0.9 } )
+    new THREE.LineBasicMaterial( { color: 0xffffff, transparent: true, opacity: 0.9 } ),
   );
   line.name = 'ray';
   line.scale.z = defaultRayLength;
@@ -718,7 +849,7 @@ function buildController( index ) {
 
   const cursor = new THREE.Mesh(
     new THREE.SphereGeometry( 0.015, 16, 16 ),
-    new THREE.MeshBasicMaterial( { color: 0xffffff, toneMapped: false } )
+    new THREE.MeshBasicMaterial( { color: 0xffffff, toneMapped: false } ),
   );
   cursor.name = 'cursor';
   cursor.visible = false;
@@ -737,7 +868,7 @@ function onSelectStart( event ) {
 
   const controller = event.target;
 
-  if ( ! renderer.xr.isPresenting ) {
+  if ( ! renderer.xr.isPresenting || isLocalInteractionBlocked() ) {
 
     return;
 
@@ -752,12 +883,29 @@ function onSelectStart( event ) {
   }
 
   startXRObjectGrab( controller, intersections[ 0 ].object );
+  studyLogger?.recordObjectGrabStart( {
+    interactor: getControllerInteractorId( controller ),
+    source: getControllerInteractorId( controller ),
+  } );
 
 }
 
 function onSelectEnd( event ) {
 
-  releaseControllerAction( event.target );
+  const controller = event.target;
+  const interactor = getControllerInteractorId( controller );
+  const shouldLogGrabEnd = controller.userData.mode === 'object' && controller.userData.selected;
+
+  if ( shouldLogGrabEnd && ! isLocalInteractionBlocked() ) {
+
+    studyLogger?.recordObjectGrabEnd( {
+      interactor,
+      source: interactor,
+    } );
+
+  }
+
+  releaseControllerAction( controller );
 
 }
 
@@ -769,7 +917,11 @@ function updateControllerState( controller ) {
   if ( ! renderer.xr.isPresenting ) {
 
     controller.userData.hovered = null;
-    controller.userData.mode = null;
+    if ( controller.userData.mode !== 'object' ) {
+
+      controller.userData.mode = null;
+
+    }
     line.scale.z = defaultRayLength;
     cursor.visible = false;
     return;
@@ -804,14 +956,135 @@ function updateControllerState( controller ) {
 
 }
 
-function animate() {
+function applyReplayInteractionState( replayState ) {
 
-  const deltaSeconds = Math.min( clock.getDelta(), 0.05 );
-  updateKeyboardMovement( deltaSeconds );
+  desktopState.hovered = null;
+  desktopState.selected = null;
+  desktopState.mode = null;
+  renderer.domElement.style.cursor = 'default';
+  cube.userData.grabbedBy = null;
 
   for ( const controller of controllers ) {
 
-    updateControllerState( controller );
+    controller.userData.selected = null;
+    controller.userData.mode = null;
+    controller.userData.hovered = null;
+
+    const cursor = controller.getObjectByName( 'cursor' );
+    if ( cursor ) {
+
+      cursor.visible = false;
+
+    }
+
+    const line = controller.getObjectByName( 'ray' );
+    if ( line ) {
+
+      line.scale.z = defaultRayLength;
+
+    }
+
+  }
+
+  const shouldShowGrabState =
+    replayState.interactionPhase === 'grab-start' ||
+    replayState.interactionPhase === 'manipulating';
+
+  if ( ! shouldShowGrabState ) {
+
+    return;
+
+  }
+
+  if ( replayState.activeInteractor === INTERACTORS.DESKTOP_POINTER ) {
+
+    cube.userData.grabbedBy = desktopGrabber;
+    return;
+
+  }
+
+  const controller = replayState.activeInteractor === INTERACTORS.CONTROLLER_1
+    ? controllers[ 1 ]
+    : controllers[ 0 ];
+
+  if ( controller ) {
+
+    cube.userData.grabbedBy = controller;
+    controller.userData.selected = cube;
+    controller.userData.mode = 'object';
+
+  }
+
+}
+
+function applyReplayState( replayState ) {
+
+  pressedKeys.clear();
+  onPointerCancel();
+  releaseAllXRControllerActions();
+  updateBridgeLockStateUI();
+
+  scene.attach( cube );
+  cube.userData.grabbedBy = null;
+  cube.position.fromArray( replayState.cube.position );
+  cube.quaternion.fromArray( replayState.cube.quaternion );
+  cube.scale.set( 1, 1, 1 );
+
+  xrOrigin.position.fromArray( replayState.xrOrigin.position );
+  xrOrigin.quaternion.fromArray( replayState.xrOrigin.quaternion );
+  xrOrigin.scale.set( 1, 1, 1 );
+
+  camera.position.fromArray( replayState.camera.position );
+  camera.quaternion.fromArray( replayState.camera.quaternion );
+  camera.scale.set( 1, 1, 1 );
+
+  setPresentationMode( replayState.presentationMode );
+  applyReplayInteractionState( replayState );
+
+  scene.updateMatrixWorld( true );
+  refreshInteractableAppearance();
+  renderer.render( scene, camera );
+
+}
+
+function animate() {
+
+  timer.update();
+  const deltaSeconds = Math.min( timer.getDelta(), 0.05 );
+  updateKeyboardMovement( deltaSeconds );
+
+  if ( ! studyLogger?.isReplayControlled() ) {
+
+    for ( const controller of controllers ) {
+
+      updateControllerState( controller );
+
+    }
+
+  }
+
+  const activeGrabInteractor = getActiveGrabInteractorId();
+  if ( activeGrabInteractor ) {
+
+    studyLogger?.sampleObjectTransformIfNeeded( {
+      interactor: activeGrabInteractor,
+      source: activeGrabInteractor,
+    } );
+
+  }
+
+  if ( renderer.xr.isPresenting || cameraSamplingRequested ) {
+
+    const cameraSampleStatus = studyLogger?.sampleCameraTransformIfNeeded( {
+      interactor: activeGrabInteractor,
+      source: renderer.xr.isPresenting ? 'xr-camera' : 'desktop-camera',
+    } );
+
+    if ( ! renderer.xr.isPresenting && cameraSampleStatus !== 'pending' ) {
+
+      cameraSamplingRequested = false;
+
+    }
 
   }
 
@@ -830,16 +1103,30 @@ function onWindowResize() {
 
 renderer.xr.addEventListener( 'sessionstart', () => {
 
+  if ( isLocalInteractionBlocked() ) {
+
+    return;
+
+  }
+
   releaseDesktopInteraction();
   desktopState.hovered = null;
   renderer.domElement.style.cursor = 'default';
 
   resetCameraForXRSession();
+  studyLogger?.recordCameraReset( { source: 'xr-session-reset' } );
 
   const blendMode = renderer.xr.getEnvironmentBlendMode();
   const isPassthroughStyle = blendMode === 'alpha-blend' || blendMode === 'additive';
+  const nextMode = isPassthroughStyle
+    ? PRESENTATION_MODES.IMMERSIVE_AR
+    : PRESENTATION_MODES.IMMERSIVE_VR;
 
-  setPresentationMode( isPassthroughStyle ? 'immersive-ar' : 'immersive-vr' );
+  setPresentationMode( nextMode );
+  studyLogger?.recordSessionStart( {
+    mode: nextMode,
+    source: 'xr-session',
+  } );
 
   if ( isPassthroughStyle ) {
 
@@ -851,19 +1138,51 @@ renderer.xr.addEventListener( 'sessionstart', () => {
 
 renderer.xr.addEventListener( 'sessionend', () => {
 
+  const endingMode = currentMode;
+
   releaseAllXRControllerActions();
+  studyLogger?.recordSessionEnd( { source: 'xr-session' } );
   flattenXRToDesktopCamera();
   desktopState.hovered = null;
   renderer.xr.setReferenceSpace( null );
   renderer.xr.setReferenceSpaceType( 'local-floor' );
-  setPresentationMode( 'desktop' );
+  setPresentationMode( PRESENTATION_MODES.DESKTOP );
+  cameraSamplingRequested = false;
+
+  if ( endingMode !== PRESENTATION_MODES.DESKTOP ) {
+
+    markCameraForSampling();
+
+  }
 
 } );
 
 initializeSceneLayout();
 buildController( 0 );
 buildController( 1 );
+
+studyLogger = createXRStudyLogger( {
+  bridge: revisitBridge,
+  getSceneSnapshot,
+  applyReplayState,
+} );
+
+if ( import.meta.env.DEV ) {
+
+  window.__revisitXRDebug = {
+    getState: () => studyLogger.getState(),
+    getGraph: () => studyLogger.getGraph(),
+    exportAnswers: () => studyLogger.exportAnswers(),
+    applyReplayState: ( state ) => studyLogger.applyReplayStateSnapshot( state ),
+    isReplayControlled: () => studyLogger.isReplayControlled(),
+    getStudyData: () => studyLogger.getStudyData(),
+  };
+
+}
+
 updateHud();
+updateBridgeLockStateUI();
+revisitBridge.postReady();
 
 window.addEventListener( 'resize', onWindowResize );
 window.addEventListener( 'blur', onWindowBlur );

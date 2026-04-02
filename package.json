@@ -5,6 +5,7 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
+    "@trrack/core": "^1.4.0",
     "three": "^0.183.2"
   },
   "devDependencies": {
