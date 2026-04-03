@@ -28,6 +28,12 @@ export const POINTER_MODES = Object.freeze( {
   HIDDEN: 'hidden',
 } );
 
+export const REPLAY_POINTER_TOOLTIP_STATES = Object.freeze( {
+  DEFAULT: 'default',
+  GRABBING: 'grabbing',
+  RELEASED: 'released',
+} );
+
 export const ANALYSIS_MODES = Object.freeze( {
   STUDY: 'study',
   ANALYSIS: 'analysis',
@@ -82,28 +88,115 @@ function cloneTransform( transform = {} ) {
 
 }
 
-export function createHiddenReplayPointer( interactor ) {
+export function getReplayPointerBaseLabel( interactor ) {
+
+  if ( interactor === INTERACTORS.CONTROLLER_0 ) {
+
+    return 'LEFT CONTROLLER';
+
+  }
+
+  if ( interactor === INTERACTORS.CONTROLLER_1 ) {
+
+    return 'RIGHT CONTROLLER';
+
+  }
+
+  return 'CONTROLLER';
+
+}
+
+export function getReplayPointerTooltipStateFromPointerMode( mode ) {
+
+  return mode === POINTER_MODES.GRAB
+    ? REPLAY_POINTER_TOOLTIP_STATES.GRABBING
+    : REPLAY_POINTER_TOOLTIP_STATES.DEFAULT;
+
+}
+
+export function getReplayPointerTooltipText(
+  interactor,
+  tooltipState = REPLAY_POINTER_TOOLTIP_STATES.DEFAULT,
+) {
+
+  const baseLabel = getReplayPointerBaseLabel( interactor );
+
+  if ( tooltipState === REPLAY_POINTER_TOOLTIP_STATES.GRABBING ) {
+
+    return `${baseLabel}: GRABBING`;
+
+  }
+
+  if ( tooltipState === REPLAY_POINTER_TOOLTIP_STATES.RELEASED ) {
+
+    return `${baseLabel}: RELEASED`;
+
+  }
+
+  return baseLabel;
+
+}
+
+export function applyReplayPointerTooltipState(
+  pointer = createHiddenReplayPointer( null ),
+  interactor = pointer?.interactor ?? null,
+  tooltipState = REPLAY_POINTER_TOOLTIP_STATES.DEFAULT,
+  tooltipVisible = pointer?.visible === true,
+) {
 
   return {
+    ...pointer,
+    interactor,
+    tooltipVisible,
+    tooltipState,
+    tooltipText: getReplayPointerTooltipText( interactor, tooltipState ),
+  };
+
+}
+
+export function createHiddenReplayPointer( interactor ) {
+
+  return applyReplayPointerTooltipState( {
     visible: false,
     interactor,
     origin: [ 0, 0, 0 ],
     target: [ 0, 0, 0 ],
     rayLength: 0,
     mode: POINTER_MODES.HIDDEN,
-  };
+  }, interactor, REPLAY_POINTER_TOOLTIP_STATES.DEFAULT, false );
 
 }
 
 function cloneReplayPointer( pointer = {}, fallback = createHiddenReplayPointer( null ) ) {
 
+  const interactor = typeof pointer.interactor === 'string' ? pointer.interactor : fallback.interactor;
+  const visible = pointer.visible === true;
+  const mode = typeof pointer.mode === 'string' ? pointer.mode : fallback.mode;
+  const tooltipState = Object.values( REPLAY_POINTER_TOOLTIP_STATES ).includes( pointer.tooltipState )
+    ? pointer.tooltipState
+    : (
+      visible && mode !== POINTER_MODES.HIDDEN
+        ? getReplayPointerTooltipStateFromPointerMode( mode )
+        : fallback.tooltipState
+    );
+  const tooltipVisible = visible && (
+    typeof pointer.tooltipVisible === 'boolean'
+      ? pointer.tooltipVisible
+      : fallback.tooltipVisible
+  );
+
   return {
-    visible: pointer.visible === true,
-    interactor: typeof pointer.interactor === 'string' ? pointer.interactor : fallback.interactor,
+    visible,
+    interactor,
     origin: [ ...( pointer.origin || fallback.origin ) ],
     target: [ ...( pointer.target || fallback.target ) ],
     rayLength: typeof pointer.rayLength === 'number' ? pointer.rayLength : fallback.rayLength,
-    mode: typeof pointer.mode === 'string' ? pointer.mode : fallback.mode,
+    mode,
+    tooltipVisible,
+    tooltipState,
+    tooltipText: typeof pointer.tooltipText === 'string' && pointer.tooltipText.trim().length > 0
+      ? pointer.tooltipText
+      : getReplayPointerTooltipText( interactor, tooltipState ),
   };
 
 }

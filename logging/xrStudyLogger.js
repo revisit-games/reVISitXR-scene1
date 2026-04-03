@@ -7,6 +7,8 @@ import {
   PRESENTATION_MODES,
   REPLAY_POINTER_IDS,
   SAMPLING_CONFIG,
+  REPLAY_POINTER_TOOLTIP_STATES,
+  applyReplayPointerTooltipState,
   createHiddenReplayPointer,
   createInitialXRLoggingState,
   getGrabEndLabel,
@@ -70,6 +72,9 @@ function applySceneSnapshotToState( state, sceneSnapshot ) {
       target: [ ...nextPointer.target ],
       rayLength: nextPointer.rayLength,
       mode: nextPointer.mode,
+      tooltipVisible: nextPointer.tooltipVisible,
+      tooltipState: nextPointer.tooltipState,
+      tooltipText: nextPointer.tooltipText,
     };
 
   }
@@ -616,11 +621,30 @@ export function createXRStudyLogger( {
     },
     recordObjectGrabEnd( { interactor, source = interactor } ) {
 
+      const sceneSnapshot = getSceneSnapshot();
+
+      if ( REPLAY_POINTER_IDS.includes( interactor ) ) {
+
+        const currentPointer = sceneSnapshot.replayPointers?.[ interactor ] || createHiddenReplayPointer( interactor );
+
+        sceneSnapshot.replayPointers = {
+          ...sceneSnapshot.replayPointers,
+          [ interactor ]: applyReplayPointerTooltipState(
+            currentPointer,
+            interactor,
+            REPLAY_POINTER_TOOLTIP_STATES.RELEASED,
+            currentPointer.visible,
+          ),
+        };
+
+      }
+
       return runAction(
         getGrabEndLabel( interactor ),
         objectGrabEndAction( createLoggerActionPayload( getSceneSnapshot, {
           interactor,
           source,
+          sceneSnapshot,
         } ) ),
       );
 

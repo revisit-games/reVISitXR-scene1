@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
@@ -8,8 +10,12 @@ import {
   POINTER_MODES,
   PRESENTATION_MODES,
   REPLAY_POINTER_IDS,
+  REPLAY_POINTER_TOOLTIP_STATES,
+  createHiddenReplayPointer,
+  getReplayPointerTooltipText,
 } from './logging/xrLoggingSchema.js';
 import { createXRStudyLogger } from './logging/xrStudyLogger.js';
+import { replayVisualConfig } from './replayVisualConfig.js';
 import {
   quaternionToArray,
   vector3ToArray,
@@ -42,9 +48,21 @@ renderer.xr.setReferenceSpaceType( 'local-floor' );
 renderer.domElement.style.touchAction = 'none';
 document.body.appendChild( renderer.domElement );
 
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize( window.innerWidth, window.innerHeight );
+labelRenderer.domElement.id = 'replay-label-layer';
+labelRenderer.domElement.style.position = 'fixed';
+labelRenderer.domElement.style.inset = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+labelRenderer.domElement.style.overflow = 'hidden';
+labelRenderer.domElement.style.zIndex = '18';
+document.body.appendChild( labelRenderer.domElement );
+
 const hudTitle = document.querySelector( '#hud-title' );
 const hudBody = document.querySelector( '#hud-body' );
 const hudNote = document.querySelector( '#hud-note' );
+const pausedOverlayFrame = document.querySelector( '#analysis-paused-frame' );
+const pausedOverlayBanner = document.querySelector( '#analysis-paused-banner' );
 
 const light = new THREE.HemisphereLight( 0xdbe7ff, 0x2a1e12, 1.6 );
 scene.add( light );
@@ -116,6 +134,8 @@ const dragPoint = new THREE.Vector3();
 const dragNormal = new THREE.Vector3();
 const tempReplayPointerOrigin = new THREE.Vector3();
 const tempReplayPointerTarget = new THREE.Vector3();
+const tempReplayTooltipAnchor = new THREE.Vector3();
+const tempReplayCameraForward = new THREE.Vector3();
 const desktopEuler = new THREE.Euler( 0, 0, 0, 'YXZ' );
 
 const desktopState = {
@@ -132,10 +152,6 @@ const hoverColor = 0x163244;
 const grabbedColor = 0x235f7d;
 const idleColor = 0x000000;
 const defaultRayLength = 5;
-const replayPointerColors = Object.freeze( {
-  [ INTERACTORS.CONTROLLER_0 ]: 0xff6b6b,
-  [ INTERACTORS.CONTROLLER_1 ]: 0x4ecdc4,
-} );
 const mousePanFactor = 0.003;
 const mouseRotateFactor = 0.005;
 const keyboardMoveSpeed = 2.4;
@@ -152,6 +168,271 @@ let cameraSamplingRequested = false;
 let replayGhostPointersHiddenByViewer = false;
 
 const replayPointerVisuals = {};
+const replayCameraPose = {
+  hasValue: false,
+  position: new THREE.Vector3(),
+  quaternion: new THREE.Quaternion(),
+};
+const replayAvatarRoot = new THREE.Group();
+const replayAvatarPoseGroup = new THREE.Group();
+const replayAvatarModelContainer = new THREE.Group();
+const replayAvatarLabelAnchor = new THREE.Object3D();
+const replayAvatarArrow = new THREE.ArrowHelper(
+  new THREE.Vector3( 0, 0, - 1 ),
+  new THREE.Vector3(),
+  replayVisualConfig.replayAvatar.headArrowLength,
+  replayVisualConfig.replayAvatar.headArrowColor,
+  replayVisualConfig.replayAvatar.headArrowLength * 0.4,
+  replayVisualConfig.replayAvatar.headArrowLength * 0.24,
+);
+
+replayAvatarRoot.visible = false;
+replayAvatarPoseGroup.add( replayAvatarModelContainer );
+replayAvatarPoseGroup.add( replayAvatarArrow );
+replayAvatarRoot.add( replayAvatarPoseGroup );
+replayAvatarRoot.add( replayAvatarLabelAnchor );
+scene.add( replayAvatarRoot );
+
+function colorToCssRgba( colorHex, alpha = 1 ) {
+
+  const color = new THREE.Color( colorHex );
+  const red = Math.round( color.r * 255 );
+  const green = Math.round( color.g * 255 );
+  const blue = Math.round( color.b * 255 );
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+
+}
+
+function applyReplayLabelAccent( element, colorHex ) {
+
+  element.style.setProperty( '--replay-label-accent', colorToCssRgba( colorHex, 1 ) );
+  element.style.setProperty(
+    '--replay-label-background',
+    colorToCssRgba( colorHex, replayVisualConfig.pointerTooltips.backgroundOpacity ),
+  );
+  element.style.setProperty(
+    '--replay-label-border',
+    colorToCssRgba( colorHex, replayVisualConfig.pointerTooltips.borderOpacity ),
+  );
+  element.style.setProperty( '--replay-label-text', replayVisualConfig.pointerTooltips.textColor );
+
+}
+
+function createReplayLabelElement( className, text, accentColor ) {
+
+  const element = document.createElement( 'div' );
+  element.className = className;
+  element.textContent = text;
+  applyReplayLabelAccent( element, accentColor );
+  return element;
+
+}
+
+function createReplayPointerLabel( interactor ) {
+
+  const accentColor = replayVisualConfig.pointerColors[ interactor ] || 0xffffff;
+  const labelElement = createReplayLabelElement(
+    `replay-floating-label replay-pointer-label ${interactor}`,
+    getReplayPointerTooltipText( interactor ),
+    accentColor,
+  );
+  const labelObject = new CSS2DObject( labelElement );
+  labelObject.center.set( 0.5, 0.5 );
+
+  const labelAnchor = new THREE.Object3D();
+  labelAnchor.visible = false;
+  labelAnchor.add( labelObject );
+
+  return {
+    labelAnchor,
+    labelObject,
+    labelElement,
+  };
+
+}
+
+function createReplayAvatarLabel() {
+
+  const labelElement = createReplayLabelElement(
+    'replay-floating-label replay-avatar-label',
+    replayVisualConfig.replayAvatar.headTooltipText,
+    replayVisualConfig.replayAvatar.headArrowColor,
+  );
+  const labelObject = new CSS2DObject( labelElement );
+  labelObject.center.set( 0.5, 1 );
+  replayAvatarLabelAnchor.add( labelObject );
+
+  return {
+    labelElement,
+    labelObject,
+  };
+
+}
+
+const replayAvatarLabel = createReplayAvatarLabel();
+
+function applyReplayVisualConfigToDom() {
+
+  document.documentElement.style.setProperty(
+    '--replay-paused-border-color',
+    replayVisualConfig.pausedOverlay.borderColor,
+  );
+  document.documentElement.style.setProperty(
+    '--replay-paused-banner-background',
+    replayVisualConfig.pausedOverlay.bannerBackground,
+  );
+  document.documentElement.style.setProperty(
+    '--replay-paused-banner-text',
+    replayVisualConfig.pausedOverlay.bannerTextColor,
+  );
+
+  if ( pausedOverlayBanner ) {
+
+    pausedOverlayBanner.textContent = replayVisualConfig.pausedOverlay.bannerText;
+
+  }
+
+}
+
+function setPausedReplayOverlayVisibility( visible ) {
+
+  pausedOverlayFrame?.classList.toggle( 'visible', visible );
+  pausedOverlayBanner?.classList.toggle( 'visible', visible );
+
+}
+
+function updatePausedReplayOverlay( policy = studyLogger?.getInteractionPolicy?.() ) {
+
+  const shouldShow = Boolean(
+    policy?.isAnalysisSession &&
+    policy?.hasReceivedReplayState &&
+    policy?.analysisPlaybackActive === false &&
+    policy?.canInteract === true,
+  );
+
+  setPausedReplayOverlayVisibility( shouldShow );
+
+}
+
+function renderScene() {
+
+  renderer.render( scene, camera );
+  labelRenderer.render( scene, camera );
+
+}
+
+function resolveReplayAssetUrl( assetPath ) {
+
+  const normalizedPath = assetPath.startsWith( '/' )
+    ? assetPath.slice( 1 )
+    : assetPath;
+
+  return new URL( normalizedPath, window.location.href ).toString();
+
+}
+
+function loadReplayAvatarModel() {
+
+  const loader = new OBJLoader();
+
+  loader.load(
+    resolveReplayAssetUrl( replayVisualConfig.replayAvatar.headModelPath ),
+    ( object ) => {
+
+      const bounds = new THREE.Box3().setFromObject( object );
+      const center = bounds.getCenter( new THREE.Vector3() );
+      const headMaterial = new THREE.MeshStandardMaterial( {
+        color: replayVisualConfig.replayAvatar.headMaterialColor,
+        emissive: replayVisualConfig.replayAvatar.headMaterialEmissive,
+        transparent: true,
+        opacity: replayVisualConfig.replayAvatar.headMaterialOpacity,
+        roughness: 0.56,
+        metalness: 0.04,
+      } );
+
+      object.traverse( ( child ) => {
+
+        if ( child.isMesh ) {
+
+          child.material = headMaterial;
+          child.castShadow = true;
+          child.receiveShadow = true;
+
+        }
+
+      } );
+
+      object.position.sub( center );
+      replayAvatarModelContainer.add( object );
+      replayAvatarModelContainer.scale.setScalar( replayVisualConfig.replayAvatar.headScale );
+      replayAvatarModelContainer.rotation.y = replayVisualConfig.replayAvatar.headRotationY;
+
+    },
+    undefined,
+    ( error ) => {
+
+      console.warn( 'Unable to load replay user-head avatar model.', error );
+
+    },
+  );
+
+}
+
+function captureReplayCameraPoseFromScene() {
+
+  scene.updateMatrixWorld( true );
+  camera.getWorldPosition( replayCameraPose.position );
+  camera.getWorldQuaternion( replayCameraPose.quaternion );
+  replayCameraPose.hasValue = true;
+
+}
+
+function updateReplayAvatar( policy = studyLogger?.getInteractionPolicy?.() ) {
+
+  const shouldShow = Boolean(
+    policy?.isAnalysisSession &&
+    policy?.hasReceivedReplayState &&
+    replayCameraPose.hasValue,
+  );
+
+  replayAvatarRoot.visible = shouldShow;
+
+  if ( ! shouldShow ) {
+
+    return;
+
+  }
+
+  tempReplayCameraForward.set( 0, 0, - 1 ).applyQuaternion( replayCameraPose.quaternion ).normalize();
+
+  replayAvatarRoot.position.copy( replayCameraPose.position );
+  replayAvatarRoot.position.addScaledVector( tempReplayCameraForward, - replayVisualConfig.replayAvatar.headOffsetBack );
+  replayAvatarRoot.position.y -= replayVisualConfig.replayAvatar.headOffsetDown;
+
+  replayAvatarPoseGroup.quaternion.copy( replayCameraPose.quaternion );
+  replayAvatarLabelAnchor.position.set( 0, replayVisualConfig.replayAvatar.headTooltipVerticalOffset, 0 );
+  replayAvatarArrow.position.set( 0, 0.015, 0 );
+  replayAvatarArrow.setDirection( new THREE.Vector3( 0, 0, - 1 ) );
+  replayAvatarArrow.setLength(
+    replayVisualConfig.replayAvatar.headArrowLength,
+    replayVisualConfig.replayAvatar.headArrowLength * 0.4,
+    replayVisualConfig.replayAvatar.headArrowLength * 0.24,
+  );
+
+}
+
+function getReplayAvatarDebugState() {
+
+  return {
+    visible: replayAvatarRoot.visible,
+    hasReplayCameraPose: replayCameraPose.hasValue,
+    position: vector3ToArray( replayAvatarRoot.position ),
+    quaternion: quaternionToArray( replayAvatarPoseGroup.quaternion ),
+    tooltipText: replayAvatarLabel.labelElement.textContent,
+  };
+
+}
 
 function applyButtonPlacement( button, left ) {
 
@@ -175,10 +456,11 @@ document.body.appendChild( vrButton );
 
 function createGhostReplayPointer( interactor ) {
 
-  const color = replayPointerColors[ interactor ] || 0xffffff;
+  const color = replayVisualConfig.pointerColors[ interactor ] || 0xffffff;
   const positions = new Float32Array( 6 );
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+  const pointerLabel = createReplayPointerLabel( interactor );
 
   const line = new THREE.Line(
     geometry,
@@ -225,6 +507,7 @@ function createGhostReplayPointer( interactor ) {
   group.add( line );
   group.add( originMarker );
   group.add( hitMarker );
+  group.add( pointerLabel.labelAnchor );
   scene.add( group );
 
   replayPointerVisuals[ interactor ] = {
@@ -232,6 +515,9 @@ function createGhostReplayPointer( interactor ) {
     line,
     originMarker,
     hitMarker,
+    labelAnchor: pointerLabel.labelAnchor,
+    labelObject: pointerLabel.labelObject,
+    labelElement: pointerLabel.labelElement,
     positions,
   };
 
@@ -244,6 +530,11 @@ function setGhostReplayPointerVisibility( interactor, visible ) {
   if ( visuals ) {
 
     visuals.group.visible = visible;
+    if ( ! visible ) {
+
+      visuals.labelAnchor.visible = false;
+
+    }
 
   }
 
@@ -272,6 +563,7 @@ function updateGhostReplayPointer( interactor, pointerState ) {
   if ( replayGhostPointersHiddenByViewer || ! pointerState?.visible ) {
 
     visuals.group.visible = false;
+    visuals.labelAnchor.visible = false;
     return;
 
   }
@@ -286,6 +578,20 @@ function updateGhostReplayPointer( interactor, pointerState ) {
   visuals.line.geometry.computeBoundingSphere();
   visuals.originMarker.position.fromArray( pointerState.origin );
   visuals.hitMarker.position.fromArray( pointerState.target );
+  tempReplayTooltipAnchor
+    .fromArray( pointerState.origin )
+    .lerp(
+      tempReplayPointerTarget.fromArray( pointerState.target ),
+      replayVisualConfig.pointerTooltips.anchorLerp,
+    );
+  tempReplayTooltipAnchor.y += replayVisualConfig.pointerTooltips.verticalOffset;
+  visuals.labelAnchor.position.copy( tempReplayTooltipAnchor );
+  visuals.labelAnchor.visible = pointerState.tooltipVisible !== false;
+  visuals.labelElement.textContent = pointerState.tooltipText || getReplayPointerTooltipText(
+    interactor,
+    pointerState.tooltipState,
+  );
+  visuals.labelElement.dataset.state = pointerState.tooltipState || REPLAY_POINTER_TOOLTIP_STATES.DEFAULT;
   visuals.group.visible = true;
 
 }
@@ -312,6 +618,9 @@ function getGhostReplayPointerDebugState() {
         visible: visuals?.group.visible ?? false,
         origin: visuals ? vector3ToArray( visuals.originMarker.position ) : null,
         target: visuals ? vector3ToArray( visuals.hitMarker.position ) : null,
+        tooltipVisible: visuals?.labelAnchor.visible ?? false,
+        tooltipText: visuals?.labelElement.textContent ?? null,
+        tooltipAnchor: visuals ? vector3ToArray( visuals.labelAnchor.position ) : null,
       },
     ];
 
@@ -393,14 +702,7 @@ function getControllerReplayPointerState( controller ) {
 
   if ( ! interactor || ! renderer.xr.isPresenting ) {
 
-    return {
-      visible: false,
-      interactor,
-      origin: [ 0, 0, 0 ],
-      target: [ 0, 0, 0 ],
-      rayLength: 0,
-      mode: POINTER_MODES.HIDDEN,
-    };
+    return createHiddenReplayPointer( interactor );
 
   }
 
@@ -423,16 +725,13 @@ function getControllerReplayPointerState( controller ) {
 
   if ( pointerMode === POINTER_MODES.HIDDEN ) {
 
-    return {
-      visible: false,
-      interactor,
-      origin: [ 0, 0, 0 ],
-      target: [ 0, 0, 0 ],
-      rayLength: 0,
-      mode: POINTER_MODES.HIDDEN,
-    };
+    return createHiddenReplayPointer( interactor );
 
   }
+
+  const tooltipState = pointerMode === POINTER_MODES.GRAB
+    ? REPLAY_POINTER_TOOLTIP_STATES.GRABBING
+    : REPLAY_POINTER_TOOLTIP_STATES.DEFAULT;
 
   return {
     visible: true,
@@ -441,6 +740,9 @@ function getControllerReplayPointerState( controller ) {
     target: vector3ToArray( tempReplayPointerTarget ),
     rayLength: tempReplayPointerOrigin.distanceTo( tempReplayPointerTarget ),
     mode: pointerMode,
+    tooltipVisible: true,
+    tooltipState,
+    tooltipText: getReplayPointerTooltipText( interactor, tooltipState ),
   };
 
 }
@@ -1305,9 +1607,10 @@ function applyReplayState( replayState ) {
   applyReplayInteractionState( replayState );
   updateGhostReplayPointersFromState( replayState.replayPointers );
 
-  scene.updateMatrixWorld( true );
+  captureReplayCameraPoseFromScene();
+  updateReplayAvatar();
   refreshInteractableAppearance();
-  renderer.render( scene, camera );
+  renderScene();
 
 }
 
@@ -1341,6 +1644,8 @@ function handleInteractionPolicyChange( policy ) {
   }
 
   updateHud();
+  updatePausedReplayOverlay( policy );
+  updateReplayAvatar( policy );
   updateBridgeLockStateUI();
   refreshInteractableAppearance();
 
@@ -1391,8 +1696,9 @@ function animate() {
 
   }
 
+  updateReplayAvatar();
   refreshInteractableAppearance();
-  renderer.render( scene, camera );
+  renderScene();
 
 }
 
@@ -1401,6 +1707,7 @@ function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize( window.innerWidth, window.innerHeight );
+  labelRenderer.setSize( window.innerWidth, window.innerHeight );
 
 }
 
@@ -1463,6 +1770,8 @@ renderer.xr.addEventListener( 'sessionend', () => {
 initializeSceneLayout();
 buildController( 0 );
 buildController( 1 );
+applyReplayVisualConfigToDom();
+loadReplayAvatarModel();
 
 for ( const interactor of REPLAY_POINTER_IDS ) {
 
@@ -1490,12 +1799,14 @@ if ( import.meta.env.DEV ) {
     getInteractionPolicy: () => studyLogger.getInteractionPolicy(),
     setAnalysisControl: ( control ) => studyLogger.setAnalysisControl( control ),
     getReplayPointerVisuals: () => getGhostReplayPointerDebugState(),
+    getReplayAvatarVisuals: () => getReplayAvatarDebugState(),
     getStudyData: () => studyLogger.getStudyData(),
   };
 
 }
 
 updateHud();
+updatePausedReplayOverlay();
 updateBridgeLockStateUI();
 revisitBridge.postReady();
 

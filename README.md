@@ -6,6 +6,8 @@ This package is the standalone XR stimulus that can run by itself or inside a re
 
 - `main.js`
   The scene, input wiring, ghost replay pointer visuals, and the actual points where logging hooks are attached.
+- `replayVisualConfig.js`
+  Central replay-visual tuning for controller tooltip placement/colors, the replay head avatar, and the paused-analysis overlay.
 - `logging/revisitBridge.js`
   The standalone-safe iframe bridge that speaks the `@REVISIT_COMMS/*` protocol.
 - `logging/xrLoggingSchema.js`
@@ -80,6 +82,9 @@ This is what enables the paused-analysis workflow:
 - `camera.position`, `camera.quaternion`
 - `xrOrigin.position`, `xrOrigin.quaternion`
 - `replayPointers['controller-0' | 'controller-1']`
+  Each controller pointer now carries:
+  - `visible`, `origin`, `target`, `rayLength`, `mode`
+  - `tooltipVisible`, `tooltipState`, `tooltipText`
 - `activeInteractor`
 - `interactionPhase`
 - `metrics.*`
@@ -142,14 +147,64 @@ The current ghost pointer uses:
 - a world-space line for the ray
 - a small sphere at the hit point
 - a small origin marker
+- a floating CSS2D tooltip anchored along the ray
+
+Default tooltip behavior:
+
+- visible hover ray: `LEFT CONTROLLER` or `RIGHT CONTROLLER`
+- active grab ray: `LEFT CONTROLLER: GRABBING` or `RIGHT CONTROLLER: GRABBING`
+- recorded grab release node: `LEFT CONTROLLER: RELEASED` or `RIGHT CONTROLLER: RELEASED`
+
+Tooltip states are derived in two places:
+
+- live replay pointer sampling in `main.js`
+  Visible hover rays become `default`, and active grab rays become `grabbing`.
+- `recordObjectGrabEnd()` in `logging/xrStudyLogger.js`
+  The releasing controller's saved replay pointer is annotated as `released` before the Trrack action is applied, so replay can show a release label even when the saved ray geometry still reflects the just-ended grab frame.
 
 Useful customization points:
 
-- `replayPointerColors` in `main.js`
+- `replayVisualConfig.js`
 - `createGhostReplayPointer()` in `main.js`
 - `updateGhostReplayPointer()` in `main.js`
 
 During paused analysis interaction, the ghost pointers are hidden on the first local viewer manipulation. The next replay snapshot restores them from participant state.
+
+## Replay Visual Customization
+
+All replay-only visuals are centralized in `replayVisualConfig.js`.
+
+Pointer tooltip customization:
+
+- change tooltip colors by editing `pointerColors`
+- change label anchor placement with `pointerTooltips.anchorLerp`
+- change label world-space lift with `pointerTooltips.verticalOffset`
+- change label text appearance with `pointerTooltips.textColor`, `backgroundOpacity`, and `borderOpacity`
+
+Replay user-head avatar:
+
+- the replay avatar is loaded from `headModelPath`, which defaults to `'/userhead.obj'`
+- the loader resolves that path relative to the current stimulus page, so the built package still works when copied under `public/<study>/assets/reVISitXR/`
+- the shipped head asset is OBJ only; no animation pipeline is required
+- `headScale` and `headRotationY` tune the imported model itself
+- `headOffsetBack` and `headOffsetDown` control where the avatar sits relative to the recorded replay camera pose
+- `headTooltipText` and `headTooltipVerticalOffset` control the `USER SIGHT` label
+- `headArrowLength` and `headArrowColor` control the short facing-direction arrow
+
+Paused replay overlay:
+
+- styling lives in `index.html` CSS and is driven by `replayVisualConfig.js`
+- the overlay is shown only when:
+  - `policy.isAnalysisSession === true`
+  - `policy.hasReceivedReplayState === true`
+  - `policy.analysisPlaybackActive === false`
+  - `policy.canInteract === true`
+- the overlay DOM uses `pointer-events: none`, so it never blocks desktop inspection
+
+Replay camera vs viewer camera:
+
+- the replay head avatar uses the last applied replay camera world pose
+- if the analyst moves the paused desktop camera locally, the avatar stays at the recorded participant position until the next replay snapshot arrives
 
 ## Reactive Answers
 
@@ -178,5 +233,6 @@ In Vite dev mode, `window.__revisitXRDebug` is exposed for smoke testing:
 - `setAnalysisControl(control)`
 - `getInteractionPolicy()`
 - `getReplayPointerVisuals()`
+- `getReplayAvatarVisuals()`
 
-These helpers are for development only and are useful when validating replay hydration, pause/play behavior, and pointer rendering.
+These helpers are for development only and are useful when validating replay hydration, pause/play behavior, pointer rendering, and replay-avatar placement.

@@ -16,6 +16,7 @@
         overflow: hidden;
         background: radial-gradient(circle at top, #21324a 0%, #0b1320 55%, #06080d 100%);
         color: #eef3ff;
+        position: relative;
       }
 
       #hud {
@@ -61,6 +62,72 @@
         bottom: 20px !important;
       }
 
+      #analysis-paused-frame {
+        position: fixed;
+        inset: 0;
+        box-sizing: border-box;
+        border: 4px solid var(--replay-paused-border-color, #ffb347);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 140ms ease;
+        z-index: 14;
+      }
+
+      #analysis-paused-frame.visible {
+        opacity: 1;
+      }
+
+      #analysis-paused-banner {
+        position: fixed;
+        top: 14px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-8px);
+        padding: 10px 16px;
+        border: 1px solid var(--replay-paused-border-color, #ffb347);
+        border-radius: 999px;
+        background: var(--replay-paused-banner-background, rgba(255, 179, 71, 0.18));
+        color: var(--replay-paused-banner-text, #fff2db);
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 140ms ease, transform 140ms ease;
+        z-index: 15;
+      }
+
+      #analysis-paused-banner.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      .replay-floating-label {
+        padding: 7px 10px;
+        border: 1px solid var(--replay-label-border, rgba(255, 255, 255, 0.4));
+        border-radius: 999px;
+        background: var(--replay-label-background, rgba(13, 19, 32, 0.8));
+        color: var(--replay-label-text, #f6fbff);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        line-height: 1;
+        text-transform: uppercase;
+        white-space: nowrap;
+        user-select: none;
+      }
+
+      .replay-pointer-label[data-state="released"] {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.34);
+      }
+
+      .replay-avatar-label {
+        letter-spacing: 0.12em;
+      }
+
       @media (max-width: 520px) {
         #VRButton {
           left: 20px !important;
@@ -75,6 +142,8 @@
       <p id="hud-body">Drag the cube with your mouse on desktop. In VR, point with a controller and hold the trigger to grab it.</p>
       <p id="hud-note">Use HTTPS on Quest. If AR is supported by the current browser/device, a START AR button will appear and the real-world passthrough should remain visible behind the cube.</p>
     </div>
+    <div id="analysis-paused-frame" aria-hidden="true"></div>
+    <div id="analysis-paused-banner" aria-hidden="true">Replay Paused. Free Camera Moving</div>
     <script type="module" src="/main.js"></script>
   </body>
 </html>

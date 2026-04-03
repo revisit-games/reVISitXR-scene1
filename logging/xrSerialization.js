@@ -3,7 +3,10 @@ import {
   POINTER_MODES,
   PRESENTATION_MODES,
   REPLAY_POINTER_IDS,
+  REPLAY_POINTER_TOOLTIP_STATES,
   SUMMARY_RESPONSE_KEYS,
+  getReplayPointerTooltipStateFromPointerMode,
+  getReplayPointerTooltipText,
   createHiddenReplayPointer,
   createInitialXRLoggingState,
 } from './xrLoggingSchema.js';
@@ -112,14 +115,32 @@ export function normalizeReplayPointer( value, fallback = createHiddenReplayPoin
     ? value.mode
     : fallback.mode;
   const visible = value?.visible === true && mode !== POINTER_MODES.HIDDEN;
+  const interactor = typeof value?.interactor === 'string' ? value.interactor : fallback.interactor;
+  const tooltipState = Object.values( REPLAY_POINTER_TOOLTIP_STATES ).includes( value?.tooltipState )
+    ? value.tooltipState
+    : (
+      visible
+        ? getReplayPointerTooltipStateFromPointerMode( mode )
+        : fallback.tooltipState
+    );
+  const tooltipVisible = visible && (
+    typeof value?.tooltipVisible === 'boolean'
+      ? value.tooltipVisible
+      : true
+  );
 
   return {
     visible,
-    interactor: typeof value?.interactor === 'string' ? value.interactor : fallback.interactor,
+    interactor,
     origin: normalizeVector3Array( value?.origin, fallback.origin ),
     target: normalizeVector3Array( value?.target, fallback.target ),
     rayLength: isFiniteNumber( value?.rayLength ) ? Math.max( 0, value.rayLength ) : fallback.rayLength,
     mode: visible ? mode : POINTER_MODES.HIDDEN,
+    tooltipVisible,
+    tooltipState,
+    tooltipText: typeof value?.tooltipText === 'string' && value.tooltipText.trim().length > 0
+      ? value.tooltipText
+      : getReplayPointerTooltipText( interactor, tooltipState ),
   };
 
 }
@@ -146,7 +167,10 @@ export function replayPointerChanged( pointerA, pointerB, samplingConfig ) {
   if (
     pointerA.visible !== pointerB.visible ||
     pointerA.mode !== pointerB.mode ||
-    pointerA.interactor !== pointerB.interactor
+    pointerA.interactor !== pointerB.interactor ||
+    pointerA.tooltipVisible !== pointerB.tooltipVisible ||
+    pointerA.tooltipState !== pointerB.tooltipState ||
+    pointerA.tooltipText !== pointerB.tooltipText
   ) {
 
     return true;
