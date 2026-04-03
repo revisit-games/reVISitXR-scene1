@@ -53,6 +53,7 @@ labelRenderer.setSize( window.innerWidth, window.innerHeight );
 labelRenderer.domElement.id = 'replay-label-layer';
 labelRenderer.domElement.style.position = 'fixed';
 labelRenderer.domElement.style.inset = '0';
+labelRenderer.domElement.style.display = 'none';
 labelRenderer.domElement.style.pointerEvents = 'none';
 labelRenderer.domElement.style.overflow = 'hidden';
 labelRenderer.domElement.style.zIndex = '18';
@@ -173,6 +174,12 @@ const replayCameraPose = {
   position: new THREE.Vector3(),
   quaternion: new THREE.Quaternion(),
 };
+const replayAvatarLoadStates = Object.freeze( {
+  IDLE: 'idle',
+  LOADING: 'loading',
+  READY: 'ready',
+  ERROR: 'error',
+} );
 const replayAvatarRoot = new THREE.Group();
 const replayAvatarPoseGroup = new THREE.Group();
 const replayAvatarModelContainer = new THREE.Group();
@@ -185,6 +192,7 @@ const replayAvatarArrow = new THREE.ArrowHelper(
   replayVisualConfig.replayAvatar.headArrowLength * 0.4,
   replayVisualConfig.replayAvatar.headArrowLength * 0.24,
 );
+let replayAvatarLoadState = replayAvatarLoadStates.IDLE;
 
 replayAvatarRoot.visible = false;
 replayAvatarPoseGroup.add( replayAvatarModelContainer );
@@ -315,10 +323,62 @@ function updatePausedReplayOverlay( policy = studyLogger?.getInteractionPolicy?.
 
 }
 
-function renderScene() {
+function isReplayVisualAnalysisActive( policy = studyLogger?.getInteractionPolicy?.() ) {
+
+  return Boolean(
+    policy?.isAnalysisSession &&
+    policy?.hasReceivedReplayState,
+  );
+
+}
+
+function hasVisibleReplayLabelCandidates() {
+
+  return replayAvatarRoot.visible || REPLAY_POINTER_IDS.some( ( interactor ) => {
+
+    const visuals = replayPointerVisuals[ interactor ];
+    return Boolean( visuals?.labelAnchor.visible );
+
+  } );
+
+}
+
+function shouldRenderReplayLabelLayer( policy = studyLogger?.getInteractionPolicy?.() ) {
+
+  if ( replayVisualConfig.performance.renderCssLabelsOnlyInAnalysis && ! isReplayVisualAnalysisActive( policy ) ) {
+
+    return false;
+
+  }
+
+  if ( replayVisualConfig.performance.disableReplayVisualsDuringImmersiveStudy && renderer.xr.isPresenting ) {
+
+    return false;
+
+  }
+
+  return hasVisibleReplayLabelCandidates();
+
+}
+
+function setReplayLabelLayerVisibility( visible ) {
+
+  labelRenderer.domElement.style.display = visible ? 'block' : 'none';
+
+}
+
+function renderScene( policy = studyLogger?.getInteractionPolicy?.() ) {
 
   renderer.render( scene, camera );
-  labelRenderer.render( scene, camera );
+
+  const shouldRenderLabels = shouldRenderReplayLabelLayer( policy );
+  setReplayLabelLayerVisibility( shouldRenderLabels );
+
+  if ( shouldRenderLabels ) {
+
+    labelRenderer.render( scene, camera );
+
+  }
 
 }
 
@@ -332,7 +392,134 @@ function resolveReplayAssetUrl( assetPath ) {
 
 }
 
+function hasValidReplayAvatarNormals( geometry ) {
+
+  const positionAttribute = geometry?.getAttribute?.( 'position' );
+  const normalAttribute = geometry?.getAttribute?.( 'normal' );
+
+  if ( ! positionAttribute || ! normalAttribute || normalAttribute.count !== positionAttribute.count ) {
+
+    return false;
+
+  }
+
+  const normalArray = normalAttribute.array;
+
+  for ( let index = 0; index < normalArray.length; index += 3 ) {
+
+    const x = normalArray[ index ];
+    const y = normalArray[ index + 1 ];
+    const z = normalArray[ index + 2 ];
+
+    if ( ! Number.isFinite( x ) || ! Number.isFinite( y ) || ! Number.isFinite( z ) ) {
+
+      return false;
+
+    }
+
+    const lengthSq = x * x + y * y + z * z;
+
+    if ( lengthSq <= 1e-8 || lengthSq > 4 ) {
+
+      return false;
+
+    }
+
+  }
+
+  return true;
+
+}
+
+function prepareReplayAvatarMesh( mesh ) {
+
+  const geometry = mesh?.geometry;
+
+  if ( ! geometry?.isBufferGeometry || ! geometry.getAttribute( 'position' ) ) {
+
+    return;
+
+  }
+
+  if ( replayVisualConfig.replayAvatar.headComputeBoundingBox ) {
+
+    geometry.computeBoundingBox();
+
+  }
+
+  const shouldRecomputeNormals =
+    replayVisualConfig.replayAvatar.headRecomputeNormals &&
+    ! hasValidReplayAvatarNormals( geometry );
+
+  if ( shouldRecomputeNormals ) {
+
+    geometry.deleteAttribute( 'normal' );
+    geometry.computeVertexNormals();
+
+  }
+
+  if (
+    replayVisualConfig.replayAvatar.headNormalizeNormals &&
+    typeof geometry.normalizeNormals === 'function' &&
+    geometry.getAttribute( 'normal' )
+  ) {
+
+    geometry.normalizeNormals();
+    geometry.getAttribute( 'normal' ).needsUpdate = true;
+
+  }
+
+  if ( replayVisualConfig.replayAvatar.headComputeBoundingSphere ) {
+
+    geometry.computeBoundingSphere();
+
+  }
+
+}
+
+function createReplayAvatarMaterial() {
+
+  const commonMaterialOptions = {
+    color: replayVisualConfig.replayAvatar.headMaterialColor,
+    emissive: replayVisualConfig.replayAvatar.headMaterialEmissive,
+    transparent: replayVisualConfig.replayAvatar.headMaterialOpacity < 1,
+    opacity: replayVisualConfig.replayAvatar.headMaterialOpacity,
+    side: replayVisualConfig.replayAvatar.headUseDoubleSide ? THREE.DoubleSide : THREE.FrontSide,
+  };
+
+  if ( replayVisualConfig.replayAvatar.headMaterialType === 'lambert' ) {
+
+    return new THREE.MeshLambertMaterial( commonMaterialOptions );
+
+  }
+
+  if ( replayVisualConfig.replayAvatar.headMaterialType === 'standard' ) {
+
+    return new THREE.MeshStandardMaterial( {
+      ...commonMaterialOptions,
+      roughness: 0.62,
+      metalness: 0.03,
+    } );
+
+  }
+
+  return new THREE.MeshPhongMaterial( {
+    ...commonMaterialOptions,
+    shininess: 18,
+    specular: new THREE.Color( 0x2a3644 ),
+  } );
+
+}
+
 function loadReplayAvatarModel() {
+
+  if ( replayAvatarLoadState !== replayAvatarLoadStates.IDLE ) {
+
+    return;
+
+  }
+
+  replayAvatarLoadState = replayAvatarLoadStates.LOADING;
 
   const loader = new OBJLoader();
 
@@ -340,42 +527,54 @@ function loadReplayAvatarModel() {
     resolveReplayAssetUrl( replayVisualConfig.replayAvatar.headModelPath ),
     ( object ) => {
 
-      const bounds = new THREE.Box3().setFromObject( object );
-      const center = bounds.getCenter( new THREE.Vector3() );
-      const headMaterial = new THREE.MeshStandardMaterial( {
-        color: replayVisualConfig.replayAvatar.headMaterialColor,
-        emissive: replayVisualConfig.replayAvatar.headMaterialEmissive,
-        transparent: true,
-        opacity: replayVisualConfig.replayAvatar.headMaterialOpacity,
-        roughness: 0.56,
-        metalness: 0.04,
-      } );
+      const headMaterial = createReplayAvatarMaterial();
 
       object.traverse( ( child ) => {
 
         if ( child.isMesh ) {
 
+          prepareReplayAvatarMesh( child );
           child.material = headMaterial;
-          child.castShadow = true;
-          child.receiveShadow = true;
+          child.castShadow = replayVisualConfig.replayAvatar.headCastShadow;
+          child.receiveShadow = replayVisualConfig.replayAvatar.headReceiveShadow;
 
         }
 
       } );
 
+      replayAvatarModelContainer.clear();
+      const bounds = new THREE.Box3().setFromObject( object );
+      const center = bounds.getCenter( new THREE.Vector3() );
       object.position.sub( center );
       replayAvatarModelContainer.add( object );
       replayAvatarModelContainer.scale.setScalar( replayVisualConfig.replayAvatar.headScale );
       replayAvatarModelContainer.rotation.y = replayVisualConfig.replayAvatar.headRotationY;
+      replayAvatarLoadState = replayAvatarLoadStates.READY;
 
     },
     undefined,
     ( error ) => {
 
+      replayAvatarLoadState = replayAvatarLoadStates.ERROR;
       console.warn( 'Unable to load replay user-head avatar model.', error );
 
     },
   );
+
+}
+
+function ensureReplayAvatarLoaded( policy = studyLogger?.getInteractionPolicy?.() ) {
+
+  const shouldLoad =
+    replayVisualConfig.performance.lazyLoadReplayAvatar
+      ? isReplayVisualAnalysisActive( policy )
+      : true;
+
+  if ( shouldLoad ) {
+
+    loadReplayAvatarModel();
+
+  }
 
 }
 
@@ -390,11 +589,7 @@ function captureReplayCameraPoseFromScene() {
 
 function updateReplayAvatar( policy = studyLogger?.getInteractionPolicy?.() ) {
 
-  const shouldShow = Boolean(
-    policy?.isAnalysisSession &&
-    policy?.hasReceivedReplayState &&
-    replayCameraPose.hasValue,
-  );
+  const shouldShow = Boolean( isReplayVisualAnalysisActive( policy ) && replayCameraPose.hasValue );
 
   replayAvatarRoot.visible = shouldShow;
 
@@ -427,6 +622,7 @@ function getReplayAvatarDebugState() {
   return {
     visible: replayAvatarRoot.visible,
     hasReplayCameraPose: replayCameraPose.hasValue,
+    loadState: replayAvatarLoadState,
     position: vector3ToArray( replayAvatarRoot.position ),
     quaternion: quaternionToArray( replayAvatarPoseGroup.quaternion ),
     tooltipText: replayAvatarLabel.labelElement.textContent,
@@ -1608,9 +1804,11 @@ function applyReplayState( replayState ) {
   updateGhostReplayPointersFromState( replayState.replayPointers );
 
   captureReplayCameraPoseFromScene();
-  updateReplayAvatar();
+  const interactionPolicy = studyLogger?.getInteractionPolicy?.();
+  ensureReplayAvatarLoaded( interactionPolicy );
+  updateReplayAvatar( interactionPolicy );
   refreshInteractableAppearance();
-  renderScene();
+  renderScene( interactionPolicy );
 
 }
 
@@ -1645,9 +1843,21 @@ function handleInteractionPolicyChange( policy ) {
 
   updateHud();
   updatePausedReplayOverlay( policy );
-  updateReplayAvatar( policy );
+
+  if ( isReplayVisualAnalysisActive( policy ) ) {
+
+    ensureReplayAvatarLoaded( policy );
+    updateReplayAvatar( policy );
+
+  } else {
+
+    replayAvatarRoot.visible = false;
+
+  }
+
   updateBridgeLockStateUI();
   refreshInteractableAppearance();
+  renderScene( policy );
 
 }
 
@@ -1696,9 +1906,21 @@ function animate() {
 
   }
 
-  updateReplayAvatar();
+  const interactionPolicy = studyLogger?.getInteractionPolicy?.();
+
+  if ( isReplayVisualAnalysisActive( interactionPolicy ) ) {
+
+    ensureReplayAvatarLoaded( interactionPolicy );
+    updateReplayAvatar( interactionPolicy );
+
+  } else {
+
+    replayAvatarRoot.visible = false;
+
+  }
+
   refreshInteractableAppearance();
-  renderScene();
+  renderScene( interactionPolicy );
 
 }
 
@@ -1771,7 +1993,6 @@ initializeSceneLayout();
 buildController( 0 );
 buildController( 1 );
 applyReplayVisualConfigToDom();
-loadReplayAvatarModel();
 
 for ( const interactor of REPLAY_POINTER_IDS ) {
 
@@ -1786,6 +2007,8 @@ studyLogger = createXRStudyLogger( {
 } );
 
 studyLogger.onInteractionPolicyChange( handleInteractionPolicyChange );
+ensureReplayAvatarLoaded( studyLogger.getInteractionPolicy() );
+updateReplayAvatar( studyLogger.getInteractionPolicy() );
 
 if ( import.meta.env.DEV ) {
 

@@ -206,6 +206,48 @@ Replay camera vs viewer camera:
 - the replay head avatar uses the last applied replay camera world pose
 - if the analyst moves the paused desktop camera locally, the avatar stays at the recorded participant position until the next replay snapshot arrives
 
+## Replay Troubleshooting And Performance
+
+Imported OBJ head meshes can render too dark if they arrive with broken or incomplete normals. The replay avatar loader in `main.js` now prepares every mesh before display:
+
+- invalid or missing normals are recomputed when `replayAvatar.headRecomputeNormals` is enabled
+- repaired normals are normalized when `replayAvatar.headNormalizeNormals` is enabled
+- optional bounding boxes and bounding spheres are computed for more stable imported assets
+
+Avatar material and mesh-prep knobs live in `replayVisualConfig.js` under `replayAvatar`:
+
+- `headMaterialType`
+- `headMaterialColor`
+- `headMaterialEmissive`
+- `headMaterialOpacity`
+- `headUseDoubleSide`
+- `headCastShadow`
+- `headReceiveShadow`
+- `headRecomputeNormals`
+- `headNormalizeNormals`
+- `headComputeBoundingBox`
+- `headComputeBoundingSphere`
+
+The default avatar is intentionally lightweight and explanatory rather than physically dramatic:
+
+- `MeshPhongMaterial` is used by default because it is forgiving for imported OBJ meshes under simple study lighting
+- shadows are disabled by default because the avatar is a replay marker, not a scene object that needs to affect lighting
+- double-sided rendering is enabled by default as a safe fallback for imperfect static meshes
+
+Replay performance knobs live in `replayVisualConfig.js` under `performance`:
+
+- `lazyLoadReplayAvatar`
+- `renderCssLabelsOnlyInAnalysis`
+- `disableReplayVisualsDuringImmersiveStudy`
+
+These defaults keep replay visuals analysis-only:
+
+- the OBJ avatar is not loaded during normal study mode unless replay visuals actually become relevant
+- the CSS2D label layer is hidden and not rendered during immersive study-mode XR
+- per-frame replay avatar updates are skipped outside analysis replay
+
+If you add new replay-only visuals later, keep them behind the same analysis-session gates so immersive study mode stays focused on participant interaction rather than analysis overlays.
+
 ## Reactive Answers
 
 Compact reactive answers are built from `buildAnswerPayload()` in `logging/xrSerialization.js`.
