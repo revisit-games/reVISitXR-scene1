@@ -6,6 +6,7 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { createRevisitBridge } from './logging/revisitBridge.js';
 import {
+  DEFAULT_SCENE_KEY,
   INTERACTORS,
   POINTER_MODES,
   PRESENTATION_MODES,
@@ -16,6 +17,10 @@ import {
 } from './logging/xrLoggingSchema.js';
 import { createXRStudyLogger } from './logging/xrStudyLogger.js';
 import { replayVisualConfig } from './replayVisualConfig.js';
+import {
+  getSceneDefinitionByKey,
+  resolveSceneDefinitionFromSearch,
+} from './scenes/core/sceneRegistry.js';
 import {
   quaternionToArray,
   vector3ToArray,
@@ -62,6 +67,7 @@ document.body.appendChild( labelRenderer.domElement );
 const hudTitle = document.querySelector( '#hud-title' );
 const hudBody = document.querySelector( '#hud-body' );
 const hudNote = document.querySelector( '#hud-note' );
+const scenePanelRoot = document.querySelector( '#scene-panel' );
 const pausedOverlayFrame = document.querySelector( '#analysis-paused-frame' );
 const pausedOverlayBanner = document.querySelector( '#analysis-paused-banner' );
 
@@ -76,6 +82,9 @@ scene.add( keyLight );
 
 const environmentRoot = new THREE.Group();
 scene.add( environmentRoot );
+
+const sceneContentRoot = new THREE.Group();
+scene.add( sceneContentRoot );
 
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry( 8, 64 ),
@@ -123,6 +132,7 @@ const raycaster = new THREE.Raycaster();
 const controllerModelFactory = new XRControllerModelFactory();
 const pointer = new THREE.Vector2();
 const desktopGrabber = { type: INTERACTORS.DESKTOP_POINTER };
+const sceneRaycastTargets = new Map();
 
 const tempWorldPosition = new THREE.Vector3();
 const tempWorldQuaternion = new THREE.Quaternion();
@@ -142,7 +152,9 @@ const desktopEuler = new THREE.Euler( 0, 0, 0, 'YXZ' );
 const desktopState = {
   activePointerId: null,
   hovered: null,
+  hoveredSceneEntry: null,
   selected: null,
+  sceneSelection: null,
   mode: null,
   dragPlane: new THREE.Plane(),
   dragOffset: new THREE.Vector3(),
@@ -163,10 +175,19 @@ const timer = new THREE.Timer();
 timer.connect( document );
 const revisitBridge = createRevisitBridge();
 
+const resolvedInitialScene = resolveSceneDefinitionFromSearch( window.location.search );
+if ( resolvedInitialScene.warning ) {
+
+  console.warn( resolvedInitialScene.warning );
+
+}
+
 let currentMode = PRESENTATION_MODES.DESKTOP;
 let studyLogger = null;
 let cameraSamplingRequested = false;
 let replayGhostPointersHiddenByViewer = false;
+let activeSceneDefinition = resolvedInitialScene.sceneDefinition;
+let activeSceneController = null;
 
 const replayPointerVisuals = {};
 const replayCameraPose = {
@@ -379,6 +400,324 @@ function renderScene( policy = studyLogger?.getInteractionPolicy?.() ) {
     labelRenderer.render( scene, camera );
 
   }
+
+}
+
+function setDesktopScenePanelNode( node ) {
+
+  if ( ! scenePanelRoot ) {
+
+    return;
+
+  }
+
+  scenePanelRoot.replaceChildren();
+
+  if ( node ) {
+
+    scenePanelRoot.appendChild( node );
+
+  }
+
+  updateScenePanelVisibility();
+
+}
+
+function setDesktopScenePanelContent( html ) {
+
+  if ( ! scenePanelRoot ) {
+
+    return;
+
+  }
+
+  scenePanelRoot.innerHTML = typeof html === 'string' ? html : '';
+  updateScenePanelVisibility();
+
+}
+
+function clearDesktopScenePanel() {
+
+  if ( ! scenePanelRoot ) {
+
+    return;
+
+  }
+
+  scenePanelRoot.replaceChildren();
+  updateScenePanelVisibility();
+
+}
+
+function updateScenePanelVisibility() {
+
+  if ( ! scenePanelRoot ) {
+
+    return;
+
+  }
+
+  const hasPanelContent = scenePanelRoot.childNodes.length > 0;
+  const shouldShow = hasPanelContent && currentMode === PRESENTATION_MODES.DESKTOP;
+  scenePanelRoot.style.display = shouldShow ? 'block' : 'none';
+
+}
+
+function registerRaycastTarget( object3D, handlers = {} ) {
+
+  if ( object3D ) {
+
+    sceneRaycastTargets.set( object3D, handlers );
+
+  }
+
+}
+
+function unregisterRaycastTarget( object3D ) {
+
+  if ( object3D ) {
+
+    sceneRaycastTargets.delete( object3D );
+
+  }
+
+}
+
+function getRaycastTargetEntryFromObject( object3D ) {
+
+  let currentObject = object3D;
+
+  while ( currentObject ) {
+
+    if ( sceneRaycastTargets.has( currentObject ) ) {
+
+      return {
+        object: currentObject,
+        handlers: sceneRaycastTargets.get( currentObject ),
+      };
+
+    }
+
+    currentObject = currentObject.parent;
+
+  }
+
+  return null;
+
+}
+
+function sameSceneRaycastEntry( entryA, entryB ) {
+
+  return (
+    entryA?.object === entryB?.object &&
+    ( entryA?.hit?.instanceId ?? null ) === ( entryB?.hit?.instanceId ?? null )
+  );
+
+}
+
+function buildSceneInteractionPayload( {
+  source,
+  hit = null,
+  controller = null,
+  isHovered = false,
+  previousHit = null,
+} ) {
+
+  return {
+    source,
+    interactor: controller ? getControllerInteractorId( controller ) : source,
+    controller,
+    object: hit?.object ?? null,
+    instanceId: Number.isInteger( hit?.instanceId ) ? hit.instanceId : null,
+    point: hit?.point?.clone?.() ?? null,
+    distance: typeof hit?.distance === 'number' ? hit.distance : null,
+    rayOrigin: raycaster.ray.origin.clone(),
+    rayDirection: raycaster.ray.direction.clone(),
+    isHovered,
+    previousObject: previousHit?.object ?? null,
+    previousInstanceId: Number.isInteger( previousHit?.instanceId ) ? previousHit.instanceId : null,
+  };
+
+}
+
+function updateDesktopSceneHover( nextEntry ) {
+
+  const previousEntry = desktopState.hoveredSceneEntry;
+
+  if ( sameSceneRaycastEntry( previousEntry, nextEntry ) ) {
+
+    return;
+
+  }
+
+  if ( previousEntry?.handlers?.onHoverChange ) {
+
+    previousEntry.handlers.onHoverChange( buildSceneInteractionPayload( {
+      source: INTERACTORS.DESKTOP_POINTER,
+      hit: previousEntry.hit,
+      isHovered: false,
+      previousHit: nextEntry?.hit || null,
+    } ) );
+
+  }
+
+  desktopState.hoveredSceneEntry = nextEntry || null;
+
+  if ( nextEntry?.handlers?.onHoverChange ) {
+
+    nextEntry.handlers.onHoverChange( buildSceneInteractionPayload( {
+      source: INTERACTORS.DESKTOP_POINTER,
+      hit: nextEntry.hit,
+      isHovered: true,
+      previousHit: previousEntry?.hit || null,
+    } ) );
+
+  }
+
+}
+
+function updateControllerSceneHover( controller, nextEntry ) {
+
+  const previousEntry = controller.userData.hoveredSceneEntry;
+  const source = getControllerInteractorId( controller );
+
+  if ( sameSceneRaycastEntry( previousEntry, nextEntry ) ) {
+
+    return;
+
+  }
+
+  if ( previousEntry?.handlers?.onHoverChange ) {
+
+    previousEntry.handlers.onHoverChange( buildSceneInteractionPayload( {
+      source,
+      controller,
+      hit: previousEntry.hit,
+      isHovered: false,
+      previousHit: nextEntry?.hit || null,
+    } ) );
+
+  }
+
+  controller.userData.hoveredSceneEntry = nextEntry || null;
+
+  if ( nextEntry?.handlers?.onHoverChange ) {
+
+    nextEntry.handlers.onHoverChange( buildSceneInteractionPayload( {
+      source,
+      controller,
+      hit: nextEntry.hit,
+      isHovered: true,
+      previousHit: previousEntry?.hit || null,
+    } ) );
+
+  }
+
+}
+
+function clearControllerSceneHover( controller ) {
+
+  updateControllerSceneHover( controller, null );
+
+}
+
+function getActiveTemplateConfig() {
+
+  return activeSceneDefinition?.templateConfig || {
+    showFloor: true,
+    showGrid: true,
+    showPedestal: true,
+    showTemplateCube: true,
+    enableDefaultObjectManipulation: true,
+  };
+
+}
+
+function applyActiveTemplateConfig() {
+
+  const templateConfig = getActiveTemplateConfig();
+
+  floor.visible = templateConfig.showFloor !== false;
+  grid.visible = templateConfig.showGrid !== false;
+  pedestal.visible = templateConfig.showPedestal !== false;
+  cube.visible = templateConfig.showTemplateCube !== false;
+  environmentRoot.visible = floor.visible || grid.visible;
+
+}
+
+function canUseDefaultObjectManipulation() {
+
+  const templateConfig = getActiveTemplateConfig();
+  return templateConfig.enableDefaultObjectManipulation !== false && cube.visible;
+
+}
+
+function getActiveSceneStateForReplay() {
+
+  return activeSceneController?.getSceneStateForReplay?.() || {};
+
+}
+
+function normalizeSceneStateForReplay( sceneKey, candidateSceneState, fallbackSceneState ) {
+
+  return getSceneDefinitionByKey( sceneKey ).normalizeSceneState(
+    candidateSceneState,
+    fallbackSceneState,
+  );
+
+}
+
+function createSceneRuntimeContext() {
+
+  return {
+    scene,
+    sceneContentRoot,
+    camera,
+    xrOrigin,
+    renderer,
+    registerRaycastTarget,
+    unregisterRaycastTarget,
+    setDesktopPanelNode: setDesktopScenePanelNode,
+    setDesktopPanelContent: setDesktopScenePanelContent,
+    clearDesktopPanel: clearDesktopScenePanel,
+    getPresentationMode: () => currentMode,
+    getInteractionPolicy: () => studyLogger?.getInteractionPolicy?.() ?? null,
+    recordSceneStateChange: ( payload ) => studyLogger?.recordSceneStateChange?.( payload ) ?? false,
+  };
+
+}
+
+function activateSceneDefinition( nextSceneDefinition ) {
+
+  if ( ! nextSceneDefinition ) {
+
+    return;
+
+  }
+
+  if ( activeSceneController?.dispose ) {
+
+    activeSceneController.dispose();
+
+  }
+
+  sceneRaycastTargets.clear();
+  sceneContentRoot.clear();
+  activeSceneDefinition = nextSceneDefinition;
+  activeSceneController = nextSceneDefinition.createScene( createSceneRuntimeContext() );
+  activeSceneController?.activate?.();
+  applyActiveTemplateConfig();
+  activeSceneController?.onPresentationModeChange?.( currentMode );
+  updateHud();
+  refreshInteractableAppearance();
+  updateScenePanelVisibility();
+
+}
+
+function switchSceneByKey( sceneKey ) {
+
+  const nextSceneDefinition = getSceneDefinitionByKey( sceneKey );
+  activateSceneDefinition( nextSceneDefinition );
 
 }
 
@@ -959,6 +1298,8 @@ function getSceneSnapshot() {
   cube.getWorldQuaternion( tempCubeWorldQuaternion );
 
   return {
+    sceneKey: activeSceneDefinition?.sceneKey || DEFAULT_SCENE_KEY,
+    sceneState: getActiveSceneStateForReplay(),
     presentationMode: currentMode,
     cube: {
       position: vector3ToArray( tempCubeWorldPosition ),
@@ -984,12 +1325,6 @@ function initializeSceneLayout() {
 
 }
 
-function setEnvironmentVisibility( visible ) {
-
-  environmentRoot.visible = visible;
-
-}
-
 function updateHud() {
 
   if ( ! hudTitle || ! hudBody || ! hudNote ) {
@@ -1011,27 +1346,11 @@ function updateHud() {
 
   }
 
-  if ( currentMode === PRESENTATION_MODES.IMMERSIVE_VR ) {
+  const sceneHudContent = activeSceneController?.getHudContent?.( currentMode );
 
-    hudTitle.textContent = 'WebXR VR Mode';
-    hudBody.textContent = 'Point at the cube with either controller and hold the trigger to grab it. The bright dot shows where the controller ray hits.';
-    hudNote.textContent = 'When you exit VR, desktop mode inherits the last headset pose. The next VR or AR entry starts from the fixed initial XR origin again.';
-    return;
-
-  }
-
-  if ( currentMode === PRESENTATION_MODES.IMMERSIVE_AR ) {
-
-    hudTitle.textContent = 'WebXR AR Mode';
-    hudBody.textContent = 'AR, VR, and desktop share the same scene state. The cube and pedestal stay where you leave them, while passthrough remains visible behind the virtual content.';
-    hudNote.textContent = 'AR replay renders the saved state on desktop without re-entering an immersive session. Local interaction is disabled while replay drives the scene.';
-    return;
-
-  }
-
-  hudTitle.textContent = 'Desktop Debug Mode';
-  hudBody.textContent = 'Left drag the cube to move it. Left drag empty space pans the camera. Right drag rotates the camera view.';
-  hudNote.textContent = 'In a normal Quest browser page, controller-specific pose/button data is not reliably exposed to the webpage outside an immersive XR session. Desktop pointer controls remain available, and replay mode suppresses new local logging.';
+  hudTitle.textContent = sceneHudContent?.title || activeSceneDefinition?.label || 'reVISit-XR Scene';
+  hudBody.textContent = sceneHudContent?.body || 'Desktop pointer controls remain available, and immersive XR uses controller rays for interaction.';
+  hudNote.textContent = sceneHudContent?.note || 'Scene-specific instructions are provided by the active scene module.';
 
 }
 
@@ -1043,17 +1362,18 @@ function setPresentationMode( mode ) {
 
     scene.background = null;
     scene.fog = null;
-    setEnvironmentVisibility( false );
 
   } else {
 
     scene.background = defaultBackground;
     scene.fog = defaultFog;
-    setEnvironmentVisibility( true );
 
   }
 
+  applyActiveTemplateConfig();
+  activeSceneController?.onPresentationModeChange?.( mode );
   updateHud();
+  updateScenePanelVisibility();
   studyLogger?.recordModeChange( { mode } );
 
 }
@@ -1117,6 +1437,13 @@ function refreshInteractableAppearance() {
 
   for ( const object of interactables ) {
 
+    if ( ! canUseDefaultObjectManipulation() ) {
+
+      object.material.emissive.setHex( idleColor );
+      continue;
+
+    }
+
     const hoveredByController = controllers.some( ( controller ) => controller.userData.hovered === object );
     const hovered = hoveredByController || desktopState.hovered === object;
 
@@ -1151,11 +1478,31 @@ function getDesktopIntersections() {
   camera.updateMatrixWorld( true );
   raycaster.setFromCamera( pointer, camera );
 
-  return raycaster.intersectObjects( interactables, false ).filter( ( hit ) => {
+  const raycastableObjects = [];
 
-    return hit.object.userData.grabbedBy === null || hit.object.userData.grabbedBy === desktopGrabber;
+  if ( canUseDefaultObjectManipulation() ) {
 
-  } );
+    raycastableObjects.push( ...interactables );
+
+  }
+
+  raycastableObjects.push( ...sceneRaycastTargets.keys() );
+
+  return raycastableObjects.length === 0
+    ? []
+    : raycaster.intersectObjects( raycastableObjects, false ).filter( ( hit ) => {
+
+      const targetEntry = getRaycastTargetEntryFromObject( hit.object );
+
+      if ( targetEntry ) {
+
+        return true;
+
+      }
+
+      return hit.object.userData.grabbedBy === null || hit.object.userData.grabbedBy === desktopGrabber;
+
+    } );
 
 }
 
@@ -1163,11 +1510,31 @@ function getXRIntersections( controller ) {
 
   raycaster.setFromXRController( controller );
 
-  return raycaster.intersectObjects( interactables, false ).filter( ( hit ) => {
+  const raycastableObjects = [];
 
-    return hit.object.userData.grabbedBy === null || hit.object.userData.grabbedBy === controller;
+  if ( canUseDefaultObjectManipulation() ) {
 
-  } );
+    raycastableObjects.push( ...interactables );
+
+  }
+
+  raycastableObjects.push( ...sceneRaycastTargets.keys() );
+
+  return raycastableObjects.length === 0
+    ? []
+    : raycaster.intersectObjects( raycastableObjects, false ).filter( ( hit ) => {
+
+      const targetEntry = getRaycastTargetEntryFromObject( hit.object );
+
+      if ( targetEntry ) {
+
+        return true;
+
+      }
+
+      return hit.object.userData.grabbedBy === null || hit.object.userData.grabbedBy === controller;
+
+    } );
 
 }
 
@@ -1220,7 +1587,8 @@ function updateKeyboardMovement( deltaSeconds ) {
 
   const keyboardBlockedByPointer =
     desktopState.mode === 'object' ||
-    desktopState.mode === 'pan';
+    desktopState.mode === 'pan' ||
+    desktopState.mode === 'scene-target';
 
   if (
     renderer.xr.isPresenting ||
@@ -1267,6 +1635,7 @@ function updateDesktopHover() {
 
   if ( renderer.xr.isPresenting || desktopState.mode !== null || isLocalInteractionBlocked() ) {
 
+    updateDesktopSceneHover( null );
     desktopState.hovered = null;
     renderer.domElement.style.cursor = 'default';
     return;
@@ -1274,7 +1643,23 @@ function updateDesktopHover() {
   }
 
   const intersections = getDesktopIntersections();
-  desktopState.hovered = intersections[ 0 ]?.object ?? null;
+  const nextHit = intersections[ 0 ] ?? null;
+  const nextSceneEntry = nextHit ? {
+    ...getRaycastTargetEntryFromObject( nextHit.object ),
+    hit: nextHit,
+  } : null;
+
+  updateDesktopSceneHover( nextSceneEntry?.object ? nextSceneEntry : null );
+
+  if ( nextSceneEntry?.object ) {
+
+    desktopState.hovered = null;
+    renderer.domElement.style.cursor = 'pointer';
+    return;
+
+  }
+
+  desktopState.hovered = nextHit?.object ?? null;
   renderer.domElement.style.cursor = desktopState.hovered ? 'grab' : 'default';
 
 }
@@ -1289,6 +1674,7 @@ function releaseDesktopInteraction() {
 
   desktopState.mode = null;
   desktopState.selected = null;
+  desktopState.sceneSelection = null;
   desktopState.activePointerId = null;
   renderer.domElement.style.cursor = desktopState.hovered ? 'grab' : 'default';
 
@@ -1324,10 +1710,30 @@ function onPointerDown( event ) {
   }
 
   const intersections = getDesktopIntersections();
+  const hit = intersections[ 0 ] ?? null;
+  const sceneEntry = hit ? {
+    ...getRaycastTargetEntryFromObject( hit.object ),
+    hit,
+  } : null;
 
-  if ( intersections.length > 0 ) {
+  if ( sceneEntry?.object ) {
 
-    const hit = intersections[ 0 ];
+    desktopState.mode = 'scene-target';
+    desktopState.sceneSelection = sceneEntry;
+    desktopState.selected = null;
+    desktopState.hovered = null;
+    renderer.domElement.setPointerCapture( event.pointerId );
+    renderer.domElement.style.cursor = 'grabbing';
+    sceneEntry.handlers?.onSelectStart?.( buildSceneInteractionPayload( {
+      source: INTERACTORS.DESKTOP_POINTER,
+      hit,
+    } ) );
+    return;
+
+  }
+
+  if ( hit ) {
+
     desktopState.mode = 'object';
     desktopState.selected = hit.object;
     desktopState.hovered = hit.object;
@@ -1347,6 +1753,9 @@ function onPointerDown( event ) {
 
   }
 
+  activeSceneController?.handleBackgroundSelect?.( {
+    source: INTERACTORS.DESKTOP_POINTER,
+  } );
   desktopState.mode = 'pan';
   renderer.domElement.setPointerCapture( event.pointerId );
   renderer.domElement.style.cursor = 'grabbing';
@@ -1389,6 +1798,17 @@ function onPointerMove( event ) {
 
   }
 
+  if ( desktopState.mode === 'scene-target' && desktopState.sceneSelection ) {
+
+    const intersections = getDesktopIntersections();
+    desktopState.sceneSelection.handlers?.onSelectMove?.( buildSceneInteractionPayload( {
+      source: INTERACTORS.DESKTOP_POINTER,
+      hit: intersections[ 0 ] ?? null,
+    } ) );
+    return;
+
+  }
+
   if ( desktopState.mode === 'pan' ) {
 
     panDesktopCamera( deltaX, deltaY );
@@ -1420,6 +1840,7 @@ function onPointerUp( event ) {
   }
 
   const shouldLogGrabEnd = desktopState.mode === 'object' && desktopState.selected;
+  const sceneSelection = desktopState.sceneSelection;
 
   if ( renderer.domElement.hasPointerCapture( event.pointerId ) ) {
 
@@ -1433,6 +1854,16 @@ function onPointerUp( event ) {
       interactor: INTERACTORS.DESKTOP_POINTER,
       source: INTERACTORS.DESKTOP_POINTER,
     } );
+
+  }
+
+  if ( sceneSelection ) {
+
+    const intersections = getDesktopIntersections();
+    sceneSelection.handlers?.onSelectEnd?.( buildSceneInteractionPayload( {
+      source: INTERACTORS.DESKTOP_POINTER,
+      hit: intersections[ 0 ] ?? null,
+    } ) );
 
   }
 
@@ -1450,6 +1881,7 @@ function onPointerLeave() {
   }
 
   desktopState.hovered = null;
+  updateDesktopSceneHover( null );
   renderer.domElement.style.cursor = 'default';
 
 }
@@ -1464,6 +1896,7 @@ function onPointerCancel() {
 
   releaseDesktopInteraction();
   desktopState.hovered = null;
+  updateDesktopSceneHover( null );
   renderer.domElement.style.cursor = 'default';
 
 }
@@ -1557,7 +1990,9 @@ function releaseControllerAction( controller ) {
 
   controller.userData.mode = null;
   controller.userData.hovered = null;
+  controller.userData.sceneSelection = null;
   controller.userData.pointerTarget = null;
+  clearControllerSceneHover( controller );
 
   const cursor = controller.getObjectByName( 'cursor' );
   if ( cursor ) {
@@ -1585,6 +2020,8 @@ function buildController( index ) {
   controller.userData.mode = null;
   controller.userData.selected = null;
   controller.userData.hovered = null;
+  controller.userData.hoveredSceneEntry = null;
+  controller.userData.sceneSelection = null;
   controller.userData.pointerTarget = null;
   controller.addEventListener( 'disconnected', () => releaseControllerAction( controller ) );
 
@@ -1633,11 +2070,30 @@ function onSelectStart( event ) {
 
   if ( intersections.length === 0 ) {
 
+    activeSceneController?.handleBackgroundSelect?.( { source: getControllerInteractorId( controller ) } );
     return;
 
   }
 
-  startXRObjectGrab( controller, intersections[ 0 ].object );
+  const hit = intersections[ 0 ];
+  const sceneEntry = getRaycastTargetEntryFromObject( hit.object );
+
+  if ( sceneEntry ) {
+
+    controller.userData.sceneSelection = {
+      ...sceneEntry,
+      hit,
+    };
+    sceneEntry.handlers?.onSelectStart?.( buildSceneInteractionPayload( {
+      source: getControllerInteractorId( controller ),
+      controller,
+      hit,
+    } ) );
+    return;
+
+  }
+
+  startXRObjectGrab( controller, hit.object );
   studyLogger?.recordObjectGrabStart( {
     interactor: getControllerInteractorId( controller ),
     source: getControllerInteractorId( controller ),
@@ -1649,6 +2105,20 @@ function onSelectEnd( event ) {
 
   const controller = event.target;
   const interactor = getControllerInteractorId( controller );
+  const sceneSelection = controller.userData.sceneSelection;
+
+  if ( sceneSelection ) {
+
+    sceneSelection.handlers?.onSelectEnd?.( buildSceneInteractionPayload( {
+      source: interactor,
+      controller,
+      hit: sceneSelection.hit || null,
+    } ) );
+    controller.userData.sceneSelection = null;
+    return;
+
+  }
+
   const shouldLogGrabEnd = controller.userData.mode === 'object' && controller.userData.selected;
 
   if ( shouldLogGrabEnd && ! isLocalInteractionBlocked() ) {
@@ -1671,6 +2141,7 @@ function updateControllerState( controller ) {
 
   if ( ! renderer.xr.isPresenting ) {
 
+    clearControllerSceneHover( controller );
     controller.userData.hovered = null;
     controller.userData.pointerTarget = null;
     if ( controller.userData.mode !== 'object' ) {
@@ -1686,6 +2157,7 @@ function updateControllerState( controller ) {
 
   if ( controller.userData.mode === 'object' ) {
 
+    clearControllerSceneHover( controller );
     cube.getWorldPosition( tempReplayPointerTarget );
     controller.userData.pointerTarget = vector3ToArray( tempReplayPointerTarget );
     line.scale.z = 0.6;
@@ -1696,6 +2168,33 @@ function updateControllerState( controller ) {
 
   const intersections = getXRIntersections( controller );
   const hit = intersections[ 0 ];
+  const sceneEntry = hit ? {
+    ...getRaycastTargetEntryFromObject( hit.object ),
+    hit,
+  } : null;
+
+  updateControllerSceneHover( controller, sceneEntry?.object ? sceneEntry : null );
+
+  if ( controller.userData.sceneSelection ) {
+
+    controller.userData.sceneSelection.handlers?.onSelectMove?.( buildSceneInteractionPayload( {
+      source: getControllerInteractorId( controller ),
+      controller,
+      hit,
+    } ) );
+
+  }
+
+  if ( sceneEntry?.object ) {
+
+    controller.userData.hovered = null;
+    controller.userData.pointerTarget = vector3ToArray( hit.point );
+    line.scale.z = hit.distance;
+    cursor.position.set( 0, 0, - Math.max( 0.04, hit.distance - 0.01 ) );
+    cursor.visible = true;
+    return;
+
+  }
 
   if ( hit ) {
 
@@ -1719,7 +2218,9 @@ function updateControllerState( controller ) {
 function applyReplayInteractionState( replayState ) {
 
   desktopState.hovered = null;
+  updateDesktopSceneHover( null );
   desktopState.selected = null;
+  desktopState.sceneSelection = null;
   desktopState.mode = null;
   renderer.domElement.style.cursor = 'default';
   cube.userData.grabbedBy = null;
@@ -1729,7 +2230,9 @@ function applyReplayInteractionState( replayState ) {
     controller.userData.selected = null;
     controller.userData.mode = null;
     controller.userData.hovered = null;
+    controller.userData.sceneSelection = null;
     controller.userData.pointerTarget = null;
+    clearControllerSceneHover( controller );
 
     const cursor = controller.getObjectByName( 'cursor' );
     if ( cursor ) {
@@ -1785,6 +2288,24 @@ function applyReplayState( replayState ) {
   releaseAllXRControllerActions();
   replayGhostPointersHiddenByViewer = false;
 
+  if (
+    typeof replayState.sceneKey === 'string' &&
+    replayState.sceneKey.trim().length > 0 &&
+    replayState.sceneKey !== activeSceneDefinition?.sceneKey
+  ) {
+
+    const replaySceneDefinition = getSceneDefinitionByKey( replayState.sceneKey );
+
+    if ( replaySceneDefinition.sceneKey !== replayState.sceneKey && replayState.sceneKey !== DEFAULT_SCENE_KEY ) {
+
+      console.warn( `Unknown replay scene key "${replayState.sceneKey}". Falling back to the default template scene.` );
+
+    }
+
+    activateSceneDefinition( replaySceneDefinition );
+
+  }
+
   scene.attach( cube );
   cube.userData.grabbedBy = null;
   cube.position.fromArray( replayState.cube.position );
@@ -1800,6 +2321,7 @@ function applyReplayState( replayState ) {
   camera.scale.set( 1, 1, 1 );
 
   setPresentationMode( replayState.presentationMode );
+  activeSceneController?.applySceneStateFromReplay?.( replayState.sceneState );
   applyReplayInteractionState( replayState );
   updateGhostReplayPointersFromState( replayState.replayPointers );
 
@@ -1842,6 +2364,7 @@ function handleInteractionPolicyChange( policy ) {
   }
 
   updateHud();
+  updateScenePanelVisibility();
   updatePausedReplayOverlay( policy );
 
   if ( isReplayVisualAnalysisActive( policy ) ) {
@@ -1905,6 +2428,8 @@ function animate() {
     } );
 
   }
+
+  activeSceneController?.update?.( deltaSeconds );
 
   const interactionPolicy = studyLogger?.getInteractionPolicy?.();
 
@@ -1990,6 +2515,7 @@ renderer.xr.addEventListener( 'sessionend', () => {
 } );
 
 initializeSceneLayout();
+activateSceneDefinition( activeSceneDefinition );
 buildController( 0 );
 buildController( 1 );
 applyReplayVisualConfigToDom();
@@ -2004,6 +2530,7 @@ studyLogger = createXRStudyLogger( {
   bridge: revisitBridge,
   getSceneSnapshot,
   applyReplayState,
+  normalizeSceneReplayState: normalizeSceneStateForReplay,
 } );
 
 studyLogger.onInteractionPolicyChange( handleInteractionPolicyChange );
@@ -2015,6 +2542,7 @@ if ( import.meta.env.DEV ) {
   window.__revisitXRDebug = {
     getState: () => studyLogger.getState(),
     getLiveSceneSnapshot: () => getSceneSnapshot(),
+    getActiveSceneKey: () => activeSceneDefinition?.sceneKey || DEFAULT_SCENE_KEY,
     getGraph: () => studyLogger.getGraph(),
     exportAnswers: () => studyLogger.exportAnswers(),
     applyReplayState: ( state ) => studyLogger.applyReplayStateSnapshot( state ),

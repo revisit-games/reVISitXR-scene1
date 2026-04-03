@@ -183,6 +183,134 @@ The first knobs to tune on lower-performance devices are:
 
 For debugging, Vite dev mode now exposes `window.__revisitXRDebug.getLoggingStats()` so you can confirm whether nodes were logged, skipped as pending, skipped as unchanged, or suppressed by the grab-state pointer policy.
 
+## Multi-Scene Authoring
+
+The package now supports a small scene registry instead of a single hardwired scene.
+
+Scene selection is URL-driven:
+
+- `index.html`
+  Loads the reusable default template scene.
+- `index.html?scene=1`
+  Loads Example 1, the OWID energy-source bar matrix.
+- `index.html?scene=2`
+  Loads the Example 2 placeholder scene.
+- `index.html?scene=3`
+  Loads the Example 3 placeholder scene.
+
+Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene definition provides:
+
+- `sceneKey`
+- `queryValue`
+- `label`
+- `templateConfig`
+- `createScene(context)`
+- `normalizeSceneState(candidateState, fallbackState)`
+
+The active scene controller can expose:
+
+- `activate()`
+- `dispose()`
+- `update(deltaSeconds)`
+- `getSceneStateForReplay()`
+- `applySceneStateFromReplay(sceneState)`
+- `getHudContent(presentationMode)`
+- optional `onPresentationModeChange(presentationMode)`
+
+## Default Template Scene
+
+The baseline scene is now the reusable template that future scenes inherit from.
+
+Shared template pieces live in `main.js` and are toggled per scene through `templateConfig`:
+
+- floor
+- floor grid
+- baseline lighting
+- dark background and fog
+- default pedestal
+- default interactable cube
+
+The most important template flags are:
+
+- `showFloor`
+- `showGrid`
+- `showPedestal`
+- `showTemplateCube`
+- `enableDefaultObjectManipulation`
+
+Example 1 keeps the floor and grid, but turns off the pedestal, hides the template cube, and disables default cube manipulation.
+
+## Scene-Specific Replay State
+
+Replay snapshots now include two scene extension fields in addition to the shared XR state:
+
+- `sceneKey`
+- `sceneState`
+
+The shared runtime snapshot still owns:
+
+- `presentationMode`
+- `camera`
+- `xrOrigin`
+- `cube`
+- `replayPointers`
+
+Scene modules own the compact semantic state under `sceneState`. The logger now supports a `scene-state-change` action so authored scenes can log semantic updates without treating all scene content as draggable transforms.
+
+Example 1 uses:
+
+- `selectedYear`
+- `selectedDatumId`
+
+This means replay reconstructs the bar matrix from the selected year and pinned datum instead of recording dozens of individual bar transforms.
+
+## Scene Interaction Hooks
+
+Scene modules can register authored XR targets through the lightweight raycast layer in `main.js`:
+
+- `registerRaycastTarget(object3D, handlers)`
+- `unregisterRaycastTarget(object3D)`
+
+Supported handler hooks are:
+
+- `onHoverChange`
+- `onSelectStart`
+- `onSelectMove`
+- `onSelectEnd`
+
+Handlers receive normalized payloads with the source, hit object, optional `instanceId`, hit point, and ray direction so scene modules can implement authored controls such as Example 1's XR year slider.
+
+## Example 1 Dataset Layout
+
+The already-downloaded OWID files now live under `example1/`:
+
+- `example1/data/per-capita-energy-stacked.csv`
+- `example1/data/per-capita-energy-stacked.metadata.json`
+- `example1/docs/per-capita-energy-stacked-readme.md`
+
+The markdown file is not required at runtime, but it is kept under `example1/docs/` because it contains source notes, citation context, and future-authoring references that are useful for researchers extending the package.
+
+Example 1 loads its assets with `new URL('./data/...', import.meta.url)` so Vite includes them in `dist/` without moving them into the global `public/` folder.
+
+## Future Scene Workflow
+
+To add a new authored scene:
+
+1. Create a new scene folder at the repo root such as `example4/`.
+2. Add any scene-specific data under a local `data/` subfolder.
+3. Keep notes or citations under a local `docs/` subfolder.
+4. Add the scene module and export its scene definition.
+5. Register the new scene in `scenes/core/sceneRegistry.js`.
+6. Define compact `sceneState` serialization for replay instead of logging per-object transforms unless object manipulation is truly the intended motion channel.
+
+The first values future authors usually need to tune are:
+
+- scene `templateConfig`
+- Example-style country/source presets or dataset subsets
+- world label text and scale
+- authored UI placement for desktop and immersive XR
+- `normalizeSceneState()` for replay compatibility
+
 ## Replay Pointer Visuals
 
 Replay controller rays are rendered as ghost visuals in `main.js`. They are intentionally separate from live WebXR controller visuals.

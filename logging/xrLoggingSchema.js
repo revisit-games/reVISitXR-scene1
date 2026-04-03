@@ -56,6 +56,8 @@ export const SUMMARY_RESPONSE_KEYS = Object.freeze( {
   XR_STATE_SUMMARY_JSON: 'xrStateSummaryJson',
 } );
 
+export const DEFAULT_SCENE_KEY = 'default-template';
+
 export const ACTION_TYPES = Object.freeze( {
   SESSION_START: 'session-start',
   SESSION_END: 'session-end',
@@ -66,6 +68,7 @@ export const ACTION_TYPES = Object.freeze( {
   CAMERA_TRANSFORM_SAMPLE: 'camera-transform-sample',
   CAMERA_RESET: 'camera-reset',
   POINTER_STATE_SAMPLE: 'pointer-state-sample',
+  SCENE_STATE_CHANGE: 'scene-state-change',
 } );
 
 export const POINTER_SAMPLING_BEHAVIORS = Object.freeze( {
@@ -133,6 +136,20 @@ function cloneTransform( transform = {} ) {
     position: [ ...( transform.position || [ 0, 0, 0 ] ) ],
     quaternion: [ ...( transform.quaternion || [ 0, 0, 0, 1 ] ) ],
   };
+
+}
+
+function cloneSceneState( sceneState = {} ) {
+
+  try {
+
+    return structuredClone( sceneState || {} );
+
+  } catch {
+
+    return {};
+
+  }
 
 }
 
@@ -306,11 +323,25 @@ export function getPointerSampleLabel() {
 
 }
 
+export function getSceneStateChangeLabel( label = null ) {
+
+  if ( typeof label === 'string' && label.trim().length > 0 ) {
+
+    return label;
+
+  }
+
+  return 'Update Scene State';
+
+}
+
 export function createInitialXRLoggingState( sceneSnapshot, timestamp = Date.now() ) {
 
   const replayPointers = createInitialReplayPointers();
 
   return {
+    sceneKey: sceneSnapshot.sceneKey || DEFAULT_SCENE_KEY,
+    sceneState: cloneSceneState( sceneSnapshot.sceneState ),
     presentationMode: sceneSnapshot.presentationMode || PRESENTATION_MODES.DESKTOP,
     cube: cloneTransform( sceneSnapshot.cube ),
     camera: cloneTransform( sceneSnapshot.camera ),

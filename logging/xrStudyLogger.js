@@ -3,6 +3,7 @@ import {
   ACTION_TYPES,
   ANALYSIS_MODES,
   DEFAULT_ANALYSIS_CONTROL,
+  DEFAULT_SCENE_KEY,
   INTERACTION_PHASES,
   POINTER_MODES,
   POINTER_SAMPLING_BEHAVIORS,
@@ -17,6 +18,7 @@ import {
   getGrabStartLabel,
   getModeChangeLabel,
   getPointerSampleLabel,
+  getSceneStateChangeLabel,
   getSessionEndLabel,
   getSessionStartLabel,
 } from './xrLoggingSchema.js';
@@ -57,6 +59,8 @@ function notifyListeners( listeners, value ) {
 
 function applySceneSnapshotToState( state, sceneSnapshot ) {
 
+  state.sceneKey = sceneSnapshot.sceneKey || DEFAULT_SCENE_KEY;
+  state.sceneState = cloneValue( sceneSnapshot.sceneState || {} );
   state.presentationMode = sceneSnapshot.presentationMode;
   state.cube.position = [ ...sceneSnapshot.cube.position ];
   state.cube.quaternion = [ ...sceneSnapshot.cube.quaternion ];
@@ -169,6 +173,9 @@ export function createXRStudyLogger( {
   bridge,
   getSceneSnapshot,
   applyReplayState,
+  normalizeSceneReplayState = ( sceneKey, sceneState, fallbackSceneState ) => (
+    structuredClone( sceneState ?? fallbackSceneState ?? {} )
+  ),
 } ) {
 
   const registry = Registry.create();
@@ -302,6 +309,19 @@ export function createXRStudyLogger( {
     };
 
   }, { eventType: ACTION_TYPES.POINTER_STATE_SAMPLE, label: 'Pointer State Sample' } );
+
+  const sceneStateChangeAction = registry.register( ACTION_TYPES.SCENE_STATE_CHANGE, ( state, payload ) => {
+
+    applySceneSnapshotToState( state, payload.sceneSnapshot );
+    state.activeInteractor = payload.interactor;
+    state.interactionPhase = INTERACTION_PHASES.IDLE;
+    state.lastEvent = {
+      type: ACTION_TYPES.SCENE_STATE_CHANGE,
+      timestamp: payload.timestamp,
+      source: payload.source,
+    };
+
+  }, { eventType: ACTION_TYPES.SCENE_STATE_CHANGE, label: 'Scene State Change' } );
 
   const trrack = initializeTrrack( {
     registry,
@@ -606,7 +626,7 @@ export function createXRStudyLogger( {
 
   bridge.onProvenanceReceive( ( incomingState ) => {
 
-    const normalizedState = normalizeReplayState( incomingState, currentState );
+    const normalizedState = normalizeReplayState( incomingState, currentState, normalizeSceneReplayState );
     applyNormalizedReplayState( normalizedState );
 
   } );
@@ -729,7 +749,7 @@ export function createXRStudyLogger( {
     },
     applyReplayStateSnapshot( incomingState ) {
 
-      const normalizedState = normalizeReplayState( incomingState, currentState );
+      const normalizedState = normalizeReplayState( incomingState, currentState, normalizeSceneReplayState );
       return applyNormalizedReplayState( normalizedState );
 
     },
@@ -823,6 +843,22 @@ export function createXRStudyLogger( {
           sceneSnapshot,
         } ) ),
         ACTION_TYPES.OBJECT_GRAB_END,
+      );
+
+    },
+    recordSceneStateChange( {
+      source = 'scene',
+      interactor = null,
+      label = null,
+    } = {} ) {
+
+      return runAction(
+        getSceneStateChangeLabel( label ),
+        sceneStateChangeAction( createLoggerActionPayload( getSceneSnapshot, {
+          interactor,
+          source,
+        } ) ),
+        ACTION_TYPES.SCENE_STATE_CHANGE,
       );
 
     },

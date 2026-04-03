@@ -33,6 +33,17 @@
         z-index: 10;
       }
 
+      #scene-panel {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        width: min(380px, calc(100vw - 32px));
+        max-height: calc(100vh - 32px);
+        overflow: auto;
+        z-index: 11;
+        display: none;
+      }
+
       #hud h1 {
         margin: 0 0 8px;
         font-size: 1rem;
@@ -129,13 +140,19 @@
       }
 
       @media (max-width: 520px) {
+        #scene-panel {
+          top: auto;
+          right: 16px;
+          bottom: 140px;
+        }
+
         #VRButton {
           left: 20px !important;
           bottom: 76px !important;
         }
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-CqPmXhKq.js"></script>
+    <script type="module" crossorigin src="./assets/index-ubu-8N-f.js"></script>
   </head>
   <body>
     <div id="hud">
@@ -143,6 +160,7 @@
       <p id="hud-body">Drag the cube with your mouse on desktop. In VR, point with a controller and hold the trigger to grab it.</p>
       <p id="hud-note">Use HTTPS on Quest. If AR is supported by the current browser/device, a START AR button will appear and the real-world passthrough should remain visible behind the cube.</p>
     </div>
+    <div id="scene-panel" aria-live="polite"></div>
     <div id="analysis-paused-frame" aria-hidden="true"></div>
     <div id="analysis-paused-banner" aria-hidden="true">Replay Paused. Free Camera Moving</div>
   </body>

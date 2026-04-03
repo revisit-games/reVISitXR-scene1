@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SCENE_KEY,
   INTERACTION_PHASES,
   POINTER_MODES,
   PRESENTATION_MODES,
@@ -306,6 +307,8 @@ export function buildCompactStateSummary( state ) {
     .map( ( interactor ) => `${interactor}:${state.replayPointers[ interactor ].mode}` );
 
   return JSON.stringify( {
+    sceneKey: state.sceneKey || DEFAULT_SCENE_KEY,
+    sceneState: state.sceneState || {},
     mode: state.presentationMode,
     phase: state.interactionPhase,
     interactor: state.activeInteractor,
@@ -354,9 +357,29 @@ function normalizeMetrics( value, fallback ) {
 
 }
 
-export function normalizeReplayState( candidateState, fallbackState ) {
+function cloneSceneState( sceneState = {} ) {
+
+  try {
+
+    return structuredClone( sceneState || {} );
+
+  } catch {
+
+    return {};
+
+  }
+
+}
+
+export function normalizeReplayState(
+  candidateState,
+  fallbackState,
+  normalizeSceneState = ( sceneKey, sceneState, fallbackSceneState ) => cloneSceneState( sceneState ?? fallbackSceneState ),
+) {
 
   const fallbackSnapshot = {
+    sceneKey: fallbackState.sceneKey || DEFAULT_SCENE_KEY,
+    sceneState: fallbackState.sceneState,
     presentationMode: fallbackState.presentationMode || PRESENTATION_MODES.DESKTOP,
     cube: fallbackState.cube,
     camera: fallbackState.camera,
@@ -384,7 +407,17 @@ export function normalizeReplayState( candidateState, fallbackState ) {
     ? candidateState.interactionPhase
     : INTERACTION_PHASES.IDLE;
 
+  const sceneKey = typeof candidateState?.sceneKey === 'string' && candidateState.sceneKey.trim().length > 0
+    ? candidateState.sceneKey
+    : ( fallbackState.sceneKey || normalizedBase.sceneKey || DEFAULT_SCENE_KEY );
+
   return {
+    sceneKey,
+    sceneState: normalizeSceneState(
+      sceneKey,
+      candidateState?.sceneState,
+      fallbackState.sceneState || normalizedBase.sceneState,
+    ),
     presentationMode,
     cube: normalizeTransform( candidateState?.cube, fallbackState.cube || normalizedBase.cube ),
     camera: normalizeTransform( candidateState?.camera, fallbackState.camera || normalizedBase.camera ),
