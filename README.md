@@ -102,20 +102,36 @@ Adjust all timing and threshold values in `logging/xrLoggingSchema.js`.
 
 Default knobs:
 
-- `objectMinIntervalMs: 200`
-- `cameraMinIntervalMs: 300`
-- `pointerMinIntervalMs: 120`
-- `positionEpsilon: 0.01`
-- `quaternionAngleThresholdDeg: 2`
-- `pointerPositionEpsilon: 0.02`
-- `pointerRayLengthEpsilon: 0.02`
-- `enablePointerSampling: true`
+- `object.desktop.minIntervalMs: 200`
+- `object.desktop.positionEpsilon: 0.01`
+- `object.desktop.quaternionAngleThresholdDeg: 2`
+- `object.immersive.minIntervalMs: 400`
+- `object.immersive.positionEpsilon: 0.035`
+- `object.immersive.quaternionAngleThresholdDeg: 5.5`
+- `camera.desktop.minIntervalMs: 300`
+- `camera.desktop.positionEpsilon: 0.015`
+- `camera.desktop.quaternionAngleThresholdDeg: 2.5`
+- `camera.immersive.minIntervalMs: 350`
+- `camera.immersive.positionEpsilon: 0.025`
+- `camera.immersive.quaternionAngleThresholdDeg: 4`
+- `pointer.enabled: true`
+- `pointer.hover.minIntervalMs: 300`
+- `pointer.hover.positionEpsilon: 0.05`
+- `pointer.hover.rayLengthEpsilon: 0.05`
+- `pointer.grabbing.behavior: 'state-only'`
+- `pointer.grabbing.minIntervalMs: 400`
+- `pointer.grabbing.positionEpsilon: 0.06`
+- `pointer.grabbing.rayLengthEpsilon: 0.06`
+- `pointer.logImmediateSemanticTransitions: true`
+- `outboundSync.minIntervalMs: 500`
 
 If you want less graph growth:
 
-- increase the sample intervals
-- increase the epsilons
-- disable pointer sampling with `enablePointerSampling: false`
+- increase immersive object intervals and epsilons first
+- switch `pointer.grabbing.behavior` from `'full'` to `'state-only'` or `'off'`
+- slow `pointer.hover.*` thresholds if controller hover noise is still dense
+- increase `outboundSync.minIntervalMs` on weaker host devices
+- disable pointer sampling entirely with `pointer.enabled: false`
 
 ## Actions And Labels
 
@@ -137,6 +153,35 @@ To disable a logging action, the safest approach is to remove or gate the corres
 
 - stop calling `samplePointerStateIfNeeded()` to remove replay-pointer provenance
 - stop calling `recordCameraReset()` if camera resets should not create nodes
+
+## Logging Performance Tuning
+
+Dense replay timelines usually come from immersive object manipulation, where several streams can all try to log at once.
+
+Current default strategy:
+
+- object sampling stays relatively responsive on desktop, but becomes coarser in immersive VR/AR to filter hand jitter
+- camera sampling is now independent from object sampling, so head motion can stay plausible without inheriting object thresholds
+- pointer hover sampling remains available, but slower and less sensitive than before
+- pointer geometry logging during active XR grabs defaults to `state-only`, which keeps semantic controller changes while letting object transform samples carry the motion path
+- outbound provenance plus reactive answer sync is throttled, so the parent no longer receives a full graph push on every dense local node
+
+Pointer behavior during grabbing:
+
+- `'state-only'`: keep semantic pointer changes, skip continuous grab-geometry samples
+- `'off'`: suppress grab-pointer sample nodes entirely and rely on grab start/end scene snapshots
+- `'full'`: allow continuous grab-pointer geometry logging with the grabbing thresholds
+
+The first knobs to tune on lower-performance devices are:
+
+- `object.immersive.minIntervalMs`
+- `object.immersive.positionEpsilon`
+- `object.immersive.quaternionAngleThresholdDeg`
+- `pointer.grabbing.behavior`
+- `pointer.hover.minIntervalMs`
+- `outboundSync.minIntervalMs`
+
+For debugging, Vite dev mode now exposes `window.__revisitXRDebug.getLoggingStats()` so you can confirm whether nodes were logged, skipped as pending, skipped as unchanged, or suppressed by the grab-state pointer policy.
 
 ## Replay Pointer Visuals
 
@@ -274,7 +319,8 @@ In Vite dev mode, `window.__revisitXRDebug` is exposed for smoke testing:
 - `applyReplayState(state)`
 - `setAnalysisControl(control)`
 - `getInteractionPolicy()`
+- `getLoggingStats()`
 - `getReplayPointerVisuals()`
 - `getReplayAvatarVisuals()`
 
-These helpers are for development only and are useful when validating replay hydration, pause/play behavior, pointer rendering, and replay-avatar placement.
+These helpers are for development only and are useful when validating replay hydration, pause/play behavior, pointer rendering, replay-avatar placement, and whether the logging-density optimizations are actually suppressing redundant samples.

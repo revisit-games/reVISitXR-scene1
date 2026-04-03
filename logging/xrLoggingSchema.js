@@ -56,17 +56,6 @@ export const SUMMARY_RESPONSE_KEYS = Object.freeze( {
   XR_STATE_SUMMARY_JSON: 'xrStateSummaryJson',
 } );
 
-export const SAMPLING_CONFIG = Object.freeze( {
-  objectMinIntervalMs: 200,
-  cameraMinIntervalMs: 300,
-  pointerMinIntervalMs: 120,
-  positionEpsilon: 0.01,
-  quaternionAngleThresholdDeg: 2,
-  pointerPositionEpsilon: 0.02,
-  pointerRayLengthEpsilon: 0.02,
-  enablePointerSampling: true,
-} );
-
 export const ACTION_TYPES = Object.freeze( {
   SESSION_START: 'session-start',
   SESSION_END: 'session-end',
@@ -77,6 +66,65 @@ export const ACTION_TYPES = Object.freeze( {
   CAMERA_TRANSFORM_SAMPLE: 'camera-transform-sample',
   CAMERA_RESET: 'camera-reset',
   POINTER_STATE_SAMPLE: 'pointer-state-sample',
+} );
+
+export const POINTER_SAMPLING_BEHAVIORS = Object.freeze( {
+  OFF: 'off',
+  STATE_ONLY: 'state-only',
+  FULL: 'full',
+} );
+
+export const SAMPLING_CONFIG = Object.freeze( {
+  object: Object.freeze( {
+    desktop: Object.freeze( {
+      minIntervalMs: 200,
+      positionEpsilon: 0.01,
+      quaternionAngleThresholdDeg: 2,
+    } ),
+    immersive: Object.freeze( {
+      minIntervalMs: 400,
+      positionEpsilon: 0.035,
+      quaternionAngleThresholdDeg: 5.5,
+    } ),
+  } ),
+  camera: Object.freeze( {
+    desktop: Object.freeze( {
+      minIntervalMs: 300,
+      positionEpsilon: 0.015,
+      quaternionAngleThresholdDeg: 2.5,
+    } ),
+    immersive: Object.freeze( {
+      minIntervalMs: 350,
+      positionEpsilon: 0.025,
+      quaternionAngleThresholdDeg: 4,
+    } ),
+  } ),
+  pointer: Object.freeze( {
+    enabled: true,
+    hover: Object.freeze( {
+      minIntervalMs: 300,
+      positionEpsilon: 0.05,
+      rayLengthEpsilon: 0.05,
+    } ),
+    grabbing: Object.freeze( {
+      behavior: POINTER_SAMPLING_BEHAVIORS.STATE_ONLY,
+      minIntervalMs: 400,
+      positionEpsilon: 0.06,
+      rayLengthEpsilon: 0.06,
+    } ),
+    logImmediateSemanticTransitions: true,
+  } ),
+  outboundSync: Object.freeze( {
+    minIntervalMs: 500,
+    forceFlushEventTypes: Object.freeze( [
+      ACTION_TYPES.MODE_CHANGE,
+      ACTION_TYPES.SESSION_START,
+      ACTION_TYPES.SESSION_END,
+      ACTION_TYPES.OBJECT_GRAB_START,
+      ACTION_TYPES.OBJECT_GRAB_END,
+      ACTION_TYPES.CAMERA_RESET,
+    ] ),
+  } ),
 } );
 
 function cloneTransform( transform = {} ) {

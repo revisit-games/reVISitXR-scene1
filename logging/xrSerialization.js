@@ -97,14 +97,43 @@ export function quaternionAngularDifferenceDeg( quaternionA, quaternionB ) {
 
 }
 
-export function transformChanged( transformA, transformB, samplingConfig ) {
+export function isImmersivePresentationMode( presentationMode ) {
 
   return (
-    positionDistance( transformA.position, transformB.position ) > samplingConfig.positionEpsilon ||
+    presentationMode === PRESENTATION_MODES.IMMERSIVE_VR ||
+    presentationMode === PRESENTATION_MODES.IMMERSIVE_AR
+  );
+
+}
+
+export function getTransformSamplingProfile( presentationMode, streamConfig ) {
+
+  return isImmersivePresentationMode( presentationMode )
+    ? streamConfig.immersive
+    : streamConfig.desktop;
+
+}
+
+export function getObjectSamplingProfile( presentationMode, samplingConfig ) {
+
+  return getTransformSamplingProfile( presentationMode, samplingConfig.object );
+
+}
+
+export function getCameraSamplingProfile( presentationMode, samplingConfig ) {
+
+  return getTransformSamplingProfile( presentationMode, samplingConfig.camera );
+
+}
+
+export function transformChanged( transformA, transformB, thresholdConfig ) {
+
+  return (
+    positionDistance( transformA.position, transformB.position ) > thresholdConfig.positionEpsilon ||
     quaternionAngularDifferenceDeg(
       transformA.quaternion,
       transformB.quaternion,
-    ) > samplingConfig.quaternionAngleThresholdDeg
+    ) > thresholdConfig.quaternionAngleThresholdDeg
   );
 
 }
@@ -162,7 +191,7 @@ export function normalizeReplayPointers( value, fallback ) {
 
 }
 
-export function replayPointerChanged( pointerA, pointerB, samplingConfig ) {
+export function replayPointerSemanticChanged( pointerA, pointerB ) {
 
   if (
     pointerA.visible !== pointerB.visible ||
@@ -177,6 +206,20 @@ export function replayPointerChanged( pointerA, pointerB, samplingConfig ) {
 
   }
 
+  return false;
+
+}
+
+export function getPointerSamplingProfile( pointer, samplingConfig ) {
+
+  return pointer?.mode === POINTER_MODES.GRAB
+    ? samplingConfig.pointer.grabbing
+    : samplingConfig.pointer.hover;
+
+}
+
+export function replayPointerGeometryChanged( pointerA, pointerB, pointerSamplingProfile ) {
+
   if ( ! pointerA.visible && ! pointerB.visible ) {
 
     return false;
@@ -184,22 +227,46 @@ export function replayPointerChanged( pointerA, pointerB, samplingConfig ) {
   }
 
   return (
-    positionDistance( pointerA.origin, pointerB.origin ) > samplingConfig.pointerPositionEpsilon ||
-    positionDistance( pointerA.target, pointerB.target ) > samplingConfig.pointerPositionEpsilon ||
-    Math.abs( pointerA.rayLength - pointerB.rayLength ) > samplingConfig.pointerRayLengthEpsilon
+    positionDistance( pointerA.origin, pointerB.origin ) > pointerSamplingProfile.positionEpsilon ||
+    positionDistance( pointerA.target, pointerB.target ) > pointerSamplingProfile.positionEpsilon ||
+    Math.abs( pointerA.rayLength - pointerB.rayLength ) > pointerSamplingProfile.rayLengthEpsilon
   );
+
+}
+
+export function getReplayPointerChangeDetails( sceneSnapshot, currentState, samplingConfig ) {
+
+  const changeDetails = {};
+
+  for ( const interactor of REPLAY_POINTER_IDS ) {
+
+    const nextPointer = sceneSnapshot.replayPointers[ interactor ];
+    const previousPointer = currentState.replayPointers[ interactor ];
+    const pointerSamplingProfile = getPointerSamplingProfile( nextPointer, samplingConfig );
+
+    changeDetails[ interactor ] = {
+      interactor,
+      nextPointer,
+      previousPointer,
+      samplingProfile: pointerSamplingProfile,
+      semanticChanged: replayPointerSemanticChanged( nextPointer, previousPointer ),
+      geometryChanged: replayPointerGeometryChanged( nextPointer, previousPointer, pointerSamplingProfile ),
+    };
+
+  }
+
+  return changeDetails;
 
 }
 
 export function replayPointersChanged( sceneSnapshot, currentState, samplingConfig ) {
 
+  const changeDetails = getReplayPointerChangeDetails( sceneSnapshot, currentState, samplingConfig );
+
   return REPLAY_POINTER_IDS.some( ( interactor ) => {
 
-    return replayPointerChanged(
-      sceneSnapshot.replayPointers[ interactor ],
-      currentState.replayPointers[ interactor ],
-      samplingConfig,
-    );
+    const detail = changeDetails[ interactor ];
+    return detail.semanticChanged || detail.geometryChanged;
 
   } );
 
@@ -207,15 +274,27 @@ export function replayPointersChanged( sceneSnapshot, currentState, samplingConf
 
 export function objectTransformChanged( sceneSnapshot, currentState, samplingConfig ) {
 
-  return transformChanged( sceneSnapshot.cube, currentState.cube, samplingConfig );
+  return transformChanged(
+    sceneSnapshot.cube,
+    currentState.cube,
+    getObjectSamplingProfile( sceneSnapshot.presentationMode, samplingConfig ),
+  );
 
 }
 
 export function cameraTransformChanged( sceneSnapshot, currentState, samplingConfig ) {
 
   return (
-    transformChanged( sceneSnapshot.camera, currentState.camera, samplingConfig ) ||
-    transformChanged( sceneSnapshot.xrOrigin, currentState.xrOrigin, samplingConfig )
+    transformChanged(
+      sceneSnapshot.camera,
+      currentState.camera,
+      getCameraSamplingProfile( sceneSnapshot.presentationMode, samplingConfig ),
+    ) ||
+    transformChanged(
+      sceneSnapshot.xrOrigin,
+      currentState.xrOrigin,
+      getCameraSamplingProfile( sceneSnapshot.presentationMode, samplingConfig ),
+    )
   );
 
 }

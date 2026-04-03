@@ -4,6 +4,8 @@ import {
   ANALYSIS_MODES,
   DEFAULT_ANALYSIS_CONTROL,
   INTERACTION_PHASES,
+  POINTER_MODES,
+  POINTER_SAMPLING_BEHAVIORS,
   PRESENTATION_MODES,
   REPLAY_POINTER_IDS,
   SAMPLING_CONFIG,
@@ -21,10 +23,12 @@ import {
 import {
   buildAnswerPayload,
   cameraTransformChanged,
+  getCameraSamplingProfile,
+  getObjectSamplingProfile,
+  getReplayPointerChangeDetails,
   normalizeReplayPointers,
   normalizeReplayState,
   objectTransformChanged,
-  replayPointersChanged,
 } from './xrSerialization.js';
 
 function cloneValue( value ) {
@@ -107,6 +111,57 @@ function normalizeAnalysisControl( control ) {
     trialId: typeof control?.trialId === 'string' ? control.trialId : null,
     allowLocalInteractionWhenPaused: control?.allowLocalInteractionWhenPaused !== false,
   };
+
+}
+
+function createSampleStats() {
+
+  return {
+    logged: 0,
+    skippedUnchanged: 0,
+    skippedPending: 0,
+  };
+
+}
+
+function createLoggingStats() {
+
+  return {
+    object: createSampleStats(),
+    camera: createSampleStats(),
+    pointer: {
+      logged: 0,
+      semanticLogged: 0,
+      skippedUnchanged: 0,
+      skippedPending: 0,
+      skippedGrabStateOnly: 0,
+    },
+    outboundSync: {
+      flushed: 0,
+      forcedFlushes: 0,
+      throttledSchedules: 0,
+    },
+  };
+
+}
+
+function createPointerTimestampMap( initialValue = 0 ) {
+
+  return Object.fromEntries(
+    REPLAY_POINTER_IDS.map( ( interactor ) => [ interactor, initialValue ] ),
+  );
+
+}
+
+function getGraphNodeCount( graphBackend ) {
+
+  if ( graphBackend?.nodes instanceof Map ) {
+
+    return graphBackend.nodes.size;
+
+  }
+
+  return Object.keys( graphBackend?.nodes || {} ).length;
 
 }
 
@@ -262,7 +317,10 @@ export function createXRStudyLogger( {
   let hasAnalysisControl = bridge.isStandalone;
   let lastObjectSampleAt = 0;
   let lastCameraSampleAt = 0;
-  let lastPointerSampleAt = 0;
+  const lastPointerSampleAt = createPointerTimestampMap( 0 );
+  const loggingStats = createLoggingStats();
+  let lastOutboundSyncAt = 0;
+  let pendingOutboundSyncTimer = null;
   let isApplyingReplayState = false;
   let hasReceivedReplayState = false;
 
@@ -342,26 +400,99 @@ export function createXRStudyLogger( {
 
   }
 
-  function syncOutboundState() {
+  function canSyncOutbound() {
 
-    currentState = cloneValue( trrack.getState() );
-
-    if (
-      isApplyingReplayState ||
-      getIsAnalysisSession() ||
-      ( bridge.isEnabled && ! hasAnalysisControl )
-    ) {
-
-      return;
-
-    }
-
-    bridge.postProvenance( trrack.graph.backend );
-    bridge.postAnswers( buildAnswerPayload( currentState ) );
+    return (
+      ! isApplyingReplayState &&
+      ! getIsAnalysisSession() &&
+      ( hasAnalysisControl || ! bridge.isEnabled )
+    );
 
   }
 
-  function runAction( label, action ) {
+  function cancelPendingOutboundSync() {
+
+    if ( pendingOutboundSyncTimer !== null ) {
+
+      clearTimeout( pendingOutboundSyncTimer );
+      pendingOutboundSyncTimer = null;
+
+    }
+
+  }
+
+  function flushOutboundState( { forced = false } = {} ) {
+
+    currentState = cloneValue( trrack.getState() );
+
+    if ( ! canSyncOutbound() ) {
+
+      cancelPendingOutboundSync();
+      return false;
+
+    }
+
+    cancelPendingOutboundSync();
+    bridge.postProvenance( trrack.graph.backend );
+    bridge.postAnswers( buildAnswerPayload( currentState ) );
+    lastOutboundSyncAt = performance.now();
+    loggingStats.outboundSync.flushed += 1;
+
+    if ( forced ) {
+
+      loggingStats.outboundSync.forcedFlushes += 1;
+
+    }
+
+    return true;
+
+  }
+
+  function scheduleOutboundStateSync( eventType = null ) {
+
+    currentState = cloneValue( trrack.getState() );
+
+    if ( ! canSyncOutbound() ) {
+
+      cancelPendingOutboundSync();
+      return false;
+
+    }
+
+    if ( SAMPLING_CONFIG.outboundSync.forceFlushEventTypes.includes( eventType ) ) {
+
+      return flushOutboundState( { forced: true } );
+
+    }
+
+    const now = performance.now();
+    const elapsedMs = now - lastOutboundSyncAt;
+
+    if ( elapsedMs >= SAMPLING_CONFIG.outboundSync.minIntervalMs ) {
+
+      return flushOutboundState();
+
+    }
+
+    if ( pendingOutboundSyncTimer !== null ) {
+
+      return false;
+
+    }
+
+    loggingStats.outboundSync.throttledSchedules += 1;
+    pendingOutboundSyncTimer = setTimeout( () => {
+
+      pendingOutboundSyncTimer = null;
+      flushOutboundState();
+
+    }, Math.max( 0, SAMPLING_CONFIG.outboundSync.minIntervalMs - elapsedMs ) );
+
+    return false;
+
+  }
+
+  function runAction( label, action, eventType = null ) {
 
     if ( ! canRecord() ) {
 
@@ -370,6 +501,7 @@ export function createXRStudyLogger( {
     }
 
     trrack.apply( label, action );
+    scheduleOutboundStateSync( eventType );
     return true;
 
   }
@@ -381,6 +513,12 @@ export function createXRStudyLogger( {
 
     latestAnalysisControl = nextControl;
     hasAnalysisControl = true;
+
+    if ( nextControl.mode === ANALYSIS_MODES.ANALYSIS ) {
+
+      cancelPendingOutboundSync();
+
+    }
 
     if ( nextControl.mode !== ANALYSIS_MODES.ANALYSIS ) {
 
@@ -398,7 +536,7 @@ export function createXRStudyLogger( {
 
     if ( nextControl.mode === ANALYSIS_MODES.STUDY ) {
 
-      syncOutboundState();
+      flushOutboundState( { forced: true } );
 
     }
 
@@ -410,6 +548,7 @@ export function createXRStudyLogger( {
 
     const prevPolicy = JSON.stringify( buildInteractionPolicy() );
 
+    cancelPendingOutboundSync();
     hasReceivedReplayState = true;
     currentState = cloneValue( normalizedState );
     isApplyingReplayState = true;
@@ -443,7 +582,7 @@ export function createXRStudyLogger( {
 
   trrack.currentChange( () => {
 
-    syncOutboundState();
+    currentState = cloneValue( trrack.getState() );
 
   } );
 
@@ -472,13 +611,40 @@ export function createXRStudyLogger( {
 
   } );
 
+  function updatePointerSampleTimestamps( interactors, now ) {
+
+    for ( const interactor of interactors ) {
+
+      if ( interactor in lastPointerSampleAt ) {
+
+        lastPointerSampleAt[ interactor ] = now;
+
+      }
+
+    }
+
+  }
+
+  function buildLoggingStatsSnapshot() {
+
+    return {
+      object: { ...loggingStats.object },
+      camera: { ...loggingStats.camera },
+      pointer: { ...loggingStats.pointer },
+      outboundSync: { ...loggingStats.outboundSync },
+      graphNodeCount: getGraphNodeCount( trrack.graph.backend ),
+      outboundSyncPending: pendingOutboundSyncTimer !== null,
+    };
+
+  }
+
   if ( bridge.isStandalone ) {
 
     notifyInteractionPolicyChange();
 
   }
 
-  syncOutboundState();
+  flushOutboundState( { forced: true } );
 
   return {
     getState() {
@@ -494,6 +660,11 @@ export function createXRStudyLogger( {
     exportAnswers() {
 
       return buildAnswerPayload( currentState );
+
+    },
+    getLoggingStats() {
+
+      return buildLoggingStatsSnapshot();
 
     },
     getStudyData() {
@@ -576,6 +747,7 @@ export function createXRStudyLogger( {
       return runAction(
         getModeChangeLabel( mode ),
         modeChangeAction( actionPayload ),
+        ACTION_TYPES.MODE_CHANGE,
       );
 
     },
@@ -587,6 +759,7 @@ export function createXRStudyLogger( {
       return runAction(
         getSessionStartLabel( mode ),
         sessionStartAction( actionPayload ),
+        ACTION_TYPES.SESSION_START,
       );
 
     },
@@ -597,6 +770,7 @@ export function createXRStudyLogger( {
       return runAction(
         getSessionEndLabel(),
         sessionEndAction( actionPayload ),
+        ACTION_TYPES.SESSION_END,
       );
 
     },
@@ -605,6 +779,7 @@ export function createXRStudyLogger( {
       return runAction(
         'Camera Reset',
         cameraResetAction( createLoggerActionPayload( getSceneSnapshot, { source } ) ),
+        ACTION_TYPES.CAMERA_RESET,
       );
 
     },
@@ -616,6 +791,7 @@ export function createXRStudyLogger( {
           interactor,
           source,
         } ) ),
+        ACTION_TYPES.OBJECT_GRAB_START,
       );
 
     },
@@ -646,6 +822,7 @@ export function createXRStudyLogger( {
           source,
           sceneSnapshot,
         } ) ),
+        ACTION_TYPES.OBJECT_GRAB_END,
       );
 
     },
@@ -662,31 +839,40 @@ export function createXRStudyLogger( {
       }
 
       const sceneSnapshot = getSceneSnapshot();
+      const objectSamplingProfile = getObjectSamplingProfile( sceneSnapshot.presentationMode, SAMPLING_CONFIG );
 
       if ( ! objectTransformChanged( sceneSnapshot, currentState, SAMPLING_CONFIG ) ) {
 
+        loggingStats.object.skippedUnchanged += 1;
         return 'unchanged';
 
       }
 
-      if ( now - lastObjectSampleAt < SAMPLING_CONFIG.objectMinIntervalMs ) {
+      if ( now - lastObjectSampleAt < objectSamplingProfile.minIntervalMs ) {
 
+        loggingStats.object.skippedPending += 1;
         return 'pending';
 
       }
 
       lastObjectSampleAt = now;
 
-      runAction(
+      if ( runAction(
         'Sample Object Transform',
         objectTransformSampleAction( createLoggerActionPayload( getSceneSnapshot, {
           interactor,
           source,
           sceneSnapshot,
         } ) ),
-      );
+        ACTION_TYPES.OBJECT_TRANSFORM_SAMPLE,
+      ) ) {
 
-      return 'logged';
+        loggingStats.object.logged += 1;
+        return 'logged';
+
+      }
+
+      return 'unchanged';
 
     },
     sampleCameraTransformIfNeeded( {
@@ -702,31 +888,40 @@ export function createXRStudyLogger( {
       }
 
       const sceneSnapshot = getSceneSnapshot();
+      const cameraSamplingProfile = getCameraSamplingProfile( sceneSnapshot.presentationMode, SAMPLING_CONFIG );
 
       if ( ! cameraTransformChanged( sceneSnapshot, currentState, SAMPLING_CONFIG ) ) {
 
+        loggingStats.camera.skippedUnchanged += 1;
         return 'unchanged';
 
       }
 
-      if ( now - lastCameraSampleAt < SAMPLING_CONFIG.cameraMinIntervalMs ) {
+      if ( now - lastCameraSampleAt < cameraSamplingProfile.minIntervalMs ) {
 
+        loggingStats.camera.skippedPending += 1;
         return 'pending';
 
       }
 
       lastCameraSampleAt = now;
 
-      runAction(
+      if ( runAction(
         'Sample Camera Transform',
         cameraTransformSampleAction( createLoggerActionPayload( getSceneSnapshot, {
           interactor,
           source,
           sceneSnapshot,
         } ) ),
-      );
+        ACTION_TYPES.CAMERA_TRANSFORM_SAMPLE,
+      ) ) {
 
-      return 'logged';
+        loggingStats.camera.logged += 1;
+        return 'logged';
+
+      }
+
+      return 'unchanged';
 
     },
     samplePointerStateIfNeeded( {
@@ -734,7 +929,7 @@ export function createXRStudyLogger( {
       now = performance.now(),
     } = {} ) {
 
-      if ( ! canRecord() || ! SAMPLING_CONFIG.enablePointerSampling ) {
+      if ( ! canRecord() || ! SAMPLING_CONFIG.pointer.enabled ) {
 
         return 'unchanged';
 
@@ -745,31 +940,136 @@ export function createXRStudyLogger( {
         sceneSnapshot.replayPointers,
         currentState.replayPointers,
       );
+      const pointerChangeDetails = getReplayPointerChangeDetails( sceneSnapshot, currentState, SAMPLING_CONFIG );
+      const changedPointerDetails = REPLAY_POINTER_IDS
+        .map( ( interactor ) => pointerChangeDetails[ interactor ] )
+        .filter( ( detail ) => detail.semanticChanged || detail.geometryChanged );
 
-      if ( ! replayPointersChanged( sceneSnapshot, currentState, SAMPLING_CONFIG ) ) {
+      if ( changedPointerDetails.length === 0 ) {
+
+        loggingStats.pointer.skippedUnchanged += 1;
+        return 'unchanged';
+
+      }
+
+      const semanticDetails = changedPointerDetails.filter( ( detail ) => detail.semanticChanged );
+      const changedInteractors = changedPointerDetails.map( ( detail ) => detail.interactor );
+
+      if (
+        semanticDetails.length > 0 &&
+        SAMPLING_CONFIG.pointer.logImmediateSemanticTransitions &&
+        ! semanticDetails.every( ( detail ) => (
+          detail.nextPointer.mode === POINTER_MODES.GRAB &&
+          SAMPLING_CONFIG.pointer.grabbing.behavior === POINTER_SAMPLING_BEHAVIORS.OFF
+        ) )
+      ) {
+
+        updatePointerSampleTimestamps( changedInteractors, now );
+
+        if ( runAction(
+          getPointerSampleLabel(),
+          pointerStateSampleAction( createLoggerActionPayload( getSceneSnapshot, {
+            interactor: null,
+            source,
+            sceneSnapshot,
+          } ) ),
+          ACTION_TYPES.POINTER_STATE_SAMPLE,
+        ) ) {
+
+          loggingStats.pointer.logged += 1;
+          loggingStats.pointer.semanticLogged += 1;
+          return 'logged';
+
+        }
 
         return 'unchanged';
 
       }
 
-      if ( now - lastPointerSampleAt < SAMPLING_CONFIG.pointerMinIntervalMs ) {
+      let hasEligiblePointerChange = false;
+      let hasPendingPointerChange = false;
+      let hasSuppressedGrabChange = false;
 
+      for ( const detail of changedPointerDetails ) {
+
+        const isGrabPointer = detail.nextPointer.mode === POINTER_MODES.GRAB;
+        const grabBehavior = SAMPLING_CONFIG.pointer.grabbing.behavior;
+
+        if ( isGrabPointer && ! detail.semanticChanged && grabBehavior !== POINTER_SAMPLING_BEHAVIORS.FULL ) {
+
+          hasSuppressedGrabChange = true;
+          continue;
+
+        }
+
+        if (
+          isGrabPointer &&
+          detail.semanticChanged &&
+          grabBehavior === POINTER_SAMPLING_BEHAVIORS.OFF
+        ) {
+
+          hasSuppressedGrabChange = true;
+          continue;
+
+        }
+
+        if ( now - lastPointerSampleAt[ detail.interactor ] < detail.samplingProfile.minIntervalMs ) {
+
+          hasPendingPointerChange = true;
+          continue;
+
+        }
+
+        hasEligiblePointerChange = true;
+
+      }
+
+      if ( hasEligiblePointerChange ) {
+
+        updatePointerSampleTimestamps( changedInteractors, now );
+
+        if ( runAction(
+          getPointerSampleLabel(),
+          pointerStateSampleAction( createLoggerActionPayload( getSceneSnapshot, {
+            interactor: null,
+            source,
+            sceneSnapshot,
+          } ) ),
+          ACTION_TYPES.POINTER_STATE_SAMPLE,
+        ) ) {
+
+          loggingStats.pointer.logged += 1;
+
+          if ( semanticDetails.length > 0 ) {
+
+            loggingStats.pointer.semanticLogged += 1;
+
+          }
+
+          return 'logged';
+
+        }
+
+        return 'unchanged';
+
+      }
+
+      if ( hasPendingPointerChange ) {
+
+        loggingStats.pointer.skippedPending += 1;
         return 'pending';
 
       }
 
-      lastPointerSampleAt = now;
+      if ( hasSuppressedGrabChange ) {
 
-      runAction(
-        getPointerSampleLabel(),
-        pointerStateSampleAction( createLoggerActionPayload( getSceneSnapshot, {
-          interactor: null,
-          source,
-          sceneSnapshot,
-        } ) ),
-      );
+        loggingStats.pointer.skippedGrabStateOnly += 1;
+        return 'unchanged';
 
-      return 'logged';
+      }
+
+      loggingStats.pointer.skippedUnchanged += 1;
+      return 'unchanged';
 
     },
   };

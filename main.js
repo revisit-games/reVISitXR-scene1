@@ -2021,6 +2021,7 @@ if ( import.meta.env.DEV ) {
     isReplayControlled: () => studyLogger.isReplayControlled(),
     getInteractionPolicy: () => studyLogger.getInteractionPolicy(),
     setAnalysisControl: ( control ) => studyLogger.setAnalysisControl( control ),
+    getLoggingStats: () => studyLogger.getLoggingStats(),
     getReplayPointerVisuals: () => getGhostReplayPointerDebugState(),
     getReplayAvatarVisuals: () => getReplayAvatarDebugState(),
     getStudyData: () => studyLogger.getStudyData(),
