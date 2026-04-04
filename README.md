@@ -264,6 +264,32 @@ Example 1 uses:
 
 This means replay reconstructs the bar matrix from the selected year and pinned datum instead of recording dozens of individual bar transforms.
 
+## Shared World Labels
+
+Reusable world-label sprites now live in `scenes/core/textSprite.js`.
+
+`createTextSprite(options)` still supports the original defaults, but it now also supports:
+
+- `textAlign: 'left' | 'center' | 'right'`
+- `maxTextWidth` or `wrapWidth`
+- `fixedWidth`
+- `minWidth`
+- `fontWeight`
+- `uppercase`
+- `horizontalPadding`
+- `verticalPadding`
+- `anchorX`
+- `anchorY`
+
+Recommended usage patterns:
+
+- use `textAlign: 'center'` for plaques, axis captions, and tooltips
+- use `maxTextWidth` or `wrapWidth` for long country or category names so they wrap instead of stretching across the scene
+- use `fixedWidth` when a family of labels should share the same card width
+- use `anchorY: 0` for labels that should sit on a rail or hover above a mark from their bottom edge
+
+The sprite utility now wraps long lines before drawing, centers multi-line text correctly, and avoids the old power-of-two width inflation that made some labels look wider than intended.
+
 ## Scene Interaction Hooks
 
 Scene modules can register authored XR targets through the lightweight raycast layer in `main.js`:
@@ -280,6 +306,26 @@ Supported handler hooks are:
 
 Handlers receive normalized payloads with the source, hit object, optional `instanceId`, hit point, and ray direction so scene modules can implement authored controls such as Example 1's XR year slider.
 
+For authored scene UI, prefer `scenes/core/sceneUiSurface.js` instead of creating ad hoc invisible meshes in every scene.
+
+`createSceneUiSurface(context, options)` creates a raycastable plane, adds it to the requested parent, and auto-registers it with the shared scene raycast system. The most useful options are:
+
+- `parent`
+- `width`
+- `height`
+- `position`
+- `rotation` or `quaternion`
+- `material`
+- `handlers`
+
+This is the recommended pattern for future in-world controls such as:
+
+- slider hit strips
+- floating panel hit planes
+- authored XR control cards that need replay-visible pointer targets
+
+Because these surfaces use the same `registerRaycastTarget()` path as the rest of the scene system, live controller cursor dots and replay ghost pointer targets remain visible without scene-specific replay hacks.
+
 ## Example 1 Dataset Layout
 
 The already-downloaded OWID files now live under `example1/`:
@@ -287,10 +333,24 @@ The already-downloaded OWID files now live under `example1/`:
 - `example1/data/per-capita-energy-stacked.csv`
 - `example1/data/per-capita-energy-stacked.metadata.json`
 - `example1/docs/per-capita-energy-stacked-readme.md`
+- `example1/example1VisualConfig.js`
 
 The markdown file is not required at runtime, but it is kept under `example1/docs/` because it contains source notes, citation context, and future-authoring references that are useful for researchers extending the package.
 
 Example 1 loads its assets with `new URL('./data/...', import.meta.url)` so Vite includes them in `dist/` without moving them into the global `public/` folder.
+
+Example 1 now keeps its visual tuning in `example1/example1VisualConfig.js`, including:
+
+- chart scaffold dimensions
+- XR panel size, offsets, and re-anchor thresholds
+- desktop panel styles
+- shared label and tooltip styles
+
+Example 1's in-scene label policy is now intentional:
+
+- kept in world space: axis captions, country labels, source labels, Y-axis tick labels, and the focused datum tooltip
+- moved out of world space: the large scene title, loading banner, floating year billboard, and footer/source banner
+- shown in desktop or XR panels instead: loading state, current year, citation text, and interaction guidance
 
 ## Future Scene Workflow
 
@@ -307,9 +367,17 @@ The first values future authors usually need to tune are:
 
 - scene `templateConfig`
 - Example-style country/source presets or dataset subsets
-- world label text and scale
+- world label text, width, and anchor settings
 - authored UI placement for desktop and immersive XR
 - `normalizeSceneState()` for replay compatibility
+
+For floating XR panels, start with a camera-relative anchor instead of a drifting HUD:
+
+- place the panel slightly forward, to the user's left, and slightly below eye level
+- re-anchor on immersive mode entry
+- only re-anchor again when the panel drifts outside a comfortable distance or angle threshold
+
+Example 1 uses this pattern through `example1VisualConfig.js`, with a left-side anchor and a short eased snap instead of frame-by-frame head locking.
 
 ## Replay Pointer Visuals
 

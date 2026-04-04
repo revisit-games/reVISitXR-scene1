@@ -5,32 +5,43 @@ import {
   loadExample1Dataset,
 } from './example1Data.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
+import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
+import { example1VisualConfig } from './example1VisualConfig.js';
 
-const BAR_WIDTH = 0.32;
-const BAR_DEPTH = 0.26;
-const COUNTRY_SPACING = 0.62;
-const SOURCE_SPACING = 0.48;
-const MAX_BAR_HEIGHT = 2.6;
-const BAR_BASE_Y = 0.12;
-const BAR_ANIMATION_DURATION = 0.42;
-const XR_PANEL_TRACK_LENGTH = 0.84;
-const XR_PANEL_HEIGHT = 1.2;
-const XR_PANEL_WIDTH = 0.96;
-
-const panelStyles = {
-  root: 'display:flex;flex-direction:column;gap:12px;padding:16px 18px;border:1px solid rgba(255,255,255,0.12);border-radius:16px;background:rgba(8,12,20,0.82);backdrop-filter:blur(12px);box-shadow:0 18px 44px rgba(0,0,0,0.3);',
-  label: 'font-size:0.78rem;letter-spacing:0.08em;text-transform:uppercase;color:rgba(238,243,255,0.7);margin:0;',
-  title: 'margin:0;font-size:1.02rem;font-weight:700;color:#f4f8ff;',
-  body: 'margin:0;font-size:0.92rem;line-height:1.5;color:rgba(238,243,255,0.86);',
-  detail: 'margin:0;font-size:0.86rem;line-height:1.45;color:rgba(238,243,255,0.74);',
-  slider: 'width:100%;accent-color:#7aa6ff;',
-};
+const DISPLAY_MAX_STEP = 50000;
+const DISPLAY_TICK_COUNT = 4;
 
 function formatValue( value, unit ) {
 
   return `${new Intl.NumberFormat( 'en-US', {
     maximumFractionDigits: 0,
   } ).format( value )} ${unit} / person`;
+
+}
+
+function formatCompactTick( value ) {
+
+  if ( value === 0 ) {
+
+    return '0';
+
+  }
+
+  if ( value >= 1000 ) {
+
+    return `${Math.round( value / 1000 )}k`;
+
+  }
+
+  return new Intl.NumberFormat( 'en-US', {
+    maximumFractionDigits: 0,
+  } ).format( value );
+
+}
+
+function roundUpToStep( value, step ) {
+
+  return Math.max( step, Math.ceil( value / step ) * step );
 
 }
 
@@ -69,12 +80,36 @@ function getEmptySceneState( fallbackState = {} ) {
 
 }
 
-function createPanelSectionLabel( text ) {
+function createStyledElement( tagName, style, text = '' ) {
 
-  const element = document.createElement( 'p' );
-  element.setAttribute( 'style', panelStyles.label );
+  const element = document.createElement( tagName );
+  element.setAttribute( 'style', style );
   element.textContent = text;
   return element;
+
+}
+
+function updateLabelSprite( spriteController, position ) {
+
+  spriteController.sprite.position.copy( position );
+
+}
+
+function createTrackedTextSprite( collection, parent, options, position ) {
+
+  const controller = createTextSprite( options );
+  updateLabelSprite( controller, position );
+  parent.add( controller.sprite );
+  collection.push( controller );
+  return controller;
+
+}
+
+function createTrackedMesh( collection, geometry, material ) {
+
+  const mesh = new THREE.Mesh( geometry, material );
+  collection.push( mesh );
+  return mesh;
 
 }
 
@@ -103,183 +138,294 @@ export const example1SceneDefinition = Object.freeze( {
   },
   createScene( context ) {
 
-    const root = new THREE.Group();
-    root.position.set( 0, 0, - 2.1 );
+    const {
+      chart,
+      xrPanel,
+      desktopPanel,
+      labelStyles,
+    } = example1VisualConfig;
 
+    const root = new THREE.Group();
     const chartRoot = new THREE.Group();
+    const scaffoldRoot = new THREE.Group();
     const labelRoot = new THREE.Group();
     const xrPanelRoot = new THREE.Group();
+
+    chartRoot.position.fromArray( chart.rootPosition );
     root.add( chartRoot );
-    root.add( labelRoot );
     root.add( xrPanelRoot );
+    chartRoot.add( scaffoldRoot );
+    chartRoot.add( labelRoot );
 
     const tempObject = new THREE.Object3D();
     const tempVector = new THREE.Vector3();
     const tempVector2 = new THREE.Vector3();
+    const tempVector3 = new THREE.Vector3();
     const tempForward = new THREE.Vector3();
     const tempRight = new THREE.Vector3();
+    const tempLeft = new THREE.Vector3();
+    const tempDirection = new THREE.Vector3();
+    const tempLookTarget = new THREE.Vector3();
     const tempQuaternion = new THREE.Quaternion();
+    const tempPanelTargetQuaternion = new THREE.Quaternion();
     const sliderPlane = new THREE.Plane();
     const sliderIntersection = new THREE.Vector3();
 
-    const loadingSprite = createTextSprite( {
-      text: 'Loading Example 1 dataset...',
-      worldHeight: 0.3,
-      fontSize: 54,
-    } );
-    loadingSprite.sprite.position.set( 0, 1.4, 0 );
-    root.add( loadingSprite.sprite );
+    const panelHoverSources = new Set();
+    const sliderHoverSources = new Set();
+    const labelCollections = {
+      countries: [],
+      sources: [],
+      axes: [],
+      ticks: [],
+      panel: [],
+    };
+    const trackedMeshes = [];
+    const uiSurfaces = [];
+    const datumEntries = [];
+    const datumEntryById = new Map();
+    const tickMeshes = [];
+    const currentHeights = [];
+    const startHeights = [];
+    const targetHeights = [];
+    const hoveredDatumIdsBySource = new Map();
 
-    const titleSprite = createTextSprite( {
-      text: 'Example 1',
-      worldHeight: 0.28,
-      fontSize: 62,
-      backgroundColor: 'rgba(8, 12, 20, 0.68)',
-      borderColor: 'rgba(122, 166, 255, 0.2)',
-    } );
-    const yearSprite = createTextSprite( {
-      text: 'Year: --',
-      worldHeight: 0.18,
-      fontSize: 44,
-      backgroundColor: 'rgba(8, 12, 20, 0.68)',
-      borderColor: 'rgba(255, 255, 255, 0.14)',
-    } );
-    const footerSprite = createTextSprite( {
-      text: 'Source loading...',
-      worldHeight: 0.14,
-      fontSize: 28,
-      backgroundColor: 'rgba(8, 12, 20, 0.58)',
-      borderColor: 'rgba(255, 255, 255, 0.08)',
-    } );
-    const tooltipSprite = createTextSprite( {
-      text: '',
-      worldHeight: 0.22,
-      fontSize: 36,
-      backgroundColor: 'rgba(6, 10, 18, 0.88)',
-      borderColor: 'rgba(255, 255, 255, 0.18)',
-    } );
-    tooltipSprite.sprite.visible = false;
+    let barsMesh = null;
+    let dataset = null;
+    let displayMax = DISPLAY_MAX_STEP;
+    let loadStatus = 'loading';
+    let selectedYear = null;
+    let selectedDatumId = null;
+    let pendingSceneState = getEmptySceneState();
+    let currentHoveredDatumId = null;
+    let animationElapsed = chart.animationDuration;
+    let barMatrixDirty = false;
+    let xrDragSource = null;
+    let xrPanelNeedsReanchor = false;
 
-    labelRoot.add( titleSprite.sprite );
-    labelRoot.add( yearSprite.sprite );
-    labelRoot.add( footerSprite.sprite );
-    labelRoot.add( tooltipSprite.sprite );
+    let desktopPanelNode = null;
+    let desktopYearValue = null;
+    let desktopSlider = null;
+    let desktopStatusValue = null;
+    let desktopSelectionValue = null;
+    let desktopCitationValue = null;
 
-    titleSprite.sprite.position.set( 0, 3.38, 0 );
-    yearSprite.sprite.position.set( 0, 3.02, 0 );
-    footerSprite.sprite.position.set( 0, 0.28, 2.18 );
-
-    const platform = new THREE.Mesh(
-      new THREE.BoxGeometry( 5.6, 0.12, 4.6 ),
+    const stageMesh = createTrackedMesh(
+      trackedMeshes,
+      new THREE.BoxGeometry( 1, 1, 1 ),
       new THREE.MeshStandardMaterial( {
-        color: 0x101826,
-        emissive: 0x050b14,
-        roughness: 0.9,
-        metalness: 0.08,
+        color: chart.platformColor,
+        emissive: chart.platformEmissive,
+        roughness: 0.92,
+        metalness: 0.06,
       } ),
     );
-    platform.position.set( 0, 0.02, 0 );
-    chartRoot.add( platform );
+    scaffoldRoot.add( stageMesh );
 
-    const highlightMesh = new THREE.Mesh(
+    const countryRailMesh = createTrackedMesh(
+      trackedMeshes,
+      new THREE.BoxGeometry( 1, 1, 1 ),
+      new THREE.MeshStandardMaterial( {
+        color: chart.countryRailColor,
+        emissive: chart.countryRailEmissive,
+        roughness: 0.9,
+        metalness: 0.06,
+      } ),
+    );
+    scaffoldRoot.add( countryRailMesh );
+
+    const sourceRailMesh = createTrackedMesh(
+      trackedMeshes,
+      new THREE.BoxGeometry( 1, 1, 1 ),
+      new THREE.MeshStandardMaterial( {
+        color: chart.sourceRailColor,
+        emissive: chart.sourceRailEmissive,
+        roughness: 0.9,
+        metalness: 0.06,
+      } ),
+    );
+    scaffoldRoot.add( sourceRailMesh );
+
+    const yAxisSpineMesh = createTrackedMesh(
+      trackedMeshes,
+      new THREE.BoxGeometry( 1, 1, 1 ),
+      new THREE.MeshStandardMaterial( {
+        color: chart.yAxisColor,
+        emissive: chart.yAxisEmissive,
+        roughness: 0.62,
+        metalness: 0.14,
+      } ),
+    );
+    scaffoldRoot.add( yAxisSpineMesh );
+
+    const highlightMesh = createTrackedMesh(
+      trackedMeshes,
       new THREE.BoxGeometry( 1, 1, 1 ),
       new THREE.MeshBasicMaterial( {
-        color: 0xf7f0ca,
+        color: chart.highlightColor,
         wireframe: true,
         transparent: true,
-        opacity: 0.95,
+        opacity: chart.highlightOpacity,
+        depthWrite: false,
         toneMapped: false,
       } ),
     );
     highlightMesh.visible = false;
     chartRoot.add( highlightMesh );
 
-    const panelBackground = new THREE.Mesh(
-      new THREE.PlaneGeometry( XR_PANEL_WIDTH, XR_PANEL_HEIGHT ),
+    const tooltipSprite = createTextSprite( {
+      ...labelStyles.tooltip,
+      text: '',
+    } );
+    tooltipSprite.sprite.visible = false;
+    labelRoot.add( tooltipSprite.sprite );
+
+    const panelBackground = createTrackedMesh(
+      trackedMeshes,
+      new THREE.PlaneGeometry( xrPanel.width, xrPanel.height ),
       new THREE.MeshStandardMaterial( {
-        color: 0x101924,
-        emissive: 0x08111a,
-        roughness: 0.84,
+        color: xrPanel.backgroundColor,
+        emissive: xrPanel.backgroundEmissive,
+        transparent: true,
+        opacity: xrPanel.backgroundOpacity,
+        roughness: 0.86,
         metalness: 0.06,
         side: THREE.DoubleSide,
       } ),
     );
-    panelBackground.position.set( 0, 1.15, 0 );
     xrPanelRoot.add( panelBackground );
 
-    const panelTitleSprite = createTextSprite( {
-      text: 'Energy Year',
-      worldHeight: 0.18,
-      fontSize: 42,
-      backgroundColor: 'rgba(0,0,0,0)',
-      borderColor: 'rgba(0,0,0,0)',
-      borderWidth: 0,
-    } );
-    const panelYearSprite = createTextSprite( {
-      text: '--',
-      worldHeight: 0.22,
-      fontSize: 48,
-      backgroundColor: 'rgba(8, 12, 20, 0.72)',
-      borderColor: 'rgba(122, 166, 255, 0.18)',
-    } );
-    panelTitleSprite.sprite.position.set( 0, 1.52, 0.01 );
-    panelYearSprite.sprite.position.set( 0, 1.25, 0.01 );
-    xrPanelRoot.add( panelTitleSprite.sprite );
-    xrPanelRoot.add( panelYearSprite.sprite );
-
-    const sliderTrack = new THREE.Mesh(
-      new THREE.BoxGeometry( XR_PANEL_TRACK_LENGTH, 0.03, 0.03 ),
-      new THREE.MeshStandardMaterial( {
-        color: 0x6e8fb8,
-        emissive: 0x14263b,
-        roughness: 0.68,
-        metalness: 0.14,
+    const panelEdge = createTrackedMesh(
+      trackedMeshes,
+      new THREE.PlaneGeometry( xrPanel.width - 0.018, xrPanel.height - 0.018 ),
+      new THREE.MeshBasicMaterial( {
+        color: xrPanel.edgeColor,
+        transparent: true,
+        opacity: xrPanel.edgeOpacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
       } ),
     );
-    sliderTrack.position.set( 0, 0.88, 0.03 );
+    panelEdge.position.z = 0.002;
+    xrPanelRoot.add( panelEdge );
+
+    createTrackedTextSprite(
+      labelCollections.panel,
+      xrPanelRoot,
+      {
+        ...labelStyles.panelTitle,
+        text: 'ENERGY YEAR',
+      },
+      new THREE.Vector3( 0, xrPanel.titleY, xrPanel.contentZ ),
+    );
+    const panelYearSprite = createTrackedTextSprite(
+      labelCollections.panel,
+      xrPanelRoot,
+      {
+        ...labelStyles.panelYear,
+        text: '--',
+      },
+      new THREE.Vector3( 0, xrPanel.yearY, xrPanel.contentZ ),
+    );
+    const panelHelperSprite = createTrackedTextSprite(
+      labelCollections.panel,
+      xrPanelRoot,
+      {
+        ...labelStyles.panelHelper,
+        text: 'Loading energy dataset...',
+      },
+      new THREE.Vector3( 0, xrPanel.helperY, xrPanel.contentZ ),
+    );
+    const panelMinYearSprite = createTrackedTextSprite(
+      labelCollections.panel,
+      xrPanelRoot,
+      {
+        ...labelStyles.panelRange,
+        text: '--',
+      },
+      new THREE.Vector3( - xrPanel.sliderTrackLength * 0.5, xrPanel.rangeLabelY, xrPanel.contentZ ),
+    );
+    const panelMaxYearSprite = createTrackedTextSprite(
+      labelCollections.panel,
+      xrPanelRoot,
+      {
+        ...labelStyles.panelRange,
+        text: '--',
+      },
+      new THREE.Vector3( xrPanel.sliderTrackLength * 0.5, xrPanel.rangeLabelY, xrPanel.contentZ ),
+    );
+
+    const sliderTrack = createTrackedMesh(
+      trackedMeshes,
+      new THREE.BoxGeometry( 1, 1, 1 ),
+      new THREE.MeshStandardMaterial( {
+        color: xrPanel.sliderTrackColor,
+        emissive: xrPanel.sliderTrackEmissive,
+        roughness: 0.74,
+        metalness: 0.12,
+      } ),
+    );
+    sliderTrack.scale.set( xrPanel.sliderTrackLength, xrPanel.sliderTrackHeight, xrPanel.sliderTrackDepth );
+    sliderTrack.position.set( 0, xrPanel.trackY, 0.014 );
     xrPanelRoot.add( sliderTrack );
 
-    const sliderKnob = new THREE.Mesh(
-      new THREE.CylinderGeometry( 0.045, 0.045, 0.05, 20 ),
+    const sliderFill = createTrackedMesh(
+      trackedMeshes,
+      new THREE.BoxGeometry( 1, 1, 1 ),
       new THREE.MeshStandardMaterial( {
-        color: 0xf4f8ff,
-        emissive: 0x1e324a,
-        roughness: 0.4,
+        color: xrPanel.sliderFillColor,
+        emissive: xrPanel.sliderFillEmissive,
+        roughness: 0.48,
+        metalness: 0.08,
+      } ),
+    );
+    sliderFill.position.set( - xrPanel.sliderTrackLength * 0.5, xrPanel.trackY, 0.018 );
+    xrPanelRoot.add( sliderFill );
+
+    const sliderKnob = createTrackedMesh(
+      trackedMeshes,
+      new THREE.CylinderGeometry(
+        xrPanel.sliderKnobRadius,
+        xrPanel.sliderKnobRadius,
+        xrPanel.sliderKnobDepth,
+        24,
+      ),
+      new THREE.MeshStandardMaterial( {
+        color: xrPanel.sliderKnobColor,
+        emissive: xrPanel.sliderKnobEmissive,
+        roughness: 0.34,
         metalness: 0.08,
       } ),
     );
     sliderKnob.rotation.z = Math.PI * 0.5;
-    sliderKnob.position.set( 0, 0.88, 0.06 );
+    sliderKnob.position.set( - xrPanel.sliderTrackLength * 0.5, xrPanel.trackY, 0.028 );
     xrPanelRoot.add( sliderKnob );
     xrPanelRoot.visible = false;
 
-    const countryLabelSprites = [];
-    const sourceLabelSprites = [];
-    let barsMesh = null;
-    let desktopPanel = null;
-    let desktopYearValue = null;
-    let desktopSlider = null;
-    let desktopSelectionValue = null;
-    let desktopCitationValue = null;
-    let dataset = null;
-    let loadStatus = 'loading';
-    let selectedYear = null;
-    let selectedDatumId = null;
-    let pendingSceneState = getEmptySceneState();
-    let currentHoveredDatumId = null;
-    const hoveredDatumIdsBySource = new Map();
-    const instanceEntries = [];
-    const currentHeights = [];
-    const startHeights = [];
-    const targetHeights = [];
-    let animationElapsed = BAR_ANIMATION_DURATION;
-    let barMatrixDirty = false;
-    let xrDragSource = null;
+    function getChartWidth() {
 
-    function disposeLabels() {
+      return Math.max( 0, ( dataset?.countries.length - 1 || 0 ) * chart.countrySpacing );
 
-      countryLabelSprites.splice( 0 ).forEach( ( spriteController ) => spriteController.dispose() );
-      sourceLabelSprites.splice( 0 ).forEach( ( spriteController ) => spriteController.dispose() );
+    }
+
+    function getChartDepth() {
+
+      return Math.max( 0, ( dataset?.sources.length - 1 || 0 ) * chart.sourceSpacing );
+
+    }
+
+    function getDisplayTickValues() {
+
+      return Array.from( { length: DISPLAY_TICK_COUNT }, ( _, index ) => {
+
+        const ratio = index / ( DISPLAY_TICK_COUNT - 1 );
+        const rawValue = displayMax * ratio;
+        return index === 0
+          ? 0
+          : Math.round( rawValue / 1000 ) * 1000;
+
+      } );
 
     }
 
@@ -290,45 +436,44 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
-    function getBarHeightForValue( value ) {
+    function getSliderRatioForYear( year ) {
 
-      if ( ! dataset ) {
+      if ( ! dataset || dataset.years.length <= 1 ) {
 
-        return 0.01;
+        return 0;
 
       }
 
-      return Math.max( value > 0 ? 0.03 : 0.008, value / dataset.maxValue * MAX_BAR_HEIGHT );
+      return getIndexForYear( year ) / ( dataset.years.length - 1 );
+
+    }
+
+    function getBarHeightForValue( value ) {
+
+      return Math.max(
+        value > 0 ? 0.03 : 0.01,
+        value / displayMax * chart.maxBarHeight,
+      );
 
     }
 
     function getDatumForId( datumId ) {
 
       const parsedDatumId = parseDatumId( datumId );
+      const entry = datumEntryById.get( datumId );
 
-      if ( ! parsedDatumId || ! dataset ) {
-
-        return null;
-
-      }
-
-      const instanceIndex = instanceEntries.findIndex( ( entry ) => entry.datumId === datumId );
-
-      if ( instanceIndex < 0 ) {
+      if ( ! parsedDatumId || ! entry || ! dataset ) {
 
         return null;
 
       }
-
-      const value = dataset.getValue( selectedYear, parsedDatumId.country, parsedDatumId.source );
 
       return {
         datumId,
         country: parsedDatumId.country,
         source: parsedDatumId.source,
-        instanceIndex,
-        value,
-        ...instanceEntries[ instanceIndex ],
+        value: dataset.getValue( selectedYear, parsedDatumId.country, parsedDatumId.source ),
+        ...entry,
       };
 
     }
@@ -339,114 +484,35 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
-    function updateDesktopSelectionText() {
+    function clearLabelCollection( collectionName ) {
 
-      if ( ! desktopSelectionValue ) {
+      labelCollections[ collectionName ].splice( 0 ).forEach( ( controller ) => {
 
-        return;
+        controller.sprite.removeFromParent();
+        controller.dispose();
 
-      }
-
-      const pinnedDatum = getDatumForId( selectedDatumId );
-
-      if ( ! pinnedDatum ) {
-
-        desktopSelectionValue.textContent = 'No bar pinned yet. Hover for a quick tooltip or click/select a bar to pin it.';
-        return;
-
-      }
-
-      desktopSelectionValue.textContent = `${pinnedDatum.country} - ${pinnedDatum.source} - ${selectedYear} - ${formatValue( pinnedDatum.value, dataset.unit )}`;
+      } );
 
     }
 
-    function updateDesktopPanel() {
+    function clearChartLabels() {
 
-      if ( ! desktopYearValue || ! desktopSlider ) {
-
-        return;
-
-      }
-
-      if ( ! dataset ) {
-
-        desktopYearValue.textContent = 'Loading dataset...';
-        desktopSlider.disabled = true;
-        updateDesktopSelectionText();
-        return;
-
-      }
-
-      desktopSlider.disabled = false;
-      desktopSlider.min = '0';
-      desktopSlider.max = String( dataset.years.length - 1 );
-      desktopSlider.step = '1';
-      desktopSlider.value = String( getIndexForYear( selectedYear ) );
-      desktopYearValue.textContent = `Showing ${selectedYear}`;
-      desktopCitationValue.textContent = dataset.citation;
-      updateDesktopSelectionText();
+      clearLabelCollection( 'countries' );
+      clearLabelCollection( 'sources' );
+      clearLabelCollection( 'axes' );
+      clearLabelCollection( 'ticks' );
 
     }
 
-    function updateTextOverlays() {
+    function clearTickMeshes() {
 
-      if ( ! dataset ) {
+      tickMeshes.splice( 0 ).forEach( ( mesh ) => {
 
-        yearSprite.setText( 'Year: --' );
-        panelYearSprite.setText( '--' );
-        footerSprite.setText( 'OWID dataset loading...' );
-        return;
+        mesh.removeFromParent();
+        mesh.geometry.dispose();
+        mesh.material.dispose();
 
-      }
-
-      yearSprite.setText( `Year ${selectedYear}` );
-      panelYearSprite.setText( String( selectedYear ) );
-      footerSprite.setText( `${dataset.citation}\nOWID chart reference` );
-
-    }
-
-    function updateBarsImmediatelyFromCurrentHeights() {
-
-      if ( ! barsMesh ) {
-
-        return;
-
-      }
-
-      for ( let index = 0; index < instanceEntries.length; index += 1 ) {
-
-        const entry = instanceEntries[ index ];
-        const height = currentHeights[ index ] ?? 0.01;
-        tempObject.position.set( entry.x, BAR_BASE_Y + height * 0.5, entry.z );
-        tempObject.scale.set( BAR_WIDTH, height, BAR_DEPTH );
-        tempObject.updateMatrix();
-        barsMesh.setMatrixAt( index, tempObject.matrix );
-
-      }
-
-      barsMesh.instanceMatrix.needsUpdate = true;
-      barMatrixDirty = false;
-
-    }
-
-    function applyTargetHeightsForYear( year ) {
-
-      if ( ! dataset ) {
-
-        return;
-
-      }
-
-      for ( let index = 0; index < instanceEntries.length; index += 1 ) {
-
-        const entry = instanceEntries[ index ];
-        startHeights[ index ] = currentHeights[ index ] ?? 0.01;
-        targetHeights[ index ] = getBarHeightForValue( dataset.getValue( year, entry.country, entry.source ) );
-
-      }
-
-      animationElapsed = 0;
-      barMatrixDirty = true;
+      } );
 
     }
 
@@ -464,14 +530,26 @@ export const example1SceneDefinition = Object.freeze( {
 
       const currentHeight = currentHeights[ activeDatum.instanceIndex ] ?? 0.01;
       highlightMesh.visible = true;
-      highlightMesh.position.set( activeDatum.x, BAR_BASE_Y + currentHeight * 0.5, activeDatum.z );
-      highlightMesh.scale.set( BAR_WIDTH + 0.04, currentHeight + 0.06, BAR_DEPTH + 0.04 );
+      highlightMesh.position.set(
+        activeDatum.x,
+        chart.barBaseY + currentHeight * 0.5,
+        activeDatum.z,
+      );
+      highlightMesh.scale.set(
+        chart.barWidth + chart.highlightPaddingX,
+        currentHeight + chart.highlightPaddingY,
+        chart.barDepth + chart.highlightPaddingZ,
+      );
 
       tooltipSprite.setText(
-        `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} - ${formatValue( activeDatum.value, dataset.unit )}`,
+        `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
       );
       tooltipSprite.sprite.visible = true;
-      tooltipSprite.sprite.position.set( activeDatum.x, BAR_BASE_Y + currentHeight + 0.34, activeDatum.z );
+      tooltipSprite.sprite.position.set(
+        activeDatum.x,
+        chart.barBaseY + currentHeight + 0.2,
+        activeDatum.z,
+      );
 
     }
 
@@ -501,6 +579,193 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
+    function updateDesktopSelectionText() {
+
+      if ( ! desktopSelectionValue ) {
+
+        return;
+
+      }
+
+      const pinnedDatum = getDatumForId( selectedDatumId );
+
+      if ( ! pinnedDatum ) {
+
+        desktopSelectionValue.textContent = 'Hover for a quick tooltip or pin a bar to keep a country-source value in focus.';
+        return;
+
+      }
+
+      desktopSelectionValue.textContent = `${pinnedDatum.country} · ${pinnedDatum.source} · ${selectedYear} · ${formatValue( pinnedDatum.value, dataset.unit )}`;
+
+    }
+
+    function updatePanelVisualState() {
+
+      const isHovered = panelHoverSources.size > 0 || sliderHoverSources.size > 0 || xrDragSource !== null;
+
+      panelBackground.material.emissive.setHex( isHovered ? 0x0d1b29 : xrPanel.backgroundEmissive );
+      panelEdge.material.color.setHex( isHovered ? xrPanel.hoverAccentColor : xrPanel.edgeColor );
+      panelEdge.material.opacity = isHovered ? 0.28 : xrPanel.edgeOpacity;
+      sliderTrack.material.emissive.setHex( sliderHoverSources.size > 0 || xrDragSource !== null ? 0x17344d : xrPanel.sliderTrackEmissive );
+      sliderFill.material.emissive.setHex( sliderHoverSources.size > 0 || xrDragSource !== null ? 0x1b5e82 : xrPanel.sliderFillEmissive );
+      sliderKnob.scale.setScalar( sliderHoverSources.size > 0 || xrDragSource !== null ? 1.08 : 1 );
+
+    }
+
+    function updateXRPanelText() {
+
+      if ( loadStatus === 'error' ) {
+
+        panelYearSprite.setText( 'LOAD FAILED' );
+        panelHelperSprite.setText( 'Check the local OWID files and reload.' );
+        panelMinYearSprite.setText( '--' );
+        panelMaxYearSprite.setText( '--' );
+        return;
+
+      }
+
+      if ( ! dataset ) {
+
+        panelYearSprite.setText( '--' );
+        panelHelperSprite.setText( 'Loading energy dataset...' );
+        panelMinYearSprite.setText( '--' );
+        panelMaxYearSprite.setText( '--' );
+        return;
+
+      }
+
+      panelYearSprite.setText( String( selectedYear ) );
+      panelMinYearSprite.setText( String( dataset.years[ 0 ] ) );
+      panelMaxYearSprite.setText( String( dataset.years.at( - 1 ) ) );
+
+      const pinnedDatum = getDatumForId( selectedDatumId );
+      panelHelperSprite.setText(
+        pinnedDatum
+          ? `${pinnedDatum.country} · ${pinnedDatum.source}`
+          : 'Point and drag the slider to scrub years.',
+      );
+
+    }
+
+    function updateDesktopPanel() {
+
+      if ( ! desktopYearValue || ! desktopSlider || ! desktopStatusValue || ! desktopCitationValue ) {
+
+        return;
+
+      }
+
+      if ( loadStatus === 'error' ) {
+
+        desktopYearValue.textContent = 'Dataset unavailable';
+        desktopStatusValue.textContent = 'Example 1 failed to load. Check the local OWID dataset files.';
+        desktopSlider.disabled = true;
+        desktopCitationValue.textContent = 'No citation available because the metadata request failed.';
+        updateDesktopSelectionText();
+        return;
+
+      }
+
+      if ( ! dataset ) {
+
+        desktopYearValue.textContent = 'Loading dataset...';
+        desktopStatusValue.textContent = 'Fetching the OWID CSV and metadata for the chart.';
+        desktopSlider.disabled = true;
+        desktopCitationValue.textContent = 'Loading citation...';
+        updateDesktopSelectionText();
+        return;
+
+      }
+
+      desktopSlider.disabled = false;
+      desktopSlider.min = '0';
+      desktopSlider.max = String( dataset.years.length - 1 );
+      desktopSlider.step = '1';
+      desktopSlider.value = String( getIndexForYear( selectedYear ) );
+      desktopYearValue.textContent = `Showing ${selectedYear}`;
+      desktopStatusValue.textContent = `Y-axis display max: ${formatCompactTick( displayMax )} ${dataset.unit} / person`;
+      desktopCitationValue.textContent = dataset.citation;
+      updateDesktopSelectionText();
+
+    }
+
+    function syncXRSliderKnob() {
+
+      if ( ! dataset || loadStatus === 'error' ) {
+
+        sliderFill.visible = false;
+        sliderKnob.position.x = - xrPanel.sliderTrackLength * 0.5;
+        return;
+
+      }
+
+      const ratio = THREE.MathUtils.clamp( getSliderRatioForYear( selectedYear ), 0, 1 );
+      const knobX = THREE.MathUtils.lerp(
+        - xrPanel.sliderTrackLength * 0.5,
+        xrPanel.sliderTrackLength * 0.5,
+        ratio,
+      );
+      const fillWidth = Math.max( 0.001, xrPanel.sliderTrackLength * ratio );
+
+      sliderFill.visible = true;
+      sliderKnob.position.x = knobX;
+      sliderFill.scale.set( fillWidth, xrPanel.sliderTrackHeight * 0.74, xrPanel.sliderTrackDepth * 0.72 );
+      sliderFill.position.x = - xrPanel.sliderTrackLength * 0.5 + fillWidth * 0.5;
+
+    }
+
+    function updateBarsImmediatelyFromCurrentHeights() {
+
+      if ( ! barsMesh ) {
+
+        return;
+
+      }
+
+      for ( let index = 0; index < datumEntries.length; index += 1 ) {
+
+        const entry = datumEntries[ index ];
+        const height = currentHeights[ index ] ?? 0.01;
+        tempObject.position.set(
+          entry.x,
+          chart.barBaseY + height * 0.5,
+          entry.z,
+        );
+        tempObject.scale.set( chart.barWidth, height, chart.barDepth );
+        tempObject.updateMatrix();
+        barsMesh.setMatrixAt( index, tempObject.matrix );
+
+      }
+
+      barsMesh.instanceMatrix.needsUpdate = true;
+      barMatrixDirty = false;
+
+    }
+
+    function applyTargetHeightsForYear( year ) {
+
+      if ( ! dataset ) {
+
+        return;
+
+      }
+
+      for ( let index = 0; index < datumEntries.length; index += 1 ) {
+
+        const entry = datumEntries[ index ];
+        startHeights[ index ] = currentHeights[ index ] ?? 0.01;
+        targetHeights[ index ] = getBarHeightForValue(
+          dataset.getValue( year, entry.country, entry.source ),
+        );
+
+      }
+
+      animationElapsed = 0;
+      barMatrixDirty = true;
+
+    }
+
     function setSelectedDatumId( nextDatumId, { source = 'scene', shouldLog = true } = {} ) {
 
       const normalizedDatumId = typeof nextDatumId === 'string' ? nextDatumId : null;
@@ -513,15 +778,18 @@ export const example1SceneDefinition = Object.freeze( {
 
       selectedDatumId = normalizedDatumId;
       updateDesktopSelectionText();
+      updateXRPanelText();
       updateTooltipAndHighlight();
 
       if ( shouldLog ) {
 
         const parsedDatum = parseDatumId( normalizedDatumId );
-        const label = parsedDatum
-          ? `Select ${parsedDatum.country} ${parsedDatum.source}`
-          : 'Clear Example 1 Selection';
-        context.recordSceneStateChange( { source, label } );
+        context.recordSceneStateChange( {
+          source,
+          label: parsedDatum
+            ? `Select ${parsedDatum.country} ${parsedDatum.source}`
+            : 'Clear Example 1 Selection',
+        } );
 
       }
 
@@ -553,10 +821,12 @@ export const example1SceneDefinition = Object.freeze( {
 
       } else {
 
-        for ( let index = 0; index < instanceEntries.length; index += 1 ) {
+        for ( let index = 0; index < datumEntries.length; index += 1 ) {
 
-          const entry = instanceEntries[ index ];
-          const height = getBarHeightForValue( dataset.getValue( nextYear, entry.country, entry.source ) );
+          const entry = datumEntries[ index ];
+          const height = getBarHeightForValue(
+            dataset.getValue( nextYear, entry.country, entry.source ),
+          );
           currentHeights[ index ] = height;
           startHeights[ index ] = height;
           targetHeights[ index ] = height;
@@ -568,7 +838,8 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       updateDesktopPanel();
-      updateTextOverlays();
+      updateXRPanelText();
+      syncXRSliderKnob();
       updateTooltipAndHighlight();
 
       if ( shouldLog ) {
@@ -582,15 +853,7 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
-    function buildChart() {
-
-      if ( ! dataset ) {
-
-        return;
-
-      }
-
-      disposeLabels();
+    function clearChartGeometry() {
 
       if ( barsMesh ) {
 
@@ -602,72 +865,148 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
-      const chartWidth = ( dataset.countries.length - 1 ) * COUNTRY_SPACING;
-      const chartDepth = ( dataset.sources.length - 1 ) * SOURCE_SPACING;
-      platform.scale.set(
-        ( chartWidth + 1.8 ) / 5.6,
-        1,
-        ( chartDepth + 1.8 ) / 4.6,
+      datumEntries.splice( 0 );
+      datumEntryById.clear();
+      currentHeights.length = 0;
+      startHeights.length = 0;
+      targetHeights.length = 0;
+      clearTickMeshes();
+      clearChartLabels();
+      hoveredDatumIdsBySource.clear();
+      currentHoveredDatumId = null;
+      highlightMesh.visible = false;
+      tooltipSprite.sprite.visible = false;
+
+    }
+
+    function buildChart() {
+
+      if ( ! dataset ) {
+
+        return;
+
+      }
+
+      clearChartGeometry();
+      displayMax = roundUpToStep( dataset.maxValue, DISPLAY_MAX_STEP );
+
+      const chartWidth = getChartWidth();
+      const chartDepth = getChartDepth();
+      const stageWidth = chartWidth + chart.platformPaddingX;
+      const stageDepth = chartDepth + chart.platformPaddingZ;
+      const countryRailZ = chartDepth * 0.5 + chart.countryRailOffsetZ;
+      const sourceRailX = - chartWidth * 0.5 - chart.sourceRailOffsetX;
+      const yAxisX = chartWidth * 0.5 + chart.yAxisOffsetX;
+      const yAxisZ = chartDepth * 0.5 + chart.yAxisOffsetZ;
+
+      stageMesh.scale.set( stageWidth, chart.platformHeight, stageDepth );
+      stageMesh.position.set( 0, chart.platformHeight * 0.5, 0 );
+
+      countryRailMesh.scale.set(
+        chartWidth + 0.92,
+        chart.countryRailHeight,
+        chart.countryRailDepth,
+      );
+      countryRailMesh.position.set(
+        0,
+        chart.platformHeight + chart.countryRailHeight * 0.5,
+        countryRailZ,
+      );
+
+      sourceRailMesh.scale.set(
+        chart.sourceRailWidth,
+        chart.sourceRailHeight,
+        chartDepth + 0.84,
+      );
+      sourceRailMesh.position.set(
+        sourceRailX,
+        chart.platformHeight + chart.sourceRailHeight * 0.5,
+        0,
+      );
+
+      yAxisSpineMesh.scale.set(
+        chart.yAxisWidth,
+        chart.maxBarHeight + 0.14,
+        chart.yAxisDepth,
+      );
+      yAxisSpineMesh.position.set(
+        yAxisX,
+        chart.barBaseY + chart.maxBarHeight * 0.5,
+        yAxisZ,
       );
 
       const geometry = new THREE.BoxGeometry( 1, 1, 1 );
       const material = new THREE.MeshStandardMaterial( {
         color: 0xffffff,
-        roughness: 0.38,
+        roughness: 0.32,
         metalness: 0.08,
       } );
-      barsMesh = new THREE.InstancedMesh( geometry, material, dataset.countries.length * dataset.sources.length );
+      barsMesh = new THREE.InstancedMesh(
+        geometry,
+        material,
+        dataset.countries.length * dataset.sources.length,
+      );
       barsMesh.instanceMatrix.setUsage( THREE.DynamicDrawUsage );
       barsMesh.castShadow = true;
       barsMesh.receiveShadow = true;
       chartRoot.add( barsMesh );
 
-      instanceEntries.splice( 0 );
-
       let instanceIndex = 0;
+
       dataset.countries.forEach( ( country, countryIndex ) => {
 
-        const x = countryIndex * COUNTRY_SPACING - chartWidth * 0.5;
-        const labelSprite = createTextSprite( {
-          text: country,
-          worldHeight: 0.16,
-          fontSize: 32,
-          backgroundColor: 'rgba(8, 12, 20, 0.68)',
-          borderColor: 'rgba(255, 255, 255, 0.08)',
-        } );
-        labelSprite.sprite.position.set( x, 0.22, chartDepth * 0.5 + 0.44 );
-        labelRoot.add( labelSprite.sprite );
-        countryLabelSprites.push( labelSprite );
+        const x = countryIndex * chart.countrySpacing - chartWidth * 0.5;
+
+        createTrackedTextSprite(
+          labelCollections.countries,
+          labelRoot,
+          {
+            ...labelStyles.country,
+            text: country,
+          },
+          new THREE.Vector3(
+            x,
+            chart.platformHeight + chart.countryRailHeight + 0.04,
+            countryRailZ + 0.18,
+          ),
+        );
 
         dataset.sources.forEach( ( source, sourceIndex ) => {
 
           if ( countryIndex === 0 ) {
 
-            const zLabel = sourceIndex * SOURCE_SPACING - chartDepth * 0.5;
-            const sourceLabel = createTextSprite( {
-              text: source,
-              worldHeight: 0.14,
-              fontSize: 30,
-              backgroundColor: 'rgba(8, 12, 20, 0.68)',
-              borderColor: 'rgba(255, 255, 255, 0.08)',
-            } );
-            sourceLabel.sprite.position.set( - chartWidth * 0.5 - 0.64, 0.32, zLabel );
-            labelRoot.add( sourceLabel.sprite );
-            sourceLabelSprites.push( sourceLabel );
+            const zLabel = sourceIndex * chart.sourceSpacing - chartDepth * 0.5;
+
+            createTrackedTextSprite(
+              labelCollections.sources,
+              labelRoot,
+              {
+                ...labelStyles.source,
+                text: source,
+              },
+              new THREE.Vector3(
+                sourceRailX - 0.25,
+                chart.platformHeight + chart.sourceRailHeight + 0.12,
+                zLabel,
+              ),
+            );
 
           }
 
-          const z = sourceIndex * SOURCE_SPACING - chartDepth * 0.5;
+          const z = sourceIndex * chart.sourceSpacing - chartDepth * 0.5;
           const datumId = buildDatumId( country, source );
           const color = new THREE.Color( EXAMPLE1_SOURCE_COLORS[ source ] );
-          instanceEntries.push( {
+          const entry = {
             datumId,
             country,
             source,
             instanceIndex,
             x,
             z,
-          } );
+          };
+
+          datumEntries.push( entry );
+          datumEntryById.set( datumId, entry );
           barsMesh.setColorAt( instanceIndex, color );
           currentHeights[ instanceIndex ] = 0.01;
           startHeights[ instanceIndex ] = 0.01;
@@ -684,47 +1023,87 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
-      titleSprite.setText( dataset.title );
-      footerSprite.setText( `${dataset.citation}\n${dataset.chartUrl}` );
+      createTrackedTextSprite(
+        labelCollections.axes,
+        labelRoot,
+        {
+          ...labelStyles.axisCaption,
+          text: 'COUNTRIES',
+        },
+        new THREE.Vector3( 0, 0.48, countryRailZ + 0.4 ),
+      );
 
-      const xAxisLabel = createTextSprite( {
-        text: 'Country',
-        worldHeight: 0.14,
-        fontSize: 32,
-        backgroundColor: 'rgba(8, 12, 20, 0.62)',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
-      } );
-      xAxisLabel.sprite.position.set( 0, 0.48, chartDepth * 0.5 + 0.82 );
-      labelRoot.add( xAxisLabel.sprite );
-      countryLabelSprites.push( xAxisLabel );
+      createTrackedTextSprite(
+        labelCollections.axes,
+        labelRoot,
+        {
+          ...labelStyles.axisCaption,
+          text: 'ENERGY SOURCES',
+        },
+        new THREE.Vector3( sourceRailX - 0.34, 0.58, 0 ),
+      );
 
-      const zAxisLabel = createTextSprite( {
-        text: 'Energy Source',
-        worldHeight: 0.14,
-        fontSize: 32,
-        backgroundColor: 'rgba(8, 12, 20, 0.62)',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
-      } );
-      zAxisLabel.sprite.position.set( - chartWidth * 0.5 - 1.02, 0.74, 0 );
-      labelRoot.add( zAxisLabel.sprite );
-      sourceLabelSprites.push( zAxisLabel );
+      createTrackedTextSprite(
+        labelCollections.axes,
+        labelRoot,
+        {
+          ...labelStyles.axisCaption,
+          text: 'PER-CAPITA ENERGY',
+        },
+        new THREE.Vector3( yAxisX + 0.36, chart.maxBarHeight + 0.42, yAxisZ ),
+      );
 
-      const yAxisLabel = createTextSprite( {
-        text: `Per-capita energy\n(${dataset.unit})`,
-        worldHeight: 0.18,
-        fontSize: 34,
-        backgroundColor: 'rgba(8, 12, 20, 0.62)',
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+      createTrackedTextSprite(
+        labelCollections.axes,
+        labelRoot,
+        {
+          ...labelStyles.axisUnit,
+          text: `${dataset.unit} / person`,
+        },
+        new THREE.Vector3( yAxisX + 0.3, chart.maxBarHeight + 0.2, yAxisZ ),
+      );
+
+      getDisplayTickValues().forEach( ( tickValue ) => {
+
+        const tickHeight = chart.barBaseY + tickValue / displayMax * chart.maxBarHeight;
+        const tickMesh = new THREE.Mesh(
+          new THREE.BoxGeometry( chart.yAxisTickLength, chart.yAxisTickHeight, chart.yAxisTickDepth ),
+          new THREE.MeshStandardMaterial( {
+            color: chart.yAxisTickColor,
+            emissive: 0x14263a,
+            roughness: 0.6,
+            metalness: 0.16,
+          } ),
+        );
+        tickMesh.position.set(
+          yAxisX - chart.yAxisTickLength * 0.5,
+          tickHeight,
+          yAxisZ,
+        );
+        chartRoot.add( tickMesh );
+        tickMeshes.push( tickMesh );
+
+        createTrackedTextSprite(
+          labelCollections.ticks,
+          labelRoot,
+          {
+            ...labelStyles.tick,
+            text: formatCompactTick( tickValue ),
+          },
+          new THREE.Vector3(
+            yAxisX - chart.yAxisTickLength - 0.06,
+            tickHeight,
+            yAxisZ,
+          ),
+        );
+
       } );
-      yAxisLabel.sprite.position.set( chartWidth * 0.5 + 0.8, 1.8, 0 );
-      labelRoot.add( yAxisLabel.sprite );
-      sourceLabelSprites.push( yAxisLabel );
 
       context.registerRaycastTarget( barsMesh, {
         onHoverChange( payload ) {
 
           const datumId = payload.isHovered && Number.isInteger( payload.instanceId )
-            ? instanceEntries[ payload.instanceId ]?.datumId ?? null
+            ? datumEntries[ payload.instanceId ]?.datumId ?? null
             : null;
           updateHoveredDatumFromSource( payload.source, datumId );
 
@@ -733,7 +1112,7 @@ export const example1SceneDefinition = Object.freeze( {
 
           if ( Number.isInteger( payload.instanceId ) ) {
 
-            setSelectedDatumId( instanceEntries[ payload.instanceId ]?.datumId ?? null, {
+            setSelectedDatumId( datumEntries[ payload.instanceId ]?.datumId ?? null, {
               source: payload.source,
               shouldLog: true,
             } );
@@ -753,35 +1132,9 @@ export const example1SceneDefinition = Object.freeze( {
         shouldLog: false,
       } );
       updateDesktopPanel();
-      updateTextOverlays();
+      updateXRPanelText();
+      syncXRSliderKnob();
       updateTooltipAndHighlight();
-      loadingSprite.sprite.visible = false;
-
-    }
-
-    function getSliderRatioForYear( year ) {
-
-      if ( ! dataset || dataset.years.length <= 1 ) {
-
-        return 0;
-
-      }
-
-      return getIndexForYear( year ) / ( dataset.years.length - 1 );
-
-    }
-
-    function syncXRSliderKnob() {
-
-      if ( ! dataset ) {
-
-        sliderKnob.position.x = - XR_PANEL_TRACK_LENGTH * 0.5;
-        return;
-
-      }
-
-      const ratio = getSliderRatioForYear( selectedYear );
-      sliderKnob.position.x = THREE.MathUtils.lerp( - XR_PANEL_TRACK_LENGTH * 0.5, XR_PANEL_TRACK_LENGTH * 0.5, ratio );
 
     }
 
@@ -797,8 +1150,8 @@ export const example1SceneDefinition = Object.freeze( {
       sliderTrack.getWorldPosition( tempVector );
       sliderTrack.getWorldQuaternion( tempQuaternion );
 
-      tempForward.set( 0, 0, 1 ).applyQuaternion( tempQuaternion );
-      sliderPlane.setFromNormalAndCoplanarPoint( tempForward, tempVector );
+      tempDirection.set( 0, 0, 1 ).applyQuaternion( tempQuaternion );
+      sliderPlane.setFromNormalAndCoplanarPoint( tempDirection, tempVector );
 
       const ray = new THREE.Ray( rayOrigin.clone(), rayDirection.clone() );
 
@@ -809,45 +1162,50 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       const localPoint = sliderTrack.worldToLocal( sliderIntersection.clone() );
-      const ratio = THREE.MathUtils.clamp( localPoint.x / XR_PANEL_TRACK_LENGTH + 0.5, 0, 1 );
+      const ratio = THREE.MathUtils.clamp(
+        localPoint.x / xrPanel.sliderTrackLength + 0.5,
+        0,
+        1,
+      );
       const nextIndex = Math.round( ratio * ( dataset.years.length - 1 ) );
       const nextYear = dataset.years[ nextIndex ];
       setSelectedYear( nextYear, { source, shouldLog: true, animate: true } );
-      syncXRSliderKnob();
 
     }
 
     function buildDesktopPanel() {
 
-      desktopPanel = document.createElement( 'section' );
-      desktopPanel.className = 'scene-panel-card';
-      desktopPanel.setAttribute( 'style', panelStyles.root );
+      desktopPanelNode = document.createElement( 'section' );
+      desktopPanelNode.className = 'scene-panel-card';
+      desktopPanelNode.setAttribute( 'style', desktopPanel.root );
 
-      const eyebrow = createPanelSectionLabel( 'Scene 1 - Semantic Replay' );
-      desktopPanel.appendChild( eyebrow );
+      desktopPanelNode.appendChild(
+        createStyledElement( 'p', desktopPanel.eyebrow, 'Scene 1 · Semantic Replay' ),
+      );
+      desktopPanelNode.appendChild(
+        createStyledElement( 'h2', desktopPanel.title, 'Per capita primary energy consumption by source' ),
+      );
+      desktopPanelNode.appendChild(
+        createStyledElement(
+          'p',
+          desktopPanel.body,
+          'Explore how a single year reshapes the 3D country-by-source energy matrix. Hover or pin a bar to inspect one country-source pair in detail.',
+        ),
+      );
 
-      const title = document.createElement( 'h2' );
-      title.setAttribute( 'style', panelStyles.title );
-      title.textContent = 'Per capita primary energy consumption by source';
-      desktopPanel.appendChild( title );
+      desktopPanelNode.appendChild(
+        createStyledElement( 'p', desktopPanel.sectionLabel, 'Year' ),
+      );
+      desktopYearValue = createStyledElement( 'p', desktopPanel.heroValue, 'Loading dataset...' );
+      desktopPanelNode.appendChild( desktopYearValue );
 
-      const subtitle = document.createElement( 'p' );
-      subtitle.setAttribute( 'style', panelStyles.body );
-      subtitle.textContent = 'Explore how the selected year reshapes a 3D country-by-source energy matrix. Hover or select bars to inspect a country-source pair in detail.';
-      desktopPanel.appendChild( subtitle );
-
-      const sliderLabel = createPanelSectionLabel( 'Year' );
-      desktopPanel.appendChild( sliderLabel );
-
-      desktopYearValue = document.createElement( 'p' );
-      desktopYearValue.setAttribute( 'style', panelStyles.body );
-      desktopYearValue.textContent = 'Loading dataset...';
-      desktopPanel.appendChild( desktopYearValue );
+      desktopStatusValue = createStyledElement( 'p', desktopPanel.status, 'Fetching the OWID dataset.' );
+      desktopPanelNode.appendChild( desktopStatusValue );
 
       desktopSlider = document.createElement( 'input' );
       desktopSlider.type = 'range';
       desktopSlider.disabled = true;
-      desktopSlider.setAttribute( 'style', panelStyles.slider );
+      desktopSlider.setAttribute( 'style', desktopPanel.slider );
       desktopSlider.addEventListener( 'input', () => {
 
         if ( ! dataset ) {
@@ -863,124 +1221,27 @@ export const example1SceneDefinition = Object.freeze( {
           shouldLog: true,
           animate: true,
         } );
-        syncXRSliderKnob();
 
       } );
-      desktopPanel.appendChild( desktopSlider );
+      desktopPanelNode.appendChild( desktopSlider );
 
-      const selectionLabel = createPanelSectionLabel( 'Pinned Selection' );
-      desktopPanel.appendChild( selectionLabel );
+      desktopPanelNode.appendChild(
+        createStyledElement( 'p', desktopPanel.sectionLabel, 'Pinned Selection' ),
+      );
+      desktopSelectionValue = createStyledElement( 'p', desktopPanel.detail, 'Hover for a quick tooltip or pin a bar to keep it in focus.' );
+      desktopPanelNode.appendChild( desktopSelectionValue );
 
-      desktopSelectionValue = document.createElement( 'p' );
-      desktopSelectionValue.setAttribute( 'style', panelStyles.detail );
-      desktopSelectionValue.textContent = 'No bar pinned yet.';
-      desktopPanel.appendChild( desktopSelectionValue );
+      desktopPanelNode.appendChild(
+        createStyledElement( 'p', desktopPanel.sectionLabel, 'Source' ),
+      );
+      desktopCitationValue = createStyledElement( 'p', desktopPanel.detail, 'Loading citation...' );
+      desktopPanelNode.appendChild( desktopCitationValue );
 
-      const citationLabel = createPanelSectionLabel( 'Source' );
-      desktopPanel.appendChild( citationLabel );
-
-      desktopCitationValue = document.createElement( 'p' );
-      desktopCitationValue.setAttribute( 'style', panelStyles.detail );
-      desktopCitationValue.textContent = 'Loading citation...';
-      desktopPanel.appendChild( desktopCitationValue );
-
-      context.setDesktopPanelNode( desktopPanel );
+      context.setDesktopPanelNode( desktopPanelNode );
 
     }
 
-    function clearPinnedSelection( source = 'scene' ) {
-
-      setSelectedDatumId( null, { source, shouldLog: true } );
-
-    }
-
-    function loadDatasetIfNeeded() {
-
-      if ( loadStatus !== 'loading' ) {
-
-        return;
-
-      }
-
-      loadExample1Dataset().then( ( nextDataset ) => {
-
-        dataset = nextDataset;
-        loadStatus = 'ready';
-        buildChart();
-        updateDesktopPanel();
-        syncXRSliderKnob();
-
-      } ).catch( ( error ) => {
-
-        console.error( 'Example 1 dataset failed to load.', error );
-        loadStatus = 'error';
-        loadingSprite.setText( 'Example 1 failed to load.\nCheck the local OWID dataset files.' );
-        if ( desktopYearValue ) {
-
-          desktopYearValue.textContent = 'Dataset loading failed.';
-          desktopSlider.disabled = true;
-          desktopCitationValue.textContent = String( error.message || error );
-
-        }
-
-      } );
-
-    }
-
-    function applySceneState( nextSceneState, options = {} ) {
-
-      pendingSceneState = example1SceneDefinition.normalizeSceneState( nextSceneState, pendingSceneState );
-
-      if ( ! dataset ) {
-
-        return;
-
-      }
-
-      setSelectedYear( pendingSceneState.selectedYear ?? dataset.initialYear, {
-        source: options.source || 'scene-state',
-        shouldLog: options.shouldLog === true,
-        animate: options.animate !== false,
-      } );
-      setSelectedDatumId( pendingSceneState.selectedDatumId, {
-        source: options.source || 'scene-state',
-        shouldLog: options.shouldLog === true,
-      } );
-      syncXRSliderKnob();
-
-    }
-
-    const sliderHandlers = {
-      onSelectStart( payload ) {
-
-        xrDragSource = payload.source;
-        updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
-
-      },
-      onSelectMove( payload ) {
-
-        if ( xrDragSource === payload.source ) {
-
-          updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
-
-        }
-
-      },
-      onSelectEnd( payload ) {
-
-        if ( xrDragSource === payload.source ) {
-
-          xrDragSource = null;
-
-        }
-
-      },
-    };
-
-    context.registerRaycastTarget( sliderTrack, sliderHandlers );
-    context.registerRaycastTarget( sliderKnob, sliderHandlers );
-
-    function positionXRPanelNearUser() {
+    function updatePanelAnchorTarget() {
 
       context.camera.updateMatrixWorld( true );
       context.camera.getWorldPosition( tempVector );
@@ -1010,31 +1271,277 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
-      xrPanelRoot.position.copy( tempVector )
-        .addScaledVector( tempForward, 1.05 )
-        .addScaledVector( tempRight, 0.72 );
-      xrPanelRoot.position.y = Math.max( 1.0, tempVector.y - 0.2 );
-      xrPanelRoot.lookAt( tempVector2.copy( tempVector ).setY( xrPanelRoot.position.y ) );
-      xrPanelRoot.visible = context.getPresentationMode() !== PRESENTATION_MODES.DESKTOP;
+      tempLeft.copy( tempRight ).multiplyScalar( - 1 );
+
+      tempVector2.copy( tempVector )
+        .addScaledVector( tempForward, xrPanel.anchor.forward )
+        .addScaledVector( tempLeft, xrPanel.anchor.left );
+      tempVector2.y = Math.max( 1.0, tempVector.y - xrPanel.anchor.down );
+
+      tempLookTarget.copy( tempVector );
+      tempLookTarget.y = tempVector2.y;
+
+      tempObject.position.copy( tempVector2 );
+      tempObject.lookAt( tempLookTarget );
+      tempPanelTargetQuaternion.copy( tempObject.quaternion );
 
     }
+
+    function needsPanelReanchor() {
+
+      if ( context.getPresentationMode() === PRESENTATION_MODES.DESKTOP ) {
+
+        return false;
+
+      }
+
+      context.camera.updateMatrixWorld( true );
+      context.camera.getWorldPosition( tempVector );
+      context.camera.getWorldDirection( tempForward );
+      tempDirection.copy( xrPanelRoot.position ).sub( tempVector );
+
+      const distance = tempDirection.length();
+
+      if ( distance > xrPanel.anchor.maxDistance ) {
+
+        return true;
+
+      }
+
+      tempForward.y = 0;
+      tempDirection.y = 0;
+
+      if ( tempForward.lengthSq() < 1e-6 || tempDirection.lengthSq() < 1e-6 ) {
+
+        return false;
+
+      }
+
+      tempForward.normalize();
+      tempDirection.normalize();
+      context.camera.getWorldQuaternion( tempQuaternion );
+      tempRight.set( 1, 0, 0 ).applyQuaternion( tempQuaternion );
+      tempRight.y = 0;
+      if ( tempRight.lengthSq() >= 1e-6 ) {
+
+        tempRight.normalize();
+
+      }
+      tempLeft.copy( tempRight ).multiplyScalar( - 1 );
+
+      tempVector3.copy( tempForward ).multiplyScalar( 0.78 ).addScaledVector( tempLeft, 0.52 ).normalize();
+      const angle = tempVector3.angleTo( tempDirection );
+
+      return angle > THREE.MathUtils.degToRad( xrPanel.anchor.maxAngleDeg );
+
+    }
+
+    function updateXRPanelAnchoring() {
+
+      if ( context.getPresentationMode() === PRESENTATION_MODES.DESKTOP ) {
+
+        xrPanelRoot.visible = false;
+        return;
+
+      }
+
+      xrPanelRoot.visible = true;
+
+      if ( xrPanelNeedsReanchor || needsPanelReanchor() ) {
+
+        updatePanelAnchorTarget();
+        xrPanelNeedsReanchor = true;
+
+      }
+
+      if ( ! xrPanelNeedsReanchor ) {
+
+        return;
+
+      }
+
+      xrPanelRoot.position.lerp( tempVector2, xrPanel.anchor.snapLerp );
+      xrPanelRoot.quaternion.slerp( tempPanelTargetQuaternion, xrPanel.anchor.snapLerp );
+
+      if (
+        xrPanelRoot.position.distanceToSquared( tempVector2 ) < 0.0004 &&
+        xrPanelRoot.quaternion.angleTo( tempPanelTargetQuaternion ) < 0.01
+      ) {
+
+        xrPanelRoot.position.copy( tempVector2 );
+        xrPanelRoot.quaternion.copy( tempPanelTargetQuaternion );
+        xrPanelNeedsReanchor = false;
+
+      }
+
+    }
+
+    function requestXRPanelReanchor( immediate = false ) {
+
+      updatePanelAnchorTarget();
+      xrPanelNeedsReanchor = ! immediate;
+
+      if ( immediate ) {
+
+        xrPanelRoot.position.copy( tempVector2 );
+        xrPanelRoot.quaternion.copy( tempPanelTargetQuaternion );
+
+      }
+
+    }
+
+    function clearPinnedSelection( source = 'scene-background' ) {
+
+      setSelectedDatumId( null, { source, shouldLog: true } );
+
+    }
+
+    function loadDatasetIfNeeded() {
+
+      if ( loadStatus !== 'loading' ) {
+
+        return;
+
+      }
+
+      loadExample1Dataset().then( ( nextDataset ) => {
+
+        dataset = nextDataset;
+        loadStatus = 'ready';
+        buildChart();
+        updateDesktopPanel();
+        updateXRPanelText();
+        syncXRSliderKnob();
+
+      } ).catch( ( error ) => {
+
+        console.error( 'Example 1 dataset failed to load.', error );
+        loadStatus = 'error';
+        updateDesktopPanel();
+        updateXRPanelText();
+        syncXRSliderKnob();
+
+      } );
+
+    }
+
+    function applySceneState( nextSceneState, options = {} ) {
+
+      pendingSceneState = example1SceneDefinition.normalizeSceneState( nextSceneState, pendingSceneState );
+
+      if ( ! dataset ) {
+
+        return;
+
+      }
+
+      setSelectedYear( pendingSceneState.selectedYear ?? dataset.initialYear, {
+        source: options.source || 'scene-state',
+        shouldLog: options.shouldLog === true,
+        animate: options.animate !== false,
+      } );
+      setSelectedDatumId( pendingSceneState.selectedDatumId, {
+        source: options.source || 'scene-state',
+        shouldLog: options.shouldLog === true,
+      } );
+
+    }
+
+    const panelSurface = createSceneUiSurface( context, {
+      parent: xrPanelRoot,
+      width: xrPanel.width,
+      height: xrPanel.height,
+      position: [ 0, 0, xrPanel.surfacePanelZ ],
+      name: 'example1-panel-surface',
+      handlers: {
+        onHoverChange( payload ) {
+
+          if ( payload.isHovered ) {
+
+            panelHoverSources.add( payload.source );
+
+          } else {
+
+            panelHoverSources.delete( payload.source );
+
+          }
+
+          updatePanelVisualState();
+
+        },
+      },
+    } );
+    uiSurfaces.push( panelSurface );
+
+    const sliderSurfaceHandlers = {
+      onHoverChange( payload ) {
+
+        if ( payload.isHovered ) {
+
+          sliderHoverSources.add( payload.source );
+
+        } else {
+
+          sliderHoverSources.delete( payload.source );
+
+        }
+
+        updatePanelVisualState();
+
+      },
+      onSelectStart( payload ) {
+
+        xrDragSource = payload.source;
+        updatePanelVisualState();
+        updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
+
+      },
+      onSelectMove( payload ) {
+
+        if ( xrDragSource === payload.source ) {
+
+          updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
+
+        }
+
+      },
+      onSelectEnd( payload ) {
+
+        if ( xrDragSource === payload.source ) {
+
+          xrDragSource = null;
+          updatePanelVisualState();
+
+        }
+
+      },
+    };
+
+    const sliderSurface = createSceneUiSurface( context, {
+      parent: xrPanelRoot,
+      width: xrPanel.sliderTrackLength,
+      height: xrPanel.sliderSurfaceHeight,
+      position: [ 0, xrPanel.trackY, xrPanel.surfaceSliderZ ],
+      name: 'example1-slider-surface',
+      handlers: sliderSurfaceHandlers,
+    } );
+    uiSurfaces.push( sliderSurface );
 
     return {
       activate() {
 
         context.sceneContentRoot.add( root );
         buildDesktopPanel();
-        loadDatasetIfNeeded();
         updateDesktopPanel();
-        updateTextOverlays();
+        updateXRPanelText();
         syncXRSliderKnob();
-        positionXRPanelNearUser();
+        loadDatasetIfNeeded();
+        requestXRPanelReanchor( true );
+        updatePanelVisualState();
 
       },
       dispose() {
 
-        context.unregisterRaycastTarget( sliderTrack );
-        context.unregisterRaycastTarget( sliderKnob );
         if ( barsMesh ) {
 
           context.unregisterRaycastTarget( barsMesh );
@@ -1043,28 +1550,40 @@ export const example1SceneDefinition = Object.freeze( {
 
         }
 
-        root.removeFromParent();
-        loadingSprite.dispose();
-        titleSprite.dispose();
-        yearSprite.dispose();
-        footerSprite.dispose();
+        uiSurfaces.forEach( ( surface ) => surface.dispose() );
+        clearTickMeshes();
+        clearChartLabels();
+        labelCollections.panel.splice( 0 ).forEach( ( controller ) => controller.dispose() );
         tooltipSprite.dispose();
-        panelTitleSprite.dispose();
-        panelYearSprite.dispose();
-        disposeLabels();
+        trackedMeshes.forEach( ( mesh ) => {
+
+          mesh.removeFromParent();
+          mesh.geometry?.dispose?.();
+          mesh.material?.dispose?.();
+
+        } );
+        root.removeFromParent();
         context.clearDesktopPanel();
 
       },
       update( deltaSeconds ) {
 
-        if ( dataset && animationElapsed < BAR_ANIMATION_DURATION ) {
+        if ( dataset && animationElapsed < chart.animationDuration ) {
 
-          animationElapsed = Math.min( BAR_ANIMATION_DURATION, animationElapsed + deltaSeconds );
-          const alpha = THREE.MathUtils.smoothstep( animationElapsed / BAR_ANIMATION_DURATION, 0, 1 );
+          animationElapsed = Math.min( chart.animationDuration, animationElapsed + deltaSeconds );
+          const alpha = THREE.MathUtils.smoothstep(
+            animationElapsed / chart.animationDuration,
+            0,
+            1,
+          );
 
-          for ( let index = 0; index < instanceEntries.length; index += 1 ) {
+          for ( let index = 0; index < datumEntries.length; index += 1 ) {
 
-            currentHeights[ index ] = THREE.MathUtils.lerp( startHeights[ index ], targetHeights[ index ], alpha );
+            currentHeights[ index ] = THREE.MathUtils.lerp(
+              startHeights[ index ],
+              targetHeights[ index ],
+              alpha,
+            );
 
           }
 
@@ -1078,6 +1597,8 @@ export const example1SceneDefinition = Object.freeze( {
           updateTooltipAndHighlight();
 
         }
+
+        updateXRPanelAnchoring();
 
       },
       getSceneStateForReplay() {
@@ -1103,8 +1624,8 @@ export const example1SceneDefinition = Object.freeze( {
 
           return {
             title: 'Example 1 - Energy Matrix',
-            body: 'Use the floating year panel to scrub through time, then point at bars to inspect country-source details. Controller rays can pin a bar selection without dragging the chart itself.',
-            note: 'Replay stores only compact scene semantics such as the selected year and pinned datum, so the bar matrix reconstructs from scene state instead of dozens of bar transforms.',
+            body: 'Use the left-side floating year window to scrub through time, then point at bars to inspect country-source values.',
+            note: 'Replay still stores only compact scene semantics such as `selectedYear` and the pinned datum id.',
           };
 
         }
@@ -1113,26 +1634,30 @@ export const example1SceneDefinition = Object.freeze( {
 
           return {
             title: 'Example 1 - Energy Matrix',
-            body: 'The bar matrix remains world-anchored while AR passthrough stays visible. Use the in-world year panel to snap between supported years and select bars for details.',
-            note: 'This example intentionally treats the chart as authored scene content rather than a cluster of draggable objects, keeping replay compact and reusable.',
+            body: 'The chart stays world-anchored while the floating year panel remains comfortably near your left hand.',
+            note: 'Authored panel surfaces register through the shared scene raycast pipeline, so pointer hits remain visible in live use and replay.',
           };
 
         }
 
         return {
           title: 'Example 1 - Energy Matrix',
-          body: 'Use the desktop year slider to scrub through the OWID dataset, then hover or click bars to inspect country-source values for the selected year.',
-          note: 'Scene replay records `selectedYear` and the pinned datum id instead of raw bar transforms, so future authored scenes can use the same semantic replay pattern.',
+          body: 'Use the desktop year slider to scrub through the OWID dataset, then hover or pin bars to inspect one country-source pair in detail.',
+          note: 'This scene replays from compact semantic state instead of per-bar transforms.',
         };
 
       },
       onPresentationModeChange( presentationMode ) {
 
         xrPanelRoot.visible = presentationMode !== PRESENTATION_MODES.DESKTOP;
+        xrDragSource = null;
+        panelHoverSources.clear();
+        sliderHoverSources.clear();
+        updatePanelVisualState();
 
         if ( presentationMode !== PRESENTATION_MODES.DESKTOP ) {
 
-          positionXRPanelNearUser();
+          requestXRPanelReanchor( true );
 
         }
 
