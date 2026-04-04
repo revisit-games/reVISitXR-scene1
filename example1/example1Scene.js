@@ -7,6 +7,7 @@ import {
 import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
+import { createFloatingOrbitPanel } from '../scenes/core/floatingOrbitPanel.js';
 import { example1VisualConfig } from './example1VisualConfig.js';
 import { example1LoggingConfig } from './example1LoggingConfig.js';
 
@@ -262,25 +263,18 @@ export const example1SceneDefinition = Object.freeze( {
 
     const tempObject = new THREE.Object3D();
     const tempVector = new THREE.Vector3();
-    const tempVector2 = new THREE.Vector3();
-    const tempVector3 = new THREE.Vector3();
-    const tempForward = new THREE.Vector3();
-    const tempRight = new THREE.Vector3();
-    const tempLeft = new THREE.Vector3();
     const tempDirection = new THREE.Vector3();
-    const tempLookTarget = new THREE.Vector3();
     const tempQuaternion = new THREE.Quaternion();
     const sliderPlane = new THREE.Plane();
     const sliderIntersection = new THREE.Vector3();
-    const panelDragPlane = new THREE.Plane();
-    const panelDragIntersection = new THREE.Vector3();
-    const panelDragOffset = new THREE.Vector3();
     const lastLoggedPanelPosition = new THREE.Vector3();
     const lastLoggedPanelQuaternion = new THREE.Quaternion();
 
     const panelHoverSources = new Set();
     const sliderHoverSources = new Set();
     const dragBarHoverSources = new Set();
+    const countryLabelSprites = new Map();
+    const sourceLabelSprites = new Map();
     const labelCollections = {
       countries: [],
       sources: [],
@@ -292,7 +286,7 @@ export const example1SceneDefinition = Object.freeze( {
     const uiSurfaces = [];
     const datumEntries = [];
     const datumEntryById = new Map();
-    const tickMeshes = [];
+    const axisGuideMeshes = [];
     const currentHeights = [];
     const startHeights = [];
     const targetHeights = [];
@@ -307,12 +301,17 @@ export const example1SceneDefinition = Object.freeze( {
     let selectedDatumId = null;
     let pendingSceneState = getEmptySceneState();
     let currentHoveredDatumId = null;
+    let hoverUpdateSequence = 0;
     let animationElapsed = chart.animationDuration;
     let barMatrixDirty = false;
     let xrSliderDragSource = null;
     let xrPanelDragSource = null;
     let panelPlacementInitialized = false;
     let lastPanelStateLogAt = 0;
+    let yearCommitTimeoutId = null;
+    let hasPendingYearCommit = false;
+    let pendingYearCommitSource = null;
+    let lastLoggedYearValue = null;
 
     let desktopPanelNode = null;
     let desktopYearValue = null;
@@ -361,10 +360,10 @@ export const example1SceneDefinition = Object.freeze( {
       trackedMeshes,
       new THREE.BoxGeometry( 1, 1, 1 ),
       new THREE.MeshStandardMaterial( {
-        color: chart.yAxisColor,
-        emissive: chart.yAxisEmissive,
-        roughness: 0.62,
-        metalness: 0.16,
+        color: chart.valueFinColor,
+        emissive: chart.valueFinEmissive,
+        roughness: 0.76,
+        metalness: 0.08,
       } ),
     );
     scaffoldRoot.add( yAxisSpineMesh );
@@ -498,6 +497,15 @@ export const example1SceneDefinition = Object.freeze( {
     xrPanelRoot.add( sliderKnob );
     xrPanelRoot.visible = false;
 
+    const orbitPanel = createFloatingOrbitPanel( context, {
+      panelRoot: xrPanelRoot,
+      panelInitialOffset: xrPanel.panelInitialOffset,
+      panelInitialYawDeg: xrPanel.panelInitialYawDeg,
+      orbitCenterMode: xrPanel.orbitCenterMode,
+      dragMode: xrPanel.dragMode,
+      faceOrbitCenter: xrPanel.faceOrbitCenter,
+    } );
+
     function getInteractionPolicy() {
 
       return context.getInteractionPolicy?.() ?? null;
@@ -514,6 +522,32 @@ export const example1SceneDefinition = Object.freeze( {
         flushOnYearChange: false,
         flushOnPanelDragEnd: false,
       };
+
+    }
+
+    function getExample1LoggingTuning() {
+
+      return context.getLoggingConfig?.()?.example1 || {
+        yearCommitDebounceMs: 0,
+        panelDragIntermediateMinIntervalMs: getSceneStateLoggingConfig().minIntervalMs,
+        stableLabels: {
+          year: 'Change Example 1 Year',
+          selectDatum: 'Select Example 1 Datum',
+          clearSelection: 'Clear Example 1 Selection',
+          movePanel: 'Move Example 1 Year Panel',
+        },
+      };
+
+    }
+
+    function getStableSceneLabel( key ) {
+
+      return getExample1LoggingTuning().stableLabels?.[ key ] || {
+        year: 'Change Example 1 Year',
+        selectDatum: 'Select Example 1 Datum',
+        clearSelection: 'Clear Example 1 Selection',
+        movePanel: 'Move Example 1 Year Panel',
+      }[ key ];
 
     }
 
@@ -536,80 +570,48 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
+    function syncPanelDragAvailability() {
+
+      orbitPanel.setLocalDragEnabled( isPanelDragEnabled() );
+
+    }
+
     function getCurrentPanelSceneState() {
 
-      return {
-        panelPosition: xrPanelRoot.position.toArray(),
-        panelQuaternion: xrPanelRoot.quaternion.toArray(),
-      };
+      return orbitPanel.getPanelSceneState();
 
     }
 
     function rememberPanelTransformAsLogged( now = performance.now() ) {
 
-      lastLoggedPanelPosition.copy( xrPanelRoot.position );
-      lastLoggedPanelQuaternion.copy( xrPanelRoot.quaternion );
+      const nextState = getCurrentPanelSceneState();
+
+      lastLoggedPanelPosition.fromArray( nextState.panelPosition );
+      lastLoggedPanelQuaternion.fromArray( nextState.panelQuaternion );
       lastPanelStateLogAt = now;
+      panelPlacementInitialized = true;
       pendingSceneState = {
         ...pendingSceneState,
-        ...getCurrentPanelSceneState(),
+        ...nextState,
       };
 
     }
 
     function applyPanelTransform( panelPosition, panelQuaternion ) {
 
-      xrPanelRoot.position.fromArray( normalizePanelPosition( panelPosition, PANEL_DEFAULT_POSITION ) );
-      xrPanelRoot.quaternion.fromArray( normalizePanelQuaternion( panelQuaternion, PANEL_DEFAULT_QUATERNION ) );
-      panelPlacementInitialized = true;
+      orbitPanel.applyWorldTransform(
+        normalizePanelPosition( panelPosition, PANEL_DEFAULT_POSITION ),
+        normalizePanelQuaternion( panelQuaternion, PANEL_DEFAULT_QUATERNION ),
+      );
       rememberPanelTransformAsLogged();
 
     }
 
     function placePanelAtDefault() {
 
-      context.camera.updateMatrixWorld( true );
-      context.camera.getWorldPosition( tempVector );
-      context.camera.getWorldDirection( tempForward );
-      context.camera.getWorldQuaternion( tempQuaternion );
-
-      tempForward.y = 0;
-      if ( tempForward.lengthSq() < 1e-6 ) {
-
-        tempForward.set( 0, 0, - 1 );
-
-      } else {
-
-        tempForward.normalize();
-
-      }
-
-      tempRight.set( 1, 0, 0 ).applyQuaternion( tempQuaternion );
-      tempRight.y = 0;
-      if ( tempRight.lengthSq() < 1e-6 ) {
-
-        tempRight.set( 1, 0, 0 );
-
-      } else {
-
-        tempRight.normalize();
-
-      }
-
-      tempLeft.copy( tempRight ).multiplyScalar( - 1 );
-      tempVector2.copy( tempVector )
-        .addScaledVector( tempForward, xrPanel.panelInitialOffset.forward )
-        .addScaledVector( tempLeft, xrPanel.panelInitialOffset.left );
-      tempVector2.y = Math.max( 1.0, tempVector.y - xrPanel.panelInitialOffset.down );
-
-      tempLookTarget.copy( tempVector );
-      tempLookTarget.y = tempVector2.y;
-
-      tempObject.position.copy( tempVector2 );
-      tempObject.lookAt( tempLookTarget );
-      tempObject.rotateY( THREE.MathUtils.degToRad( xrPanel.panelInitialYawDeg ) );
-
-      applyPanelTransform( tempObject.position.toArray(), tempObject.quaternion.toArray() );
+      orbitPanel.captureOrbitCenterFromCamera();
+      orbitPanel.placeAtDefault();
+      rememberPanelTransformAsLogged();
 
     }
 
@@ -620,6 +622,9 @@ export const example1SceneDefinition = Object.freeze( {
         return;
 
       }
+
+      orbitPanel.captureOrbitCenterFromCamera();
+      syncPanelDragAvailability();
 
       if ( forceDefault ) {
 
@@ -641,18 +646,25 @@ export const example1SceneDefinition = Object.freeze( {
       if ( ! panelPlacementInitialized ) {
 
         placePanelAtDefault();
+        return;
 
       }
+
+      orbitPanel.syncOrbitFromCurrentTransform();
 
     }
 
     function recordPanelTransformIfNeeded( source, { force = false, flushImmediately = false } = {} ) {
 
       const loggingConfig = getSceneStateLoggingConfig();
+      const example1Logging = getExample1LoggingTuning();
       const nextState = getCurrentPanelSceneState();
       const positionChanged = positionDistance( nextState.panelPosition, lastLoggedPanelPosition.toArray() ) > loggingConfig.positionEpsilon;
       const rotationChanged = quaternionAngularDifferenceDeg( nextState.panelQuaternion, lastLoggedPanelQuaternion.toArray() ) > loggingConfig.quaternionAngleThresholdDeg;
       const now = performance.now();
+      const dragMinInterval = Number.isFinite( example1Logging.panelDragIntermediateMinIntervalMs )
+        ? example1Logging.panelDragIntermediateMinIntervalMs
+        : loggingConfig.minIntervalMs;
 
       if ( ! force ) {
 
@@ -662,7 +674,7 @@ export const example1SceneDefinition = Object.freeze( {
 
         }
 
-        if ( now - lastPanelStateLogAt < loggingConfig.minIntervalMs ) {
+        if ( now - lastPanelStateLogAt < Math.max( loggingConfig.minIntervalMs, dragMinInterval ) ) {
 
           return false;
 
@@ -672,7 +684,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       const didLog = context.recordSceneStateChange( {
         source,
-        label: 'Move Example 1 Year Panel',
+        label: getStableSceneLabel( 'movePanel' ),
         flushImmediately,
       } );
 
@@ -683,6 +695,102 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       return didLog;
+
+    }
+
+    function clearPendingYearCommitTimer() {
+
+      if ( yearCommitTimeoutId !== null ) {
+
+        clearTimeout( yearCommitTimeoutId );
+        yearCommitTimeoutId = null;
+
+      }
+
+    }
+
+    function commitYearChange( source, { flushImmediately = false, force = false } = {} ) {
+
+      clearPendingYearCommitTimer();
+
+      if ( ! Number.isFinite( selectedYear ) ) {
+
+        hasPendingYearCommit = false;
+        pendingYearCommitSource = null;
+        return false;
+
+      }
+
+      if ( ! hasPendingYearCommit && ! force ) {
+
+        return false;
+
+      }
+
+      if ( selectedYear === lastLoggedYearValue && ! hasPendingYearCommit ) {
+
+        pendingYearCommitSource = null;
+        return false;
+
+      }
+
+      if ( ! force && selectedYear === lastLoggedYearValue ) {
+
+        hasPendingYearCommit = false;
+        pendingYearCommitSource = null;
+        return false;
+
+      }
+
+      hasPendingYearCommit = false;
+      pendingYearCommitSource = null;
+
+      const didLog = context.recordSceneStateChange( {
+        source: source || 'scene',
+        label: getStableSceneLabel( 'year' ),
+        flushImmediately,
+      } );
+
+      if ( didLog ) {
+
+        lastLoggedYearValue = selectedYear;
+
+      }
+
+      return didLog;
+
+    }
+
+    function scheduleYearCommit( source, { flushImmediately = false } = {} ) {
+
+      const debounceMs = getExample1LoggingTuning().yearCommitDebounceMs;
+
+      hasPendingYearCommit = true;
+      pendingYearCommitSource = source;
+      clearPendingYearCommitTimer();
+
+      if ( ! Number.isFinite( debounceMs ) || debounceMs <= 0 ) {
+
+        return commitYearChange( source, { flushImmediately } );
+
+      }
+
+      yearCommitTimeoutId = setTimeout( () => {
+
+        commitYearChange( pendingYearCommitSource, { flushImmediately } );
+
+      }, debounceMs );
+
+      return false;
+
+    }
+
+    function flushYearCommit( source, { force = true } = {} ) {
+
+      return commitYearChange( source || pendingYearCommitSource, {
+        force,
+        flushImmediately: true,
+      } );
 
     }
 
@@ -773,18 +881,65 @@ export const example1SceneDefinition = Object.freeze( {
       clearLabelCollection( 'sources' );
       clearLabelCollection( 'axes' );
       clearLabelCollection( 'ticks' );
+      countryLabelSprites.clear();
+      sourceLabelSprites.clear();
 
     }
 
     function clearTickMeshes() {
 
-      tickMeshes.splice( 0 ).forEach( ( mesh ) => {
+      axisGuideMeshes.splice( 0 ).forEach( ( mesh ) => {
 
         mesh.removeFromParent();
         mesh.geometry.dispose();
         mesh.material.dispose();
 
       } );
+
+    }
+
+    function setSpriteOpacity( sprite, opacity ) {
+
+      if ( ! sprite?.material ) {
+
+        return;
+
+      }
+
+      sprite.material.opacity = opacity;
+      sprite.material.needsUpdate = true;
+
+    }
+
+    function updateStaticLabelEmphasis() {
+
+      const activeDatum = getActiveDatum();
+
+      countryLabelSprites.forEach( ( sprite, country ) => {
+
+        setSpriteOpacity( sprite, activeDatum && activeDatum.country === country ? 0.18 : 1 );
+
+      } );
+
+      sourceLabelSprites.forEach( ( sprite, source ) => {
+
+        setSpriteOpacity( sprite, activeDatum && activeDatum.source === source ? 0.18 : 1 );
+
+      } );
+
+    }
+
+    function resetHoverState( { updateVisuals = true } = {} ) {
+
+      hoveredDatumIdsBySource.clear();
+      currentHoveredDatumId = null;
+      hoverUpdateSequence = 0;
+
+      if ( updateVisuals ) {
+
+        updateTooltipAndHighlight();
+
+      }
 
     }
 
@@ -796,6 +951,7 @@ export const example1SceneDefinition = Object.freeze( {
 
         highlightMesh.visible = false;
         tooltipSprite.sprite.visible = false;
+        updateStaticLabelEmphasis();
         return;
 
       }
@@ -813,7 +969,23 @@ export const example1SceneDefinition = Object.freeze( {
         `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
       );
       tooltipSprite.sprite.visible = true;
-      tooltipSprite.sprite.position.set( activeDatum.x, chart.barBaseY + currentHeight + 0.2, activeDatum.z );
+      tooltipSprite.sprite.position.set(
+        activeDatum.x - Math.sign( activeDatum.x || 1 ) * 0.08,
+        chart.barBaseY + currentHeight + 0.28,
+        activeDatum.z - Math.sign( activeDatum.z || 1 ) * 0.08,
+      );
+      updateStaticLabelEmphasis();
+
+    }
+
+    function resolveHoveredDatumId() {
+
+      return [ ...hoveredDatumIdsBySource.values() ]
+        .sort( ( entryA, entryB ) => (
+          entryB.sequence - entryA.sequence ||
+          String( entryA.source ).localeCompare( String( entryB.source ) )
+        ) )
+        .at( 0 )?.datumId ?? null;
 
     }
 
@@ -821,8 +993,11 @@ export const example1SceneDefinition = Object.freeze( {
 
       if ( datumId ) {
 
-        hoveredDatumIdsBySource.delete( source );
-        hoveredDatumIdsBySource.set( source, datumId );
+        hoveredDatumIdsBySource.set( source, {
+          source,
+          datumId,
+          sequence: hoverUpdateSequence += 1,
+        } );
 
       } else {
 
@@ -830,7 +1005,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
-      const nextHoveredDatumId = [ ...hoveredDatumIdsBySource.values() ].at( - 1 ) ?? null;
+      const nextHoveredDatumId = resolveHoveredDatumId();
 
       if ( nextHoveredDatumId === currentHoveredDatumId ) {
 
@@ -866,6 +1041,7 @@ export const example1SceneDefinition = Object.freeze( {
 
     function updatePanelVisualState() {
 
+      syncPanelDragAvailability();
       const isPanelHovered = panelHoverSources.size > 0 || sliderHoverSources.size > 0 || dragBarHoverSources.size > 0;
       const isSliderActive = sliderHoverSources.size > 0 || xrSliderDragSource !== null;
       const isDragActive = dragBarHoverSources.size > 0 || xrPanelDragSource !== null;
@@ -1038,16 +1214,21 @@ export const example1SceneDefinition = Object.freeze( {
         ...pendingSceneState,
         selectedDatumId,
       };
+      if ( normalizedDatumId === null ) {
+
+        resetHoverState( { updateVisuals: false } );
+
+      }
+
       updateDesktopSelectionText();
       updateXRPanelText();
       updateTooltipAndHighlight();
 
       if ( shouldLog ) {
 
-        const parsedDatum = parseDatumId( normalizedDatumId );
         context.recordSceneStateChange( {
           source,
-          label: parsedDatum ? `Select ${parsedDatum.country} ${parsedDatum.source}` : 'Clear Example 1 Selection',
+          label: normalizedDatumId ? getStableSceneLabel( 'selectDatum' ) : getStableSceneLabel( 'clearSelection' ),
           flushImmediately: getSceneStateLoggingConfig().flushOnSelectionChange,
         } );
 
@@ -1102,9 +1283,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       if ( shouldLog ) {
 
-        context.recordSceneStateChange( {
-          source,
-          label: `Change Example 1 Year To ${nextYear}`,
+        scheduleYearCommit( source, {
           flushImmediately: getSceneStateLoggingConfig().flushOnYearChange,
         } );
 
@@ -1131,8 +1310,7 @@ export const example1SceneDefinition = Object.freeze( {
       targetHeights.length = 0;
       clearTickMeshes();
       clearChartLabels();
-      hoveredDatumIdsBySource.clear();
-      currentHoveredDatumId = null;
+      resetHoverState( { updateVisuals: false } );
       highlightMesh.visible = false;
       tooltipSprite.sprite.visible = false;
 
@@ -1158,9 +1336,14 @@ export const example1SceneDefinition = Object.freeze( {
       const stageDepth = chartDepth + chart.platformPaddingZ;
       const countryRailZ = chartDepth * 0.5 + chart.countryRailOffsetZ;
       const sourceRailX = - chartWidth * 0.5 - chart.sourceRailOffsetX;
-      const yAxisX = chartWidth * 0.5 + chart.yAxisOffsetX;
-      const yAxisZ = chartDepth * 0.5 + chart.yAxisOffsetZ;
-      const guideWidth = chartWidth + chart.yAxisOffsetX + 0.16;
+      const valueFinX = chartWidth * 0.5 + chart.valueFinOffsetX;
+      const valueFinZ = chartDepth * 0.5 + chart.valueFinOffsetZ;
+      const frontAxisPlaqueX = chartWidth * 0.5 + chart.frontAxisPlaqueOffsetX;
+      const frontAxisPlaqueZ = chartDepth * 0.5 + chart.frontAxisPlaqueOffsetZ;
+      const sliceWidth = Math.max( 0.9, chartWidth + chart.platformPaddingX - chart.slicePlaneInsetX );
+      const sliceDepth = Math.max( 0.8, chartDepth + chart.platformPaddingZ - chart.slicePlaneInsetZ );
+      const sliceLabelX = chartWidth * 0.5 - chart.sliceLabelRightInset;
+      const sliceLabelZ = chartDepth * 0.5 - chart.sliceLabelFrontInset;
 
       stageMesh.scale.set( stageWidth, chart.platformHeight, stageDepth );
       stageMesh.position.set( 0, chart.platformHeight * 0.5, 0 );
@@ -1171,8 +1354,8 @@ export const example1SceneDefinition = Object.freeze( {
       sourceRailMesh.scale.set( chart.sourceRailWidth, chart.sourceRailHeight, chartDepth + 0.48 );
       sourceRailMesh.position.set( sourceRailX, chart.platformHeight + chart.sourceRailHeight * 0.5, 0 );
 
-      yAxisSpineMesh.scale.set( chart.yAxisWidth, chart.maxBarHeight + 0.12, chart.yAxisDepth );
-      yAxisSpineMesh.position.set( yAxisX, chart.barBaseY + chart.maxBarHeight * 0.5, yAxisZ );
+      yAxisSpineMesh.scale.set( chart.valueFinWidth, chart.maxBarHeight + 0.08, chart.valueFinDepth );
+      yAxisSpineMesh.position.set( valueFinX, chart.barBaseY + chart.maxBarHeight * 0.5, valueFinZ );
 
       barsMesh = new THREE.InstancedMesh(
         new THREE.BoxGeometry( 1, 1, 1 ),
@@ -1194,12 +1377,13 @@ export const example1SceneDefinition = Object.freeze( {
 
         const x = countryIndex * chart.countrySpacing - chartWidth * 0.5;
 
-        createTrackedTextSprite(
+        const countryLabelController = createTrackedTextSprite(
           labelCollections.countries,
           labelRoot,
           { ...labelStyles.country, text: country },
           new THREE.Vector3( x, chart.platformHeight + chart.countryRailHeight + 0.035, countryRailZ + 0.14 ),
         );
+        countryLabelSprites.set( country, countryLabelController.sprite );
 
         dataset.sources.forEach( ( source, sourceIndex ) => {
 
@@ -1207,12 +1391,13 @@ export const example1SceneDefinition = Object.freeze( {
 
             const zLabel = sourceIndex * chart.sourceSpacing - chartDepth * 0.5;
 
-            createTrackedTextSprite(
+            const sourceLabelController = createTrackedTextSprite(
               labelCollections.sources,
               labelRoot,
               { ...labelStyles.source, text: source },
               new THREE.Vector3( sourceRailX - 0.16, chart.platformHeight + chart.sourceRailHeight + 0.1, zLabel ),
             );
+            sourceLabelSprites.set( source, sourceLabelController.sprite );
 
           }
 
@@ -1241,65 +1426,54 @@ export const example1SceneDefinition = Object.freeze( {
       createTrackedTextPlane( labelCollections.axes, labelRoot, { ...labelStyles.countryAxis, text: 'COUNTRIES' }, new THREE.Vector3( 0, 0.38, countryRailZ + 0.28 ) );
       createTrackedTextPlane( labelCollections.axes, labelRoot, { ...labelStyles.sourceAxis, text: 'ENERGY SOURCES' }, new THREE.Vector3( sourceRailX - 0.26, 0.54, 0 ) );
 
-      const axisPlaqueX = yAxisX + chart.yAxisPlaqueOffsetX;
-      const axisPlaqueBaseY = chart.barBaseY + chart.maxBarHeight * 0.78;
-
       createTrackedTextPlane(
         labelCollections.axes,
         labelRoot,
         { ...labelStyles.axisCaption, text: 'PER-CAPITA ENERGY' },
-        new THREE.Vector3( axisPlaqueX, axisPlaqueBaseY + chart.yAxisTitleOffsetY, yAxisZ ),
+        new THREE.Vector3( frontAxisPlaqueX, chart.frontAxisTitleY, frontAxisPlaqueZ ),
       );
       createTrackedTextPlane(
         labelCollections.axes,
         labelRoot,
         { ...labelStyles.axisUnit, text: `${dataset.unit} / person` },
-        new THREE.Vector3( axisPlaqueX, axisPlaqueBaseY + chart.yAxisUnitOffsetY, yAxisZ ),
+        new THREE.Vector3( frontAxisPlaqueX, chart.frontAxisUnitY, frontAxisPlaqueZ ),
       );
 
-      getDisplayTickValues().forEach( ( tickValue ) => {
+      getDisplayTickValues().filter( ( tickValue ) => tickValue > 0 ).slice( 0, 5 ).forEach( ( tickValue ) => {
 
         const tickHeight = chart.barBaseY + tickValue / displayMax * chart.maxBarHeight;
-        const tickMesh = new THREE.Mesh(
-          new THREE.BoxGeometry( chart.yAxisTickLength, chart.yAxisTickHeight, chart.yAxisTickDepth ),
-          new THREE.MeshStandardMaterial( {
-            color: chart.yAxisTickColor,
-            emissive: 0x132337,
-            roughness: 0.66,
-            metalness: 0.12,
+        const slicePlaneMesh = new THREE.Mesh(
+          new THREE.PlaneGeometry( sliceWidth, sliceDepth ),
+          new THREE.MeshBasicMaterial( {
+            color: chart.slicePlaneColor,
+            transparent: true,
+            opacity: chart.slicePlaneOpacity,
+            depthWrite: false,
+            side: THREE.FrontSide,
+            toneMapped: false,
           } ),
         );
-        tickMesh.position.set( yAxisX - chart.yAxisTickLength * 0.5, tickHeight, yAxisZ );
-        chartRoot.add( tickMesh );
-        tickMeshes.push( tickMesh );
-
-        if ( tickValue > 0 ) {
-
-          const guideMesh = new THREE.Mesh(
-            new THREE.BoxGeometry( guideWidth, chart.guideLineHeight, chart.guideLineDepth ),
-            new THREE.MeshStandardMaterial( {
-              color: chart.guideLineColor,
-              emissive: chart.guideLineEmissive,
-              transparent: true,
-              opacity: chart.guideLineOpacity,
-              roughness: 0.88,
-              metalness: 0.04,
-            } ),
-          );
-          guideMesh.position.set( yAxisX - guideWidth * 0.5 + chart.yAxisTickLength * 0.2, tickHeight, yAxisZ - 0.02 );
-          chartRoot.add( guideMesh );
-          tickMeshes.push( guideMesh );
-
-        }
+        slicePlaneMesh.rotation.x = - Math.PI * 0.5;
+        slicePlaneMesh.position.set( 0, tickHeight, 0 );
+        slicePlaneMesh.renderOrder = chart.slicePlaneRenderOrder;
+        chartRoot.add( slicePlaneMesh );
+        axisGuideMeshes.push( slicePlaneMesh );
 
         createTrackedTextPlane(
           labelCollections.ticks,
           labelRoot,
           { ...labelStyles.tick, text: formatCompactTick( tickValue ) },
-          new THREE.Vector3( axisPlaqueX - 0.1, tickHeight, yAxisZ ),
+          new THREE.Vector3( sliceLabelX, tickHeight + chart.sliceLabelLift, sliceLabelZ ),
         );
 
       } );
+
+      createTrackedTextPlane(
+        labelCollections.ticks,
+        labelRoot,
+        { ...labelStyles.tick, text: '0' },
+        new THREE.Vector3( frontAxisPlaqueX - 0.08, chart.barBaseY + chart.baselineLabelYOffset, frontAxisPlaqueZ ),
+      );
 
       context.registerRaycastTarget( barsMesh, {
         onHoverChange( payload ) {
@@ -1371,36 +1545,14 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
+      if ( ! orbitPanel.beginDrag( payload ) ) {
+
+        return;
+
+      }
+
       xrPanelDragSource = payload.source;
       xrSliderDragSource = null;
-
-      context.camera.updateMatrixWorld( true );
-      context.camera.getWorldDirection( tempForward );
-      if ( tempForward.lengthSq() < 1e-6 ) {
-
-        tempForward.set( 0, 0, - 1 );
-
-      } else {
-
-        tempForward.normalize();
-
-      }
-
-      xrPanelRoot.updateMatrixWorld( true );
-      xrPanelRoot.getWorldPosition( tempVector );
-      panelDragPlane.setFromNormalAndCoplanarPoint( tempForward, tempVector );
-
-      const ray = new THREE.Ray( payload.rayOrigin.clone(), payload.rayDirection.clone() );
-
-      if ( ray.intersectPlane( panelDragPlane, panelDragIntersection ) ) {
-
-        panelDragOffset.copy( tempVector ).sub( panelDragIntersection );
-
-      } else {
-
-        panelDragOffset.set( 0, 0, 0 );
-
-      }
 
       updatePanelVisualState();
 
@@ -1414,16 +1566,12 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
-      const ray = new THREE.Ray( payload.rayOrigin.clone(), payload.rayDirection.clone() );
-
-      if ( ! ray.intersectPlane( panelDragPlane, panelDragIntersection ) ) {
+      if ( ! orbitPanel.updateDrag( payload ) ) {
 
         return;
 
       }
 
-      tempVector.copy( panelDragIntersection ).add( panelDragOffset );
-      xrPanelRoot.position.copy( tempVector );
       panelPlacementInitialized = true;
       pendingSceneState = {
         ...pendingSceneState,
@@ -1442,6 +1590,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
+      orbitPanel.endDrag( payload );
       xrPanelDragSource = null;
       recordPanelTransformIfNeeded( payload.source, {
         force: true,
@@ -1484,6 +1633,11 @@ export const example1SceneDefinition = Object.freeze( {
           shouldLog: true,
           animate: true,
         } );
+
+      } );
+      desktopSlider.addEventListener( 'change', () => {
+
+        flushYearCommit( 'desktop-year-slider', { force: true } );
 
       } );
       desktopPanelNode.appendChild( desktopSlider );
@@ -1535,6 +1689,15 @@ export const example1SceneDefinition = Object.freeze( {
     }
 
     function applySceneState( nextSceneState, options = {} ) {
+
+      if ( options.source === 'replay-scene' ) {
+
+        clearPendingYearCommitTimer();
+        hasPendingYearCommit = false;
+        pendingYearCommitSource = null;
+        resetHoverState( { updateVisuals: false } );
+
+      }
 
       pendingSceneState = example1SceneDefinition.normalizeSceneState( nextSceneState, pendingSceneState );
       const nextPanelPosition = normalizePanelPosition( pendingSceneState.panelPosition, null );
@@ -1684,6 +1847,7 @@ export const example1SceneDefinition = Object.freeze( {
           if ( xrSliderDragSource === payload.source ) {
 
             xrSliderDragSource = null;
+            flushYearCommit( payload.source, { force: true } );
             updatePanelVisualState();
 
           }
@@ -1697,6 +1861,7 @@ export const example1SceneDefinition = Object.freeze( {
       activate() {
 
         context.sceneContentRoot.add( root );
+        syncPanelDragAvailability();
         buildDesktopPanel();
         updateDesktopPanel();
         updateXRPanelText();
@@ -1707,6 +1872,9 @@ export const example1SceneDefinition = Object.freeze( {
 
       },
       dispose() {
+
+        flushYearCommit( pendingYearCommitSource, { force: false } );
+        clearPendingYearCommitTimer();
 
         if ( barsMesh ) {
 
@@ -1720,6 +1888,7 @@ export const example1SceneDefinition = Object.freeze( {
         clearTickMeshes();
         clearChartLabels();
         clearLabelCollection( 'panelPlanes' );
+        resetHoverState( { updateVisuals: false } );
         tooltipSprite.dispose();
         trackedMeshes.forEach( ( mesh ) => {
 
@@ -1816,6 +1985,8 @@ export const example1SceneDefinition = Object.freeze( {
         panelHoverSources.clear();
         sliderHoverSources.clear();
         dragBarHoverSources.clear();
+        resetHoverState( { updateVisuals: false } );
+        syncPanelDragAvailability();
 
         if ( presentationMode !== PRESENTATION_MODES.DESKTOP ) {
 

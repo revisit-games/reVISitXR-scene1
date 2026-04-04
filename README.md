@@ -136,14 +136,19 @@ Default knobs:
 
 Example 1 now overrides a small subset in `example1/example1LoggingConfig.js`:
 
-- `pointer.grabbing.behavior: 'full'`
-- `pointer.grabbing.minIntervalMs: 140`
-- `sceneState.minIntervalMs: 140`
-- `sceneState.positionEpsilon: 0.015`
-- `sceneState.quaternionAngleThresholdDeg: 1.2`
+- `pointer.grabbing.behavior: 'state-only'`
+- `pointer.hover.minIntervalMs: 320`
+- `pointer.grabbing.minIntervalMs: 320`
+- `outboundSync.minIntervalMs: 700`
+- `sceneState.minIntervalMs: 320`
+- `sceneState.positionEpsilon: 0.03`
+- `sceneState.quaternionAngleThresholdDeg: 2.5`
 - `sceneState.flushOnSelectionChange: true`
-- `sceneState.flushOnYearChange: true`
+- `sceneState.flushOnYearChange: false`
 - `sceneState.flushOnPanelDragEnd: true`
+- `example1.yearCommitDebounceMs: 240`
+- `example1.panelDragIntermediateMinIntervalMs: 520`
+- `example1.stableLabels.*`
 
 If you want less graph growth:
 
@@ -329,6 +334,26 @@ Recommended split:
 - use `textSprite` for hover tooltips and labels that intentionally need always-facing readability
 - use `textPlane` for XR windows, mounted axis plaques, and attached UI copy that should stay in the same transform space as the surface behind it
 
+## Floating Orbital Panels
+
+Reusable orbital XR-window behavior now lives in `scenes/core/floatingOrbitPanel.js`.
+
+Use `createFloatingOrbitPanel(context, options)` when a scene needs a floating world-space window that:
+
+- captures the immersive-entry camera position as a fixed orbit center
+- places the panel once at a configurable left-front offset
+- keeps the panel world-fixed instead of re-anchoring to the moving camera
+- drags only along a fixed-radius horizontal orbit
+- keeps the panel facing the fixed orbit center
+
+Recommended pattern:
+
+- build the window visuals with local `textPlane` labels and authored meshes
+- create a title-bar `sceneUiSurface` for dragging
+- create separate UI surfaces for slider or button controls
+- keep `panelPosition` and `panelQuaternion` in semantic `sceneState`
+- disable local drag during replay if replay is already restoring the recorded panel transform
+
 ## Scene Interaction Hooks
 
 Scene modules can register authored XR targets through the lightweight raycast layer in `main.js`:
@@ -382,16 +407,18 @@ Example 1 loads its assets with `new URL('./data/...', import.meta.url)` so Vite
 Example 1 now keeps its visual tuning in `example1/example1VisualConfig.js`, including:
 
 - chart scaffold dimensions
-- XR panel size, initial placement offsets, and drag-bar layout
+- XR panel size, initial placement offsets, orbital drag settings, and drag-bar layout
 - desktop panel styles
 - shared label and tooltip styles
-- Y-axis plaque and guide-line styling
+- slice-plane value-axis styling and front-side measurement plaques
 
 Example 1 now keeps its logging tuning in `example1/example1LoggingConfig.js`, including:
 
 - replay-pointer behavior during XR slider drags
 - scene-state throttling for panel dragging
-- immediate flush policy for year, selection, and panel-drag-end semantics
+- year-commit debounce timing
+- stable legend-friendly scene labels
+- immediate flush policy for selection and panel-drag-end semantics
 
 Example 1's in-scene label policy is now intentional:
 
@@ -419,15 +446,16 @@ The first values future authors usually need to tune are:
 - scene-local `loggingConfig`
 - `normalizeSceneState()` for replay compatibility
 
-For floating XR panels, start with a one-time camera-relative placement instead of a drifting HUD:
+For floating XR panels, start with `scenes/core/floatingOrbitPanel.js` instead of ad hoc camera-follow logic:
 
+- capture the orbit center from the immersive-entry camera position
 - place the panel slightly forward, to the user's left, and slightly below eye level
-- place it once on immersive mode entry or scene activation while already immersive
 - keep it world-fixed after that
 - add a dedicated drag bar if users should be able to reposition it
 - keep the draggable transform in semantic `sceneState` if participant replay should reconstruct the interaction honestly
+- prefer stable semantic labels such as `Change Example 1 Year` over value-specific labels that fragment the replay legend
 
-Example 1 uses this pattern through `example1VisualConfig.js` and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, and semantic replay of the panel transform.
+Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floatingOrbitPanel.js`, and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, fixed-orbit repositioning, and semantic replay of the panel transform.
 
 ## Replay Pointer Visuals
 
