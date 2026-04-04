@@ -22,14 +22,14 @@ export const EXAMPLE1_SOURCES = Object.freeze( [
 ] );
 
 export const EXAMPLE1_SOURCE_COLORS = Object.freeze( {
-  Coal: '#404040',
-  Oil: '#8B7355',
-  Gas: '#FFB366',
-  Nuclear: '#FFD700',
-  Hydropower: '#4169E1',
-  Wind: '#87CEEB',
-  Solar: '#FF8C00',
-  'Other renewables': '#90EE90',
+  Coal: '#596474',
+  Oil: '#b06b54',
+  Gas: '#d99a59',
+  Nuclear: '#d6c372',
+  Hydropower: '#5c87d4',
+  Wind: '#77bfd9',
+  Solar: '#f0b74a',
+  'Other renewables': '#7dbb97',
 } );
 
 const SOURCE_METADATA_KEYS = Object.freeze( {

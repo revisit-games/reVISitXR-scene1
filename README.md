@@ -98,7 +98,16 @@ To track more objects later, add them in three places:
 
 ## Sampling Knobs
 
-Adjust all timing and threshold values in `logging/xrLoggingSchema.js`.
+Shared defaults live in `logging/xrLoggingSchema.js`, and scenes can now override them with a `loggingConfig` export on the scene definition.
+
+The shared layer merges:
+
+- global defaults from `logging/xrLoggingSchema.js`
+- optional scene overrides such as `example1/example1LoggingConfig.js`
+
+`main.js` passes the active scene logging config into `logging/xrStudyLogger.js`, and the scene runtime context exposes the resolved config back to authored scenes through `context.getLoggingConfig()`.
+
+Adjust the shared defaults in `logging/xrLoggingSchema.js` when you want to affect every scene. Use a scene-local file when you want only one scene to change pointer sampling, outbound sync timing, or scene-state throttling.
 
 Default knobs:
 
@@ -124,6 +133,17 @@ Default knobs:
 - `pointer.grabbing.rayLengthEpsilon: 0.06`
 - `pointer.logImmediateSemanticTransitions: true`
 - `outboundSync.minIntervalMs: 500`
+
+Example 1 now overrides a small subset in `example1/example1LoggingConfig.js`:
+
+- `pointer.grabbing.behavior: 'full'`
+- `pointer.grabbing.minIntervalMs: 140`
+- `sceneState.minIntervalMs: 140`
+- `sceneState.positionEpsilon: 0.015`
+- `sceneState.quaternionAngleThresholdDeg: 1.2`
+- `sceneState.flushOnSelectionChange: true`
+- `sceneState.flushOnYearChange: true`
+- `sceneState.flushOnPanelDragEnd: true`
 
 If you want less graph growth:
 
@@ -204,6 +224,7 @@ Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene de
 - `queryValue`
 - `label`
 - `templateConfig`
+- optional `loggingConfig`
 - `createScene(context)`
 - `normalizeSceneState(candidateState, fallbackState)`
 
@@ -261,8 +282,10 @@ Example 1 uses:
 
 - `selectedYear`
 - `selectedDatumId`
+- `panelPosition`
+- `panelQuaternion`
 
-This means replay reconstructs the bar matrix from the selected year and pinned datum instead of recording dozens of individual bar transforms.
+This means replay reconstructs the bar matrix from the selected year, pinned datum, and floating year-window placement instead of recording dozens of individual bar transforms.
 
 ## Shared World Labels
 
@@ -289,6 +312,22 @@ Recommended usage patterns:
 - use `anchorY: 0` for labels that should sit on a rail or hover above a mark from their bottom edge
 
 The sprite utility now wraps long lines before drawing, centers multi-line text correctly, and avoids the old power-of-two width inflation that made some labels look wider than intended.
+
+## Attached Panel Text
+
+Reusable local-space panel text now lives in `scenes/core/textPlane.js`.
+
+Use `createTextPlane(options)` when text should be attached to a panel or plaque instead of billboarding independently toward the viewer. The helper supports:
+
+- centered or aligned text
+- wrapping and fixed-width text blocks
+- transparent or card-like backgrounds
+- local-space text planes parented directly to a mesh or XR window
+
+Recommended split:
+
+- use `textSprite` for hover tooltips and labels that intentionally need always-facing readability
+- use `textPlane` for XR windows, mounted axis plaques, and attached UI copy that should stay in the same transform space as the surface behind it
 
 ## Scene Interaction Hooks
 
@@ -322,6 +361,7 @@ This is the recommended pattern for future in-world controls such as:
 
 - slider hit strips
 - floating panel hit planes
+- draggable XR window title bars
 - authored XR control cards that need replay-visible pointer targets
 
 Because these surfaces use the same `registerRaycastTarget()` path as the rest of the scene system, live controller cursor dots and replay ghost pointer targets remain visible without scene-specific replay hacks.
@@ -342,9 +382,16 @@ Example 1 loads its assets with `new URL('./data/...', import.meta.url)` so Vite
 Example 1 now keeps its visual tuning in `example1/example1VisualConfig.js`, including:
 
 - chart scaffold dimensions
-- XR panel size, offsets, and re-anchor thresholds
+- XR panel size, initial placement offsets, and drag-bar layout
 - desktop panel styles
 - shared label and tooltip styles
+- Y-axis plaque and guide-line styling
+
+Example 1 now keeps its logging tuning in `example1/example1LoggingConfig.js`, including:
+
+- replay-pointer behavior during XR slider drags
+- scene-state throttling for panel dragging
+- immediate flush policy for year, selection, and panel-drag-end semantics
 
 Example 1's in-scene label policy is now intentional:
 
@@ -369,15 +416,18 @@ The first values future authors usually need to tune are:
 - Example-style country/source presets or dataset subsets
 - world label text, width, and anchor settings
 - authored UI placement for desktop and immersive XR
+- scene-local `loggingConfig`
 - `normalizeSceneState()` for replay compatibility
 
-For floating XR panels, start with a camera-relative anchor instead of a drifting HUD:
+For floating XR panels, start with a one-time camera-relative placement instead of a drifting HUD:
 
 - place the panel slightly forward, to the user's left, and slightly below eye level
-- re-anchor on immersive mode entry
-- only re-anchor again when the panel drifts outside a comfortable distance or angle threshold
+- place it once on immersive mode entry or scene activation while already immersive
+- keep it world-fixed after that
+- add a dedicated drag bar if users should be able to reposition it
+- keep the draggable transform in semantic `sceneState` if participant replay should reconstruct the interaction honestly
 
-Example 1 uses this pattern through `example1VisualConfig.js`, with a left-side anchor and a short eased snap instead of frame-by-frame head locking.
+Example 1 uses this pattern through `example1VisualConfig.js` and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, and semantic replay of the panel transform.
 
 ## Replay Pointer Visuals
 

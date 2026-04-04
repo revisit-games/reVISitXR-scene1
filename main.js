@@ -14,6 +14,7 @@ import {
   REPLAY_POINTER_TOOLTIP_STATES,
   createHiddenReplayPointer,
   getReplayPointerTooltipText,
+  resolveLoggingConfig,
 } from './logging/xrLoggingSchema.js';
 import { createXRStudyLogger } from './logging/xrStudyLogger.js';
 import { replayVisualConfig } from './replayVisualConfig.js';
@@ -667,6 +668,12 @@ function normalizeSceneStateForReplay( sceneKey, candidateSceneState, fallbackSc
 
 }
 
+function getActiveSceneLoggingConfig() {
+
+  return resolveLoggingConfig( activeSceneDefinition?.loggingConfig || null );
+
+}
+
 function createSceneRuntimeContext() {
 
   return {
@@ -682,6 +689,7 @@ function createSceneRuntimeContext() {
     clearDesktopPanel: clearDesktopScenePanel,
     getPresentationMode: () => currentMode,
     getInteractionPolicy: () => studyLogger?.getInteractionPolicy?.() ?? null,
+    getLoggingConfig: () => studyLogger?.getActiveLoggingConfig?.() ?? getActiveSceneLoggingConfig(),
     recordSceneStateChange: ( payload ) => studyLogger?.recordSceneStateChange?.( payload ) ?? false,
   };
 
@@ -2530,6 +2538,7 @@ studyLogger = createXRStudyLogger( {
   bridge: revisitBridge,
   getSceneSnapshot,
   applyReplayState,
+  getLoggingConfig: getActiveSceneLoggingConfig,
   normalizeSceneReplayState: normalizeSceneStateForReplay,
 } );
 

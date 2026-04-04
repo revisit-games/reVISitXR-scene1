@@ -5,17 +5,23 @@ import {
   loadExample1Dataset,
 } from './example1Data.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
+import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
 import { example1VisualConfig } from './example1VisualConfig.js';
+import { example1LoggingConfig } from './example1LoggingConfig.js';
 
-const DISPLAY_MAX_STEP = 50000;
-const DISPLAY_TICK_COUNT = 4;
+const PANEL_DEFAULT_POSITION = Object.freeze( [ 0, 1.25, - 0.9 ] );
+const PANEL_DEFAULT_QUATERNION = Object.freeze( [ 0, 0, 0, 1 ] );
+
+function isFiniteNumber( value ) {
+
+  return typeof value === 'number' && Number.isFinite( value );
+
+}
 
 function formatValue( value, unit ) {
 
-  return `${new Intl.NumberFormat( 'en-US', {
-    maximumFractionDigits: 0,
-  } ).format( value )} ${unit} / person`;
+  return `${new Intl.NumberFormat( 'en-US', { maximumFractionDigits: 0 } ).format( value )} ${unit} / person`;
 
 }
 
@@ -33,15 +39,52 @@ function formatCompactTick( value ) {
 
   }
 
-  return new Intl.NumberFormat( 'en-US', {
-    maximumFractionDigits: 0,
-  } ).format( value );
+  return new Intl.NumberFormat( 'en-US', { maximumFractionDigits: 0 } ).format( value );
 
 }
 
-function roundUpToStep( value, step ) {
+function calculateNiceTickStep( value, targetIntervals = 5 ) {
 
-  return Math.max( step, Math.ceil( value / step ) * step );
+  const safeValue = Math.max( value, 1 );
+  const roughStep = safeValue / Math.max( 1, targetIntervals );
+  const power = 10 ** Math.floor( Math.log10( roughStep ) );
+  const normalized = roughStep / power;
+
+  if ( normalized <= 1 ) {
+
+    return power;
+
+  }
+
+  if ( normalized <= 2 ) {
+
+    return 2 * power;
+
+  }
+
+  if ( normalized <= 5 ) {
+
+    return 5 * power;
+
+  }
+
+  return 10 * power;
+
+}
+
+function buildDisplayScale( maxValue ) {
+
+  const tickStep = calculateNiceTickStep( maxValue, 5 );
+  const displayMax = Math.max( tickStep, Math.ceil( maxValue / tickStep ) * tickStep );
+  const tickValues = [];
+
+  for ( let value = 0; value <= displayMax + tickStep * 0.5; value += tickStep ) {
+
+    tickValues.push( value );
+
+  }
+
+  return { displayMax, tickValues };
 
 }
 
@@ -60,14 +103,57 @@ function parseDatumId( datumId ) {
   }
 
   const [ country, source ] = datumId.split( '|' );
+  return country && source ? { country, source } : null;
 
-  if ( ! country || ! source ) {
+}
 
-    return null;
+function normalizePanelPosition( candidateValue, fallbackValue = null ) {
+
+  const fallback = Array.isArray( fallbackValue ) ? fallbackValue : PANEL_DEFAULT_POSITION;
+
+  if ( Array.isArray( candidateValue ) && candidateValue.length === 3 && candidateValue.every( isFiniteNumber ) ) {
+
+    return [ candidateValue[ 0 ], candidateValue[ 1 ], candidateValue[ 2 ] ];
 
   }
 
-  return { country, source };
+  return fallback ? [ ...fallback ] : null;
+
+}
+
+function normalizePanelQuaternion( candidateValue, fallbackValue = null ) {
+
+  const fallback = Array.isArray( fallbackValue ) ? fallbackValue : PANEL_DEFAULT_QUATERNION;
+
+  if ( Array.isArray( candidateValue ) && candidateValue.length === 4 && candidateValue.every( isFiniteNumber ) ) {
+
+    return [ candidateValue[ 0 ], candidateValue[ 1 ], candidateValue[ 2 ], candidateValue[ 3 ] ];
+
+  }
+
+  return fallback ? [ ...fallback ] : null;
+
+}
+
+function positionDistance( positionA, positionB ) {
+
+  const dx = positionA[ 0 ] - positionB[ 0 ];
+  const dy = positionA[ 1 ] - positionB[ 1 ];
+  const dz = positionA[ 2 ] - positionB[ 2 ];
+
+  return Math.sqrt( dx * dx + dy * dy + dz * dz );
+
+}
+
+function quaternionAngularDifferenceDeg( quaternionA, quaternionB ) {
+
+  const dot =
+    quaternionA[ 0 ] * quaternionB[ 0 ] +
+    quaternionA[ 1 ] * quaternionB[ 1 ] +
+    quaternionA[ 2 ] * quaternionB[ 2 ] +
+    quaternionA[ 3 ] * quaternionB[ 3 ];
+  const clampedDot = Math.min( 1, Math.max( - 1, Math.abs( dot ) ) );
+  return 2 * Math.acos( clampedDot ) * 180 / Math.PI;
 
 }
 
@@ -76,6 +162,8 @@ function getEmptySceneState( fallbackState = {} ) {
   return {
     selectedYear: Number.isFinite( fallbackState?.selectedYear ) ? fallbackState.selectedYear : null,
     selectedDatumId: typeof fallbackState?.selectedDatumId === 'string' ? fallbackState.selectedDatumId : null,
+    panelPosition: normalizePanelPosition( fallbackState?.panelPosition, null ),
+    panelQuaternion: normalizePanelQuaternion( fallbackState?.panelQuaternion, null ),
   };
 
 }
@@ -100,7 +188,24 @@ function createTrackedTextSprite( collection, parent, options, position ) {
   const controller = createTextSprite( options );
   updateLabelSprite( controller, position );
   parent.add( controller.sprite );
-  collection.push( controller );
+  collection.push( { object3D: controller.sprite, dispose: () => controller.dispose() } );
+  return controller;
+
+}
+
+function createTrackedTextPlane( collection, parent, options, position, rotation = null ) {
+
+  const controller = createTextPlane( options );
+  controller.mesh.position.copy( position );
+
+  if ( rotation ) {
+
+    controller.mesh.rotation.copy( rotation );
+
+  }
+
+  parent.add( controller.mesh );
+  collection.push( { object3D: controller.mesh, dispose: () => controller.dispose() } );
   return controller;
 
 }
@@ -117,6 +222,7 @@ export const example1SceneDefinition = Object.freeze( {
   sceneKey: 'example1',
   queryValue: '1',
   label: 'Example 1 Energy Matrix',
+  loggingConfig: example1LoggingConfig,
   templateConfig: Object.freeze( {
     showFloor: true,
     showGrid: true,
@@ -133,17 +239,14 @@ export const example1SceneDefinition = Object.freeze( {
       selectedDatumId: typeof candidateState?.selectedDatumId === 'string'
         ? candidateState.selectedDatumId
         : ( typeof fallbackState?.selectedDatumId === 'string' ? fallbackState.selectedDatumId : null ),
+      panelPosition: normalizePanelPosition( candidateState?.panelPosition, normalizePanelPosition( fallbackState?.panelPosition, null ) ),
+      panelQuaternion: normalizePanelQuaternion( candidateState?.panelQuaternion, normalizePanelQuaternion( fallbackState?.panelQuaternion, null ) ),
     };
 
   },
   createScene( context ) {
 
-    const {
-      chart,
-      xrPanel,
-      desktopPanel,
-      labelStyles,
-    } = example1VisualConfig;
+    const { chart, xrPanel, desktopPanel, labelStyles } = example1VisualConfig;
 
     const root = new THREE.Group();
     const chartRoot = new THREE.Group();
@@ -167,18 +270,23 @@ export const example1SceneDefinition = Object.freeze( {
     const tempDirection = new THREE.Vector3();
     const tempLookTarget = new THREE.Vector3();
     const tempQuaternion = new THREE.Quaternion();
-    const tempPanelTargetQuaternion = new THREE.Quaternion();
     const sliderPlane = new THREE.Plane();
     const sliderIntersection = new THREE.Vector3();
+    const panelDragPlane = new THREE.Plane();
+    const panelDragIntersection = new THREE.Vector3();
+    const panelDragOffset = new THREE.Vector3();
+    const lastLoggedPanelPosition = new THREE.Vector3();
+    const lastLoggedPanelQuaternion = new THREE.Quaternion();
 
     const panelHoverSources = new Set();
     const sliderHoverSources = new Set();
+    const dragBarHoverSources = new Set();
     const labelCollections = {
       countries: [],
       sources: [],
       axes: [],
       ticks: [],
-      panel: [],
+      panelPlanes: [],
     };
     const trackedMeshes = [];
     const uiSurfaces = [];
@@ -192,7 +300,8 @@ export const example1SceneDefinition = Object.freeze( {
 
     let barsMesh = null;
     let dataset = null;
-    let displayMax = DISPLAY_MAX_STEP;
+    let displayMax = 50000;
+    let displayTickValues = [ 0, 10000, 20000, 30000, 40000, 50000 ];
     let loadStatus = 'loading';
     let selectedYear = null;
     let selectedDatumId = null;
@@ -200,8 +309,10 @@ export const example1SceneDefinition = Object.freeze( {
     let currentHoveredDatumId = null;
     let animationElapsed = chart.animationDuration;
     let barMatrixDirty = false;
-    let xrDragSource = null;
-    let xrPanelNeedsReanchor = false;
+    let xrSliderDragSource = null;
+    let xrPanelDragSource = null;
+    let panelPlacementInitialized = false;
+    let lastPanelStateLogAt = 0;
 
     let desktopPanelNode = null;
     let desktopYearValue = null;
@@ -216,8 +327,8 @@ export const example1SceneDefinition = Object.freeze( {
       new THREE.MeshStandardMaterial( {
         color: chart.platformColor,
         emissive: chart.platformEmissive,
-        roughness: 0.92,
-        metalness: 0.06,
+        roughness: 0.94,
+        metalness: 0.04,
       } ),
     );
     scaffoldRoot.add( stageMesh );
@@ -228,8 +339,8 @@ export const example1SceneDefinition = Object.freeze( {
       new THREE.MeshStandardMaterial( {
         color: chart.countryRailColor,
         emissive: chart.countryRailEmissive,
-        roughness: 0.9,
-        metalness: 0.06,
+        roughness: 0.92,
+        metalness: 0.05,
       } ),
     );
     scaffoldRoot.add( countryRailMesh );
@@ -240,8 +351,8 @@ export const example1SceneDefinition = Object.freeze( {
       new THREE.MeshStandardMaterial( {
         color: chart.sourceRailColor,
         emissive: chart.sourceRailEmissive,
-        roughness: 0.9,
-        metalness: 0.06,
+        roughness: 0.92,
+        metalness: 0.05,
       } ),
     );
     scaffoldRoot.add( sourceRailMesh );
@@ -253,7 +364,7 @@ export const example1SceneDefinition = Object.freeze( {
         color: chart.yAxisColor,
         emissive: chart.yAxisEmissive,
         roughness: 0.62,
-        metalness: 0.14,
+        metalness: 0.16,
       } ),
     );
     scaffoldRoot.add( yAxisSpineMesh );
@@ -288,12 +399,27 @@ export const example1SceneDefinition = Object.freeze( {
         emissive: xrPanel.backgroundEmissive,
         transparent: true,
         opacity: xrPanel.backgroundOpacity,
-        roughness: 0.86,
-        metalness: 0.06,
+        roughness: 0.88,
+        metalness: 0.05,
         side: THREE.DoubleSide,
       } ),
     );
     xrPanelRoot.add( panelBackground );
+
+    const panelBodyInset = createTrackedMesh(
+      trackedMeshes,
+      new THREE.PlaneGeometry( xrPanel.width - 0.05, xrPanel.height - 0.08 ),
+      new THREE.MeshBasicMaterial( {
+        color: xrPanel.bodyInsetColor,
+        transparent: true,
+        opacity: xrPanel.bodyInsetOpacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      } ),
+    );
+    panelBodyInset.position.set( 0, - 0.02, 0.002 );
+    xrPanelRoot.add( panelBodyInset );
 
     const panelEdge = createTrackedMesh(
       trackedMeshes,
@@ -307,54 +433,28 @@ export const example1SceneDefinition = Object.freeze( {
         toneMapped: false,
       } ),
     );
-    panelEdge.position.z = 0.002;
+    panelEdge.position.z = 0.003;
     xrPanelRoot.add( panelEdge );
 
-    createTrackedTextSprite(
-      labelCollections.panel,
-      xrPanelRoot,
-      {
-        ...labelStyles.panelTitle,
-        text: 'ENERGY YEAR',
-      },
-      new THREE.Vector3( 0, xrPanel.titleY, xrPanel.contentZ ),
+    const titleBarMesh = createTrackedMesh(
+      trackedMeshes,
+      new THREE.PlaneGeometry( xrPanel.width - 0.05, xrPanel.titleBarHeight ),
+      new THREE.MeshStandardMaterial( {
+        color: xrPanel.titleBarColor,
+        emissive: xrPanel.titleBarEmissive,
+        roughness: 0.76,
+        metalness: 0.08,
+        side: THREE.DoubleSide,
+      } ),
     );
-    const panelYearSprite = createTrackedTextSprite(
-      labelCollections.panel,
-      xrPanelRoot,
-      {
-        ...labelStyles.panelYear,
-        text: '--',
-      },
-      new THREE.Vector3( 0, xrPanel.yearY, xrPanel.contentZ ),
-    );
-    const panelHelperSprite = createTrackedTextSprite(
-      labelCollections.panel,
-      xrPanelRoot,
-      {
-        ...labelStyles.panelHelper,
-        text: 'Loading energy dataset...',
-      },
-      new THREE.Vector3( 0, xrPanel.helperY, xrPanel.contentZ ),
-    );
-    const panelMinYearSprite = createTrackedTextSprite(
-      labelCollections.panel,
-      xrPanelRoot,
-      {
-        ...labelStyles.panelRange,
-        text: '--',
-      },
-      new THREE.Vector3( - xrPanel.sliderTrackLength * 0.5, xrPanel.rangeLabelY, xrPanel.contentZ ),
-    );
-    const panelMaxYearSprite = createTrackedTextSprite(
-      labelCollections.panel,
-      xrPanelRoot,
-      {
-        ...labelStyles.panelRange,
-        text: '--',
-      },
-      new THREE.Vector3( xrPanel.sliderTrackLength * 0.5, xrPanel.rangeLabelY, xrPanel.contentZ ),
-    );
+    titleBarMesh.position.set( 0, xrPanel.titleY, 0.006 );
+    xrPanelRoot.add( titleBarMesh );
+
+    createTrackedTextPlane( labelCollections.panelPlanes, xrPanelRoot, { ...labelStyles.panelTitle, text: 'ENERGY YEAR' }, new THREE.Vector3( 0, xrPanel.titleY, xrPanel.contentZ ) );
+    const panelYearText = createTrackedTextPlane( labelCollections.panelPlanes, xrPanelRoot, { ...labelStyles.panelYear, text: '--' }, new THREE.Vector3( 0, xrPanel.yearBadgeY, xrPanel.contentZ ) );
+    const panelHelperText = createTrackedTextPlane( labelCollections.panelPlanes, xrPanelRoot, { ...labelStyles.panelHelper, text: 'Loading energy dataset...' }, new THREE.Vector3( 0, xrPanel.helperY, xrPanel.contentZ ) );
+    const panelMinYearText = createTrackedTextPlane( labelCollections.panelPlanes, xrPanelRoot, { ...labelStyles.panelRange, text: '--' }, new THREE.Vector3( - xrPanel.sliderTrackLength * 0.5, xrPanel.rangeLabelY, xrPanel.contentZ ) );
+    const panelMaxYearText = createTrackedTextPlane( labelCollections.panelPlanes, xrPanelRoot, { ...labelStyles.panelRange, text: '--' }, new THREE.Vector3( xrPanel.sliderTrackLength * 0.5, xrPanel.rangeLabelY, xrPanel.contentZ ) );
 
     const sliderTrack = createTrackedMesh(
       trackedMeshes,
@@ -362,8 +462,8 @@ export const example1SceneDefinition = Object.freeze( {
       new THREE.MeshStandardMaterial( {
         color: xrPanel.sliderTrackColor,
         emissive: xrPanel.sliderTrackEmissive,
-        roughness: 0.74,
-        metalness: 0.12,
+        roughness: 0.76,
+        metalness: 0.08,
       } ),
     );
     sliderTrack.scale.set( xrPanel.sliderTrackLength, xrPanel.sliderTrackHeight, xrPanel.sliderTrackDepth );
@@ -376,7 +476,7 @@ export const example1SceneDefinition = Object.freeze( {
       new THREE.MeshStandardMaterial( {
         color: xrPanel.sliderFillColor,
         emissive: xrPanel.sliderFillEmissive,
-        roughness: 0.48,
+        roughness: 0.5,
         metalness: 0.08,
       } ),
     );
@@ -385,12 +485,7 @@ export const example1SceneDefinition = Object.freeze( {
 
     const sliderKnob = createTrackedMesh(
       trackedMeshes,
-      new THREE.CylinderGeometry(
-        xrPanel.sliderKnobRadius,
-        xrPanel.sliderKnobRadius,
-        xrPanel.sliderKnobDepth,
-        24,
-      ),
+      new THREE.CylinderGeometry( xrPanel.sliderKnobRadius, xrPanel.sliderKnobRadius, xrPanel.sliderKnobDepth, 24 ),
       new THREE.MeshStandardMaterial( {
         color: xrPanel.sliderKnobColor,
         emissive: xrPanel.sliderKnobEmissive,
@@ -402,6 +497,194 @@ export const example1SceneDefinition = Object.freeze( {
     sliderKnob.position.set( - xrPanel.sliderTrackLength * 0.5, xrPanel.trackY, 0.028 );
     xrPanelRoot.add( sliderKnob );
     xrPanelRoot.visible = false;
+
+    function getInteractionPolicy() {
+
+      return context.getInteractionPolicy?.() ?? null;
+
+    }
+
+    function getSceneStateLoggingConfig() {
+
+      return context.getLoggingConfig?.()?.sceneState || {
+        minIntervalMs: 0,
+        positionEpsilon: 0,
+        quaternionAngleThresholdDeg: 0,
+        flushOnSelectionChange: false,
+        flushOnYearChange: false,
+        flushOnPanelDragEnd: false,
+      };
+
+    }
+
+    function isPanelDragEnabled() {
+
+      const interactionPolicy = getInteractionPolicy();
+
+      if ( ! interactionPolicy ) {
+
+        return true;
+
+      }
+
+      return (
+        interactionPolicy.canInteract !== false &&
+        interactionPolicy.isAnalysisSession !== true &&
+        interactionPolicy.hasReceivedReplayState !== true &&
+        interactionPolicy.isApplyingReplayState !== true
+      );
+
+    }
+
+    function getCurrentPanelSceneState() {
+
+      return {
+        panelPosition: xrPanelRoot.position.toArray(),
+        panelQuaternion: xrPanelRoot.quaternion.toArray(),
+      };
+
+    }
+
+    function rememberPanelTransformAsLogged( now = performance.now() ) {
+
+      lastLoggedPanelPosition.copy( xrPanelRoot.position );
+      lastLoggedPanelQuaternion.copy( xrPanelRoot.quaternion );
+      lastPanelStateLogAt = now;
+      pendingSceneState = {
+        ...pendingSceneState,
+        ...getCurrentPanelSceneState(),
+      };
+
+    }
+
+    function applyPanelTransform( panelPosition, panelQuaternion ) {
+
+      xrPanelRoot.position.fromArray( normalizePanelPosition( panelPosition, PANEL_DEFAULT_POSITION ) );
+      xrPanelRoot.quaternion.fromArray( normalizePanelQuaternion( panelQuaternion, PANEL_DEFAULT_QUATERNION ) );
+      panelPlacementInitialized = true;
+      rememberPanelTransformAsLogged();
+
+    }
+
+    function placePanelAtDefault() {
+
+      context.camera.updateMatrixWorld( true );
+      context.camera.getWorldPosition( tempVector );
+      context.camera.getWorldDirection( tempForward );
+      context.camera.getWorldQuaternion( tempQuaternion );
+
+      tempForward.y = 0;
+      if ( tempForward.lengthSq() < 1e-6 ) {
+
+        tempForward.set( 0, 0, - 1 );
+
+      } else {
+
+        tempForward.normalize();
+
+      }
+
+      tempRight.set( 1, 0, 0 ).applyQuaternion( tempQuaternion );
+      tempRight.y = 0;
+      if ( tempRight.lengthSq() < 1e-6 ) {
+
+        tempRight.set( 1, 0, 0 );
+
+      } else {
+
+        tempRight.normalize();
+
+      }
+
+      tempLeft.copy( tempRight ).multiplyScalar( - 1 );
+      tempVector2.copy( tempVector )
+        .addScaledVector( tempForward, xrPanel.panelInitialOffset.forward )
+        .addScaledVector( tempLeft, xrPanel.panelInitialOffset.left );
+      tempVector2.y = Math.max( 1.0, tempVector.y - xrPanel.panelInitialOffset.down );
+
+      tempLookTarget.copy( tempVector );
+      tempLookTarget.y = tempVector2.y;
+
+      tempObject.position.copy( tempVector2 );
+      tempObject.lookAt( tempLookTarget );
+      tempObject.rotateY( THREE.MathUtils.degToRad( xrPanel.panelInitialYawDeg ) );
+
+      applyPanelTransform( tempObject.position.toArray(), tempObject.quaternion.toArray() );
+
+    }
+
+    function ensurePanelPlacementForCurrentMode( { forceDefault = false } = {} ) {
+
+      if ( context.getPresentationMode() === PRESENTATION_MODES.DESKTOP ) {
+
+        return;
+
+      }
+
+      if ( forceDefault ) {
+
+        placePanelAtDefault();
+        return;
+
+      }
+
+      const nextPanelPosition = normalizePanelPosition( pendingSceneState?.panelPosition, null );
+      const nextPanelQuaternion = normalizePanelQuaternion( pendingSceneState?.panelQuaternion, null );
+
+      if ( nextPanelPosition && nextPanelQuaternion ) {
+
+        applyPanelTransform( nextPanelPosition, nextPanelQuaternion );
+        return;
+
+      }
+
+      if ( ! panelPlacementInitialized ) {
+
+        placePanelAtDefault();
+
+      }
+
+    }
+
+    function recordPanelTransformIfNeeded( source, { force = false, flushImmediately = false } = {} ) {
+
+      const loggingConfig = getSceneStateLoggingConfig();
+      const nextState = getCurrentPanelSceneState();
+      const positionChanged = positionDistance( nextState.panelPosition, lastLoggedPanelPosition.toArray() ) > loggingConfig.positionEpsilon;
+      const rotationChanged = quaternionAngularDifferenceDeg( nextState.panelQuaternion, lastLoggedPanelQuaternion.toArray() ) > loggingConfig.quaternionAngleThresholdDeg;
+      const now = performance.now();
+
+      if ( ! force ) {
+
+        if ( ! positionChanged && ! rotationChanged ) {
+
+          return false;
+
+        }
+
+        if ( now - lastPanelStateLogAt < loggingConfig.minIntervalMs ) {
+
+          return false;
+
+        }
+
+      }
+
+      const didLog = context.recordSceneStateChange( {
+        source,
+        label: 'Move Example 1 Year Panel',
+        flushImmediately,
+      } );
+
+      if ( didLog ) {
+
+        rememberPanelTransformAsLogged( now );
+
+      }
+
+      return didLog;
+
+    }
 
     function getChartWidth() {
 
@@ -417,15 +700,7 @@ export const example1SceneDefinition = Object.freeze( {
 
     function getDisplayTickValues() {
 
-      return Array.from( { length: DISPLAY_TICK_COUNT }, ( _, index ) => {
-
-        const ratio = index / ( DISPLAY_TICK_COUNT - 1 );
-        const rawValue = displayMax * ratio;
-        return index === 0
-          ? 0
-          : Math.round( rawValue / 1000 ) * 1000;
-
-      } );
+      return displayTickValues;
 
     }
 
@@ -450,10 +725,7 @@ export const example1SceneDefinition = Object.freeze( {
 
     function getBarHeightForValue( value ) {
 
-      return Math.max(
-        value > 0 ? 0.03 : 0.01,
-        value / displayMax * chart.maxBarHeight,
-      );
+      return Math.max( value > 0 ? 0.03 : 0.01, value / displayMax * chart.maxBarHeight );
 
     }
 
@@ -486,10 +758,10 @@ export const example1SceneDefinition = Object.freeze( {
 
     function clearLabelCollection( collectionName ) {
 
-      labelCollections[ collectionName ].splice( 0 ).forEach( ( controller ) => {
+      labelCollections[ collectionName ].splice( 0 ).forEach( ( entry ) => {
 
-        controller.sprite.removeFromParent();
-        controller.dispose();
+        entry.object3D?.removeFromParent?.();
+        entry.dispose?.();
 
       } );
 
@@ -530,11 +802,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       const currentHeight = currentHeights[ activeDatum.instanceIndex ] ?? 0.01;
       highlightMesh.visible = true;
-      highlightMesh.position.set(
-        activeDatum.x,
-        chart.barBaseY + currentHeight * 0.5,
-        activeDatum.z,
-      );
+      highlightMesh.position.set( activeDatum.x, chart.barBaseY + currentHeight * 0.5, activeDatum.z );
       highlightMesh.scale.set(
         chart.barWidth + chart.highlightPaddingX,
         currentHeight + chart.highlightPaddingY,
@@ -545,11 +813,7 @@ export const example1SceneDefinition = Object.freeze( {
         `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
       );
       tooltipSprite.sprite.visible = true;
-      tooltipSprite.sprite.position.set(
-        activeDatum.x,
-        chart.barBaseY + currentHeight + 0.2,
-        activeDatum.z,
-      );
+      tooltipSprite.sprite.position.set( activeDatum.x, chart.barBaseY + currentHeight + 0.2, activeDatum.z );
 
     }
 
@@ -602,14 +866,21 @@ export const example1SceneDefinition = Object.freeze( {
 
     function updatePanelVisualState() {
 
-      const isHovered = panelHoverSources.size > 0 || sliderHoverSources.size > 0 || xrDragSource !== null;
+      const isPanelHovered = panelHoverSources.size > 0 || sliderHoverSources.size > 0 || dragBarHoverSources.size > 0;
+      const isSliderActive = sliderHoverSources.size > 0 || xrSliderDragSource !== null;
+      const isDragActive = dragBarHoverSources.size > 0 || xrPanelDragSource !== null;
 
-      panelBackground.material.emissive.setHex( isHovered ? 0x0d1b29 : xrPanel.backgroundEmissive );
-      panelEdge.material.color.setHex( isHovered ? xrPanel.hoverAccentColor : xrPanel.edgeColor );
-      panelEdge.material.opacity = isHovered ? 0.28 : xrPanel.edgeOpacity;
-      sliderTrack.material.emissive.setHex( sliderHoverSources.size > 0 || xrDragSource !== null ? 0x17344d : xrPanel.sliderTrackEmissive );
-      sliderFill.material.emissive.setHex( sliderHoverSources.size > 0 || xrDragSource !== null ? 0x1b5e82 : xrPanel.sliderFillEmissive );
-      sliderKnob.scale.setScalar( sliderHoverSources.size > 0 || xrDragSource !== null ? 1.08 : 1 );
+      panelBackground.material.emissive.setHex( isPanelHovered ? 0x0d1a28 : xrPanel.backgroundEmissive );
+      panelEdge.material.color.setHex(
+        xrPanelDragSource !== null ? xrPanel.dragAccentColor : ( isPanelHovered ? xrPanel.hoverAccentColor : xrPanel.edgeColor ),
+      );
+      panelEdge.material.opacity = xrPanelDragSource !== null ? 0.34 : ( isPanelHovered ? 0.24 : xrPanel.edgeOpacity );
+      titleBarMesh.material.emissive.setHex(
+        xrPanelDragSource !== null || isDragActive ? xrPanel.titleBarHoverEmissive : xrPanel.titleBarEmissive,
+      );
+      sliderTrack.material.emissive.setHex( isSliderActive ? 0x17344d : xrPanel.sliderTrackEmissive );
+      sliderFill.material.emissive.setHex( isSliderActive ? 0x1a5777 : xrPanel.sliderFillEmissive );
+      sliderKnob.scale.setScalar( isSliderActive ? 1.08 : 1 );
 
     }
 
@@ -617,34 +888,30 @@ export const example1SceneDefinition = Object.freeze( {
 
       if ( loadStatus === 'error' ) {
 
-        panelYearSprite.setText( 'LOAD FAILED' );
-        panelHelperSprite.setText( 'Check the local OWID files and reload.' );
-        panelMinYearSprite.setText( '--' );
-        panelMaxYearSprite.setText( '--' );
+        panelYearText.setText( 'LOAD FAILED' );
+        panelHelperText.setText( 'Check the local OWID files and reload.' );
+        panelMinYearText.setText( '--' );
+        panelMaxYearText.setText( '--' );
         return;
 
       }
 
       if ( ! dataset ) {
 
-        panelYearSprite.setText( '--' );
-        panelHelperSprite.setText( 'Loading energy dataset...' );
-        panelMinYearSprite.setText( '--' );
-        panelMaxYearSprite.setText( '--' );
+        panelYearText.setText( '--' );
+        panelHelperText.setText( 'Loading energy dataset...' );
+        panelMinYearText.setText( '--' );
+        panelMaxYearText.setText( '--' );
         return;
 
       }
 
-      panelYearSprite.setText( String( selectedYear ) );
-      panelMinYearSprite.setText( String( dataset.years[ 0 ] ) );
-      panelMaxYearSprite.setText( String( dataset.years.at( - 1 ) ) );
+      panelYearText.setText( String( selectedYear ) );
+      panelMinYearText.setText( String( dataset.years[ 0 ] ) );
+      panelMaxYearText.setText( String( dataset.years.at( - 1 ) ) );
 
       const pinnedDatum = getDatumForId( selectedDatumId );
-      panelHelperSprite.setText(
-        pinnedDatum
-          ? `${pinnedDatum.country} · ${pinnedDatum.source}`
-          : 'Point and drag the slider to scrub years.',
-      );
+      panelHelperText.setText( pinnedDatum ? `${pinnedDatum.country} · ${pinnedDatum.source}` : 'Drag the slider to scrub years.' );
 
     }
 
@@ -701,11 +968,7 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       const ratio = THREE.MathUtils.clamp( getSliderRatioForYear( selectedYear ), 0, 1 );
-      const knobX = THREE.MathUtils.lerp(
-        - xrPanel.sliderTrackLength * 0.5,
-        xrPanel.sliderTrackLength * 0.5,
-        ratio,
-      );
+      const knobX = THREE.MathUtils.lerp( - xrPanel.sliderTrackLength * 0.5, xrPanel.sliderTrackLength * 0.5, ratio );
       const fillWidth = Math.max( 0.001, xrPanel.sliderTrackLength * ratio );
 
       sliderFill.visible = true;
@@ -727,11 +990,7 @@ export const example1SceneDefinition = Object.freeze( {
 
         const entry = datumEntries[ index ];
         const height = currentHeights[ index ] ?? 0.01;
-        tempObject.position.set(
-          entry.x,
-          chart.barBaseY + height * 0.5,
-          entry.z,
-        );
+        tempObject.position.set( entry.x, chart.barBaseY + height * 0.5, entry.z );
         tempObject.scale.set( chart.barWidth, height, chart.barDepth );
         tempObject.updateMatrix();
         barsMesh.setMatrixAt( index, tempObject.matrix );
@@ -755,9 +1014,7 @@ export const example1SceneDefinition = Object.freeze( {
 
         const entry = datumEntries[ index ];
         startHeights[ index ] = currentHeights[ index ] ?? 0.01;
-        targetHeights[ index ] = getBarHeightForValue(
-          dataset.getValue( year, entry.country, entry.source ),
-        );
+        targetHeights[ index ] = getBarHeightForValue( dataset.getValue( year, entry.country, entry.source ) );
 
       }
 
@@ -777,6 +1034,10 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       selectedDatumId = normalizedDatumId;
+      pendingSceneState = {
+        ...pendingSceneState,
+        selectedDatumId,
+      };
       updateDesktopSelectionText();
       updateXRPanelText();
       updateTooltipAndHighlight();
@@ -786,20 +1047,15 @@ export const example1SceneDefinition = Object.freeze( {
         const parsedDatum = parseDatumId( normalizedDatumId );
         context.recordSceneStateChange( {
           source,
-          label: parsedDatum
-            ? `Select ${parsedDatum.country} ${parsedDatum.source}`
-            : 'Clear Example 1 Selection',
+          label: parsedDatum ? `Select ${parsedDatum.country} ${parsedDatum.source}` : 'Clear Example 1 Selection',
+          flushImmediately: getSceneStateLoggingConfig().flushOnSelectionChange,
         } );
 
       }
 
     }
 
-    function setSelectedYear( nextYear, {
-      source = 'scene',
-      shouldLog = true,
-      animate = true,
-    } = {} ) {
+    function setSelectedYear( nextYear, { source = 'scene', shouldLog = true, animate = true } = {} ) {
 
       if ( ! dataset || ! Number.isFinite( nextYear ) || ! dataset.years.includes( nextYear ) ) {
 
@@ -814,6 +1070,10 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       selectedYear = nextYear;
+      pendingSceneState = {
+        ...pendingSceneState,
+        selectedYear,
+      };
 
       if ( animate ) {
 
@@ -824,9 +1084,7 @@ export const example1SceneDefinition = Object.freeze( {
         for ( let index = 0; index < datumEntries.length; index += 1 ) {
 
           const entry = datumEntries[ index ];
-          const height = getBarHeightForValue(
-            dataset.getValue( nextYear, entry.country, entry.source ),
-          );
+          const height = getBarHeightForValue( dataset.getValue( nextYear, entry.country, entry.source ) );
           currentHeights[ index ] = height;
           startHeights[ index ] = height;
           targetHeights[ index ] = height;
@@ -847,6 +1105,7 @@ export const example1SceneDefinition = Object.freeze( {
         context.recordSceneStateChange( {
           source,
           label: `Change Example 1 Year To ${nextYear}`,
+          flushImmediately: getSceneStateLoggingConfig().flushOnYearChange,
         } );
 
       }
@@ -888,7 +1147,10 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       clearChartGeometry();
-      displayMax = roundUpToStep( dataset.maxValue, DISPLAY_MAX_STEP );
+
+      const displayScale = buildDisplayScale( dataset.maxValue );
+      displayMax = displayScale.displayMax;
+      displayTickValues = displayScale.tickValues;
 
       const chartWidth = getChartWidth();
       const chartDepth = getChartDepth();
@@ -898,57 +1160,32 @@ export const example1SceneDefinition = Object.freeze( {
       const sourceRailX = - chartWidth * 0.5 - chart.sourceRailOffsetX;
       const yAxisX = chartWidth * 0.5 + chart.yAxisOffsetX;
       const yAxisZ = chartDepth * 0.5 + chart.yAxisOffsetZ;
+      const guideWidth = chartWidth + chart.yAxisOffsetX + 0.16;
 
       stageMesh.scale.set( stageWidth, chart.platformHeight, stageDepth );
       stageMesh.position.set( 0, chart.platformHeight * 0.5, 0 );
 
-      countryRailMesh.scale.set(
-        chartWidth + 0.92,
-        chart.countryRailHeight,
-        chart.countryRailDepth,
-      );
-      countryRailMesh.position.set(
-        0,
-        chart.platformHeight + chart.countryRailHeight * 0.5,
-        countryRailZ,
-      );
+      countryRailMesh.scale.set( chartWidth + 0.72, chart.countryRailHeight, chart.countryRailDepth );
+      countryRailMesh.position.set( 0, chart.platformHeight + chart.countryRailHeight * 0.5, countryRailZ );
 
-      sourceRailMesh.scale.set(
-        chart.sourceRailWidth,
-        chart.sourceRailHeight,
-        chartDepth + 0.84,
-      );
-      sourceRailMesh.position.set(
-        sourceRailX,
-        chart.platformHeight + chart.sourceRailHeight * 0.5,
-        0,
-      );
+      sourceRailMesh.scale.set( chart.sourceRailWidth, chart.sourceRailHeight, chartDepth + 0.48 );
+      sourceRailMesh.position.set( sourceRailX, chart.platformHeight + chart.sourceRailHeight * 0.5, 0 );
 
-      yAxisSpineMesh.scale.set(
-        chart.yAxisWidth,
-        chart.maxBarHeight + 0.14,
-        chart.yAxisDepth,
-      );
-      yAxisSpineMesh.position.set(
-        yAxisX,
-        chart.barBaseY + chart.maxBarHeight * 0.5,
-        yAxisZ,
-      );
+      yAxisSpineMesh.scale.set( chart.yAxisWidth, chart.maxBarHeight + 0.12, chart.yAxisDepth );
+      yAxisSpineMesh.position.set( yAxisX, chart.barBaseY + chart.maxBarHeight * 0.5, yAxisZ );
 
-      const geometry = new THREE.BoxGeometry( 1, 1, 1 );
-      const material = new THREE.MeshStandardMaterial( {
-        color: 0xffffff,
-        roughness: 0.32,
-        metalness: 0.08,
-      } );
       barsMesh = new THREE.InstancedMesh(
-        geometry,
-        material,
+        new THREE.BoxGeometry( 1, 1, 1 ),
+        new THREE.MeshStandardMaterial( {
+          color: 0xffffff,
+          roughness: 0.42,
+          metalness: 0.08,
+        } ),
         dataset.countries.length * dataset.sources.length,
       );
       barsMesh.instanceMatrix.setUsage( THREE.DynamicDrawUsage );
-      barsMesh.castShadow = true;
-      barsMesh.receiveShadow = true;
+      barsMesh.castShadow = false;
+      barsMesh.receiveShadow = false;
       chartRoot.add( barsMesh );
 
       let instanceIndex = 0;
@@ -960,15 +1197,8 @@ export const example1SceneDefinition = Object.freeze( {
         createTrackedTextSprite(
           labelCollections.countries,
           labelRoot,
-          {
-            ...labelStyles.country,
-            text: country,
-          },
-          new THREE.Vector3(
-            x,
-            chart.platformHeight + chart.countryRailHeight + 0.04,
-            countryRailZ + 0.18,
-          ),
+          { ...labelStyles.country, text: country },
+          new THREE.Vector3( x, chart.platformHeight + chart.countryRailHeight + 0.035, countryRailZ + 0.14 ),
         );
 
         dataset.sources.forEach( ( source, sourceIndex ) => {
@@ -980,34 +1210,19 @@ export const example1SceneDefinition = Object.freeze( {
             createTrackedTextSprite(
               labelCollections.sources,
               labelRoot,
-              {
-                ...labelStyles.source,
-                text: source,
-              },
-              new THREE.Vector3(
-                sourceRailX - 0.25,
-                chart.platformHeight + chart.sourceRailHeight + 0.12,
-                zLabel,
-              ),
+              { ...labelStyles.source, text: source },
+              new THREE.Vector3( sourceRailX - 0.16, chart.platformHeight + chart.sourceRailHeight + 0.1, zLabel ),
             );
 
           }
 
           const z = sourceIndex * chart.sourceSpacing - chartDepth * 0.5;
           const datumId = buildDatumId( country, source );
-          const color = new THREE.Color( EXAMPLE1_SOURCE_COLORS[ source ] );
-          const entry = {
-            datumId,
-            country,
-            source,
-            instanceIndex,
-            x,
-            z,
-          };
+          const entry = { datumId, country, source, instanceIndex, x, z };
 
           datumEntries.push( entry );
           datumEntryById.set( datumId, entry );
-          barsMesh.setColorAt( instanceIndex, color );
+          barsMesh.setColorAt( instanceIndex, new THREE.Color( EXAMPLE1_SOURCE_COLORS[ source ] ) );
           currentHeights[ instanceIndex ] = 0.01;
           startHeights[ instanceIndex ] = 0.01;
           targetHeights[ instanceIndex ] = 0.01;
@@ -1023,44 +1238,23 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
-      createTrackedTextSprite(
-        labelCollections.axes,
-        labelRoot,
-        {
-          ...labelStyles.axisCaption,
-          text: 'COUNTRIES',
-        },
-        new THREE.Vector3( 0, 0.48, countryRailZ + 0.4 ),
-      );
+      createTrackedTextPlane( labelCollections.axes, labelRoot, { ...labelStyles.countryAxis, text: 'COUNTRIES' }, new THREE.Vector3( 0, 0.38, countryRailZ + 0.28 ) );
+      createTrackedTextPlane( labelCollections.axes, labelRoot, { ...labelStyles.sourceAxis, text: 'ENERGY SOURCES' }, new THREE.Vector3( sourceRailX - 0.26, 0.54, 0 ) );
 
-      createTrackedTextSprite(
-        labelCollections.axes,
-        labelRoot,
-        {
-          ...labelStyles.axisCaption,
-          text: 'ENERGY SOURCES',
-        },
-        new THREE.Vector3( sourceRailX - 0.34, 0.58, 0 ),
-      );
+      const axisPlaqueX = yAxisX + chart.yAxisPlaqueOffsetX;
+      const axisPlaqueBaseY = chart.barBaseY + chart.maxBarHeight * 0.78;
 
-      createTrackedTextSprite(
+      createTrackedTextPlane(
         labelCollections.axes,
         labelRoot,
-        {
-          ...labelStyles.axisCaption,
-          text: 'PER-CAPITA ENERGY',
-        },
-        new THREE.Vector3( yAxisX + 0.36, chart.maxBarHeight + 0.42, yAxisZ ),
+        { ...labelStyles.axisCaption, text: 'PER-CAPITA ENERGY' },
+        new THREE.Vector3( axisPlaqueX, axisPlaqueBaseY + chart.yAxisTitleOffsetY, yAxisZ ),
       );
-
-      createTrackedTextSprite(
+      createTrackedTextPlane(
         labelCollections.axes,
         labelRoot,
-        {
-          ...labelStyles.axisUnit,
-          text: `${dataset.unit} / person`,
-        },
-        new THREE.Vector3( yAxisX + 0.3, chart.maxBarHeight + 0.2, yAxisZ ),
+        { ...labelStyles.axisUnit, text: `${dataset.unit} / person` },
+        new THREE.Vector3( axisPlaqueX, axisPlaqueBaseY + chart.yAxisUnitOffsetY, yAxisZ ),
       );
 
       getDisplayTickValues().forEach( ( tickValue ) => {
@@ -1070,31 +1264,39 @@ export const example1SceneDefinition = Object.freeze( {
           new THREE.BoxGeometry( chart.yAxisTickLength, chart.yAxisTickHeight, chart.yAxisTickDepth ),
           new THREE.MeshStandardMaterial( {
             color: chart.yAxisTickColor,
-            emissive: 0x14263a,
-            roughness: 0.6,
-            metalness: 0.16,
+            emissive: 0x132337,
+            roughness: 0.66,
+            metalness: 0.12,
           } ),
         );
-        tickMesh.position.set(
-          yAxisX - chart.yAxisTickLength * 0.5,
-          tickHeight,
-          yAxisZ,
-        );
+        tickMesh.position.set( yAxisX - chart.yAxisTickLength * 0.5, tickHeight, yAxisZ );
         chartRoot.add( tickMesh );
         tickMeshes.push( tickMesh );
 
-        createTrackedTextSprite(
+        if ( tickValue > 0 ) {
+
+          const guideMesh = new THREE.Mesh(
+            new THREE.BoxGeometry( guideWidth, chart.guideLineHeight, chart.guideLineDepth ),
+            new THREE.MeshStandardMaterial( {
+              color: chart.guideLineColor,
+              emissive: chart.guideLineEmissive,
+              transparent: true,
+              opacity: chart.guideLineOpacity,
+              roughness: 0.88,
+              metalness: 0.04,
+            } ),
+          );
+          guideMesh.position.set( yAxisX - guideWidth * 0.5 + chart.yAxisTickLength * 0.2, tickHeight, yAxisZ - 0.02 );
+          chartRoot.add( guideMesh );
+          tickMeshes.push( guideMesh );
+
+        }
+
+        createTrackedTextPlane(
           labelCollections.ticks,
           labelRoot,
-          {
-            ...labelStyles.tick,
-            text: formatCompactTick( tickValue ),
-          },
-          new THREE.Vector3(
-            yAxisX - chart.yAxisTickLength - 0.06,
-            tickHeight,
-            yAxisZ,
-          ),
+          { ...labelStyles.tick, text: formatCompactTick( tickValue ) },
+          new THREE.Vector3( axisPlaqueX - 0.1, tickHeight, yAxisZ ),
         );
 
       } );
@@ -1122,15 +1324,8 @@ export const example1SceneDefinition = Object.freeze( {
         },
       } );
 
-      setSelectedYear( pendingSceneState.selectedYear ?? dataset.initialYear, {
-        source: 'scene-init',
-        shouldLog: false,
-        animate: false,
-      } );
-      setSelectedDatumId( pendingSceneState.selectedDatumId, {
-        source: 'scene-init',
-        shouldLog: false,
-      } );
+      setSelectedYear( pendingSceneState.selectedYear ?? dataset.initialYear, { source: 'scene-init', shouldLog: false, animate: false } );
+      setSelectedDatumId( pendingSceneState.selectedDatumId, { source: 'scene-init', shouldLog: false } );
       updateDesktopPanel();
       updateXRPanelText();
       syncXRSliderKnob();
@@ -1149,7 +1344,6 @@ export const example1SceneDefinition = Object.freeze( {
       sliderTrack.updateMatrixWorld( true );
       sliderTrack.getWorldPosition( tempVector );
       sliderTrack.getWorldQuaternion( tempQuaternion );
-
       tempDirection.set( 0, 0, 1 ).applyQuaternion( tempQuaternion );
       sliderPlane.setFromNormalAndCoplanarPoint( tempDirection, tempVector );
 
@@ -1162,14 +1356,98 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       const localPoint = sliderTrack.worldToLocal( sliderIntersection.clone() );
-      const ratio = THREE.MathUtils.clamp(
-        localPoint.x / xrPanel.sliderTrackLength + 0.5,
-        0,
-        1,
-      );
+      const ratio = THREE.MathUtils.clamp( localPoint.x / xrPanel.sliderTrackLength + 0.5, 0, 1 );
       const nextIndex = Math.round( ratio * ( dataset.years.length - 1 ) );
       const nextYear = dataset.years[ nextIndex ];
       setSelectedYear( nextYear, { source, shouldLog: true, animate: true } );
+
+    }
+
+    function beginPanelDrag( payload ) {
+
+      if ( ! isPanelDragEnabled() ) {
+
+        return;
+
+      }
+
+      xrPanelDragSource = payload.source;
+      xrSliderDragSource = null;
+
+      context.camera.updateMatrixWorld( true );
+      context.camera.getWorldDirection( tempForward );
+      if ( tempForward.lengthSq() < 1e-6 ) {
+
+        tempForward.set( 0, 0, - 1 );
+
+      } else {
+
+        tempForward.normalize();
+
+      }
+
+      xrPanelRoot.updateMatrixWorld( true );
+      xrPanelRoot.getWorldPosition( tempVector );
+      panelDragPlane.setFromNormalAndCoplanarPoint( tempForward, tempVector );
+
+      const ray = new THREE.Ray( payload.rayOrigin.clone(), payload.rayDirection.clone() );
+
+      if ( ray.intersectPlane( panelDragPlane, panelDragIntersection ) ) {
+
+        panelDragOffset.copy( tempVector ).sub( panelDragIntersection );
+
+      } else {
+
+        panelDragOffset.set( 0, 0, 0 );
+
+      }
+
+      updatePanelVisualState();
+
+    }
+
+    function updatePanelDragFromRay( payload ) {
+
+      if ( xrPanelDragSource !== payload.source ) {
+
+        return;
+
+      }
+
+      const ray = new THREE.Ray( payload.rayOrigin.clone(), payload.rayDirection.clone() );
+
+      if ( ! ray.intersectPlane( panelDragPlane, panelDragIntersection ) ) {
+
+        return;
+
+      }
+
+      tempVector.copy( panelDragIntersection ).add( panelDragOffset );
+      xrPanelRoot.position.copy( tempVector );
+      panelPlacementInitialized = true;
+      pendingSceneState = {
+        ...pendingSceneState,
+        ...getCurrentPanelSceneState(),
+      };
+      recordPanelTransformIfNeeded( payload.source );
+      updatePanelVisualState();
+
+    }
+
+    function endPanelDrag( payload ) {
+
+      if ( xrPanelDragSource !== payload.source ) {
+
+        return;
+
+      }
+
+      xrPanelDragSource = null;
+      recordPanelTransformIfNeeded( payload.source, {
+        force: true,
+        flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd,
+      } );
+      updatePanelVisualState();
 
     }
 
@@ -1178,27 +1456,12 @@ export const example1SceneDefinition = Object.freeze( {
       desktopPanelNode = document.createElement( 'section' );
       desktopPanelNode.className = 'scene-panel-card';
       desktopPanelNode.setAttribute( 'style', desktopPanel.root );
-
-      desktopPanelNode.appendChild(
-        createStyledElement( 'p', desktopPanel.eyebrow, 'Scene 1 · Semantic Replay' ),
-      );
-      desktopPanelNode.appendChild(
-        createStyledElement( 'h2', desktopPanel.title, 'Per capita primary energy consumption by source' ),
-      );
-      desktopPanelNode.appendChild(
-        createStyledElement(
-          'p',
-          desktopPanel.body,
-          'Explore how a single year reshapes the 3D country-by-source energy matrix. Hover or pin a bar to inspect one country-source pair in detail.',
-        ),
-      );
-
-      desktopPanelNode.appendChild(
-        createStyledElement( 'p', desktopPanel.sectionLabel, 'Year' ),
-      );
+      desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.eyebrow, 'Scene 1 · Semantic Replay' ) );
+      desktopPanelNode.appendChild( createStyledElement( 'h2', desktopPanel.title, 'Per capita primary energy consumption by source' ) );
+      desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.body, 'Explore how a single year reshapes the 3D country-by-source energy matrix. Hover or pin a bar to inspect one country-source pair in detail.' ) );
+      desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Year' ) );
       desktopYearValue = createStyledElement( 'p', desktopPanel.heroValue, 'Loading dataset...' );
       desktopPanelNode.appendChild( desktopYearValue );
-
       desktopStatusValue = createStyledElement( 'p', desktopPanel.status, 'Fetching the OWID dataset.' );
       desktopPanelNode.appendChild( desktopStatusValue );
 
@@ -1225,168 +1488,14 @@ export const example1SceneDefinition = Object.freeze( {
       } );
       desktopPanelNode.appendChild( desktopSlider );
 
-      desktopPanelNode.appendChild(
-        createStyledElement( 'p', desktopPanel.sectionLabel, 'Pinned Selection' ),
-      );
+      desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Pinned Selection' ) );
       desktopSelectionValue = createStyledElement( 'p', desktopPanel.detail, 'Hover for a quick tooltip or pin a bar to keep it in focus.' );
       desktopPanelNode.appendChild( desktopSelectionValue );
-
-      desktopPanelNode.appendChild(
-        createStyledElement( 'p', desktopPanel.sectionLabel, 'Source' ),
-      );
+      desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Source' ) );
       desktopCitationValue = createStyledElement( 'p', desktopPanel.detail, 'Loading citation...' );
       desktopPanelNode.appendChild( desktopCitationValue );
 
       context.setDesktopPanelNode( desktopPanelNode );
-
-    }
-
-    function updatePanelAnchorTarget() {
-
-      context.camera.updateMatrixWorld( true );
-      context.camera.getWorldPosition( tempVector );
-      context.camera.getWorldDirection( tempForward );
-      context.camera.getWorldQuaternion( tempQuaternion );
-
-      tempForward.y = 0;
-      if ( tempForward.lengthSq() < 1e-6 ) {
-
-        tempForward.set( 0, 0, - 1 );
-
-      } else {
-
-        tempForward.normalize();
-
-      }
-
-      tempRight.set( 1, 0, 0 ).applyQuaternion( tempQuaternion );
-      tempRight.y = 0;
-      if ( tempRight.lengthSq() < 1e-6 ) {
-
-        tempRight.set( 1, 0, 0 );
-
-      } else {
-
-        tempRight.normalize();
-
-      }
-
-      tempLeft.copy( tempRight ).multiplyScalar( - 1 );
-
-      tempVector2.copy( tempVector )
-        .addScaledVector( tempForward, xrPanel.anchor.forward )
-        .addScaledVector( tempLeft, xrPanel.anchor.left );
-      tempVector2.y = Math.max( 1.0, tempVector.y - xrPanel.anchor.down );
-
-      tempLookTarget.copy( tempVector );
-      tempLookTarget.y = tempVector2.y;
-
-      tempObject.position.copy( tempVector2 );
-      tempObject.lookAt( tempLookTarget );
-      tempPanelTargetQuaternion.copy( tempObject.quaternion );
-
-    }
-
-    function needsPanelReanchor() {
-
-      if ( context.getPresentationMode() === PRESENTATION_MODES.DESKTOP ) {
-
-        return false;
-
-      }
-
-      context.camera.updateMatrixWorld( true );
-      context.camera.getWorldPosition( tempVector );
-      context.camera.getWorldDirection( tempForward );
-      tempDirection.copy( xrPanelRoot.position ).sub( tempVector );
-
-      const distance = tempDirection.length();
-
-      if ( distance > xrPanel.anchor.maxDistance ) {
-
-        return true;
-
-      }
-
-      tempForward.y = 0;
-      tempDirection.y = 0;
-
-      if ( tempForward.lengthSq() < 1e-6 || tempDirection.lengthSq() < 1e-6 ) {
-
-        return false;
-
-      }
-
-      tempForward.normalize();
-      tempDirection.normalize();
-      context.camera.getWorldQuaternion( tempQuaternion );
-      tempRight.set( 1, 0, 0 ).applyQuaternion( tempQuaternion );
-      tempRight.y = 0;
-      if ( tempRight.lengthSq() >= 1e-6 ) {
-
-        tempRight.normalize();
-
-      }
-      tempLeft.copy( tempRight ).multiplyScalar( - 1 );
-
-      tempVector3.copy( tempForward ).multiplyScalar( 0.78 ).addScaledVector( tempLeft, 0.52 ).normalize();
-      const angle = tempVector3.angleTo( tempDirection );
-
-      return angle > THREE.MathUtils.degToRad( xrPanel.anchor.maxAngleDeg );
-
-    }
-
-    function updateXRPanelAnchoring() {
-
-      if ( context.getPresentationMode() === PRESENTATION_MODES.DESKTOP ) {
-
-        xrPanelRoot.visible = false;
-        return;
-
-      }
-
-      xrPanelRoot.visible = true;
-
-      if ( xrPanelNeedsReanchor || needsPanelReanchor() ) {
-
-        updatePanelAnchorTarget();
-        xrPanelNeedsReanchor = true;
-
-      }
-
-      if ( ! xrPanelNeedsReanchor ) {
-
-        return;
-
-      }
-
-      xrPanelRoot.position.lerp( tempVector2, xrPanel.anchor.snapLerp );
-      xrPanelRoot.quaternion.slerp( tempPanelTargetQuaternion, xrPanel.anchor.snapLerp );
-
-      if (
-        xrPanelRoot.position.distanceToSquared( tempVector2 ) < 0.0004 &&
-        xrPanelRoot.quaternion.angleTo( tempPanelTargetQuaternion ) < 0.01
-      ) {
-
-        xrPanelRoot.position.copy( tempVector2 );
-        xrPanelRoot.quaternion.copy( tempPanelTargetQuaternion );
-        xrPanelNeedsReanchor = false;
-
-      }
-
-    }
-
-    function requestXRPanelReanchor( immediate = false ) {
-
-      updatePanelAnchorTarget();
-      xrPanelNeedsReanchor = ! immediate;
-
-      if ( immediate ) {
-
-        xrPanelRoot.position.copy( tempVector2 );
-        xrPanelRoot.quaternion.copy( tempPanelTargetQuaternion );
-
-      }
 
     }
 
@@ -1428,6 +1537,18 @@ export const example1SceneDefinition = Object.freeze( {
     function applySceneState( nextSceneState, options = {} ) {
 
       pendingSceneState = example1SceneDefinition.normalizeSceneState( nextSceneState, pendingSceneState );
+      const nextPanelPosition = normalizePanelPosition( pendingSceneState.panelPosition, null );
+      const nextPanelQuaternion = normalizePanelQuaternion( pendingSceneState.panelQuaternion, null );
+
+      if ( nextPanelPosition && nextPanelQuaternion ) {
+
+        applyPanelTransform( nextPanelPosition, nextPanelQuaternion );
+
+      } else if ( options.forceDefaultPanel === true || ( context.getPresentationMode() !== PRESENTATION_MODES.DESKTOP && ! panelPlacementInitialized ) ) {
+
+        placePanelAtDefault();
+
+      }
 
       if ( ! dataset ) {
 
@@ -1473,49 +1594,46 @@ export const example1SceneDefinition = Object.freeze( {
     } );
     uiSurfaces.push( panelSurface );
 
-    const sliderSurfaceHandlers = {
-      onHoverChange( payload ) {
+    const dragSurface = createSceneUiSurface( context, {
+      parent: xrPanelRoot,
+      width: xrPanel.width - 0.05,
+      height: xrPanel.dragSurfaceHeight,
+      position: [ 0, xrPanel.titleY, xrPanel.surfaceDragZ ],
+      name: 'example1-panel-drag-surface',
+      handlers: {
+        onHoverChange( payload ) {
 
-        if ( payload.isHovered ) {
+          if ( payload.isHovered ) {
 
-          sliderHoverSources.add( payload.source );
+            dragBarHoverSources.add( payload.source );
 
-        } else {
+          } else {
 
-          sliderHoverSources.delete( payload.source );
+            dragBarHoverSources.delete( payload.source );
 
-        }
+          }
 
-        updatePanelVisualState();
-
-      },
-      onSelectStart( payload ) {
-
-        xrDragSource = payload.source;
-        updatePanelVisualState();
-        updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
-
-      },
-      onSelectMove( payload ) {
-
-        if ( xrDragSource === payload.source ) {
-
-          updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
-
-        }
-
-      },
-      onSelectEnd( payload ) {
-
-        if ( xrDragSource === payload.source ) {
-
-          xrDragSource = null;
           updatePanelVisualState();
 
-        }
+        },
+        onSelectStart( payload ) {
 
+          beginPanelDrag( payload );
+
+        },
+        onSelectMove( payload ) {
+
+          updatePanelDragFromRay( payload );
+
+        },
+        onSelectEnd( payload ) {
+
+          endPanelDrag( payload );
+
+        },
       },
-    };
+    } );
+    uiSurfaces.push( dragSurface );
 
     const sliderSurface = createSceneUiSurface( context, {
       parent: xrPanelRoot,
@@ -1523,7 +1641,55 @@ export const example1SceneDefinition = Object.freeze( {
       height: xrPanel.sliderSurfaceHeight,
       position: [ 0, xrPanel.trackY, xrPanel.surfaceSliderZ ],
       name: 'example1-slider-surface',
-      handlers: sliderSurfaceHandlers,
+      handlers: {
+        onHoverChange( payload ) {
+
+          if ( payload.isHovered ) {
+
+            sliderHoverSources.add( payload.source );
+
+          } else {
+
+            sliderHoverSources.delete( payload.source );
+
+          }
+
+          updatePanelVisualState();
+
+        },
+        onSelectStart( payload ) {
+
+          if ( xrPanelDragSource !== null || getInteractionPolicy()?.canInteract === false ) {
+
+            return;
+
+          }
+
+          xrSliderDragSource = payload.source;
+          updatePanelVisualState();
+          updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
+
+        },
+        onSelectMove( payload ) {
+
+          if ( xrSliderDragSource === payload.source && xrPanelDragSource === null ) {
+
+            updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
+
+          }
+
+        },
+        onSelectEnd( payload ) {
+
+          if ( xrSliderDragSource === payload.source ) {
+
+            xrSliderDragSource = null;
+            updatePanelVisualState();
+
+          }
+
+        },
+      },
     } );
     uiSurfaces.push( sliderSurface );
 
@@ -1536,7 +1702,7 @@ export const example1SceneDefinition = Object.freeze( {
         updateXRPanelText();
         syncXRSliderKnob();
         loadDatasetIfNeeded();
-        requestXRPanelReanchor( true );
+        ensurePanelPlacementForCurrentMode();
         updatePanelVisualState();
 
       },
@@ -1553,7 +1719,7 @@ export const example1SceneDefinition = Object.freeze( {
         uiSurfaces.forEach( ( surface ) => surface.dispose() );
         clearTickMeshes();
         clearChartLabels();
-        labelCollections.panel.splice( 0 ).forEach( ( controller ) => controller.dispose() );
+        clearLabelCollection( 'panelPlanes' );
         tooltipSprite.dispose();
         trackedMeshes.forEach( ( mesh ) => {
 
@@ -1571,19 +1737,11 @@ export const example1SceneDefinition = Object.freeze( {
         if ( dataset && animationElapsed < chart.animationDuration ) {
 
           animationElapsed = Math.min( chart.animationDuration, animationElapsed + deltaSeconds );
-          const alpha = THREE.MathUtils.smoothstep(
-            animationElapsed / chart.animationDuration,
-            0,
-            1,
-          );
+          const alpha = THREE.MathUtils.smoothstep( animationElapsed / chart.animationDuration, 0, 1 );
 
           for ( let index = 0; index < datumEntries.length; index += 1 ) {
 
-            currentHeights[ index ] = THREE.MathUtils.lerp(
-              startHeights[ index ],
-              targetHeights[ index ],
-              alpha,
-            );
+            currentHeights[ index ] = THREE.MathUtils.lerp( startHeights[ index ], targetHeights[ index ], alpha );
 
           }
 
@@ -1598,14 +1756,16 @@ export const example1SceneDefinition = Object.freeze( {
 
         }
 
-        updateXRPanelAnchoring();
-
       },
       getSceneStateForReplay() {
 
         return {
           selectedYear,
           selectedDatumId,
+          ...( panelPlacementInitialized ? getCurrentPanelSceneState() : {
+            panelPosition: pendingSceneState.panelPosition,
+            panelQuaternion: pendingSceneState.panelQuaternion,
+          } ),
         };
 
       },
@@ -1615,6 +1775,7 @@ export const example1SceneDefinition = Object.freeze( {
           source: 'replay-scene',
           shouldLog: false,
           animate: true,
+          forceDefaultPanel: true,
         } );
 
       },
@@ -1624,8 +1785,8 @@ export const example1SceneDefinition = Object.freeze( {
 
           return {
             title: 'Example 1 - Energy Matrix',
-            body: 'Use the left-side floating year window to scrub through time, then point at bars to inspect country-source values.',
-            note: 'Replay still stores only compact scene semantics such as `selectedYear` and the pinned datum id.',
+            body: 'Use the left-front year window to scrub through time, then point at bars to inspect country-source values.',
+            note: 'Replay stores compact scene semantics: selected year, pinned datum, and panel transform.',
           };
 
         }
@@ -1634,7 +1795,7 @@ export const example1SceneDefinition = Object.freeze( {
 
           return {
             title: 'Example 1 - Energy Matrix',
-            body: 'The chart stays world-anchored while the floating year panel remains comfortably near your left hand.',
+            body: 'The chart stays world-anchored while the floating year window remains draggable by its title bar.',
             note: 'Authored panel surfaces register through the shared scene raycast pipeline, so pointer hits remain visible in live use and replay.',
           };
 
@@ -1650,16 +1811,19 @@ export const example1SceneDefinition = Object.freeze( {
       onPresentationModeChange( presentationMode ) {
 
         xrPanelRoot.visible = presentationMode !== PRESENTATION_MODES.DESKTOP;
-        xrDragSource = null;
+        xrSliderDragSource = null;
+        xrPanelDragSource = null;
         panelHoverSources.clear();
         sliderHoverSources.clear();
-        updatePanelVisualState();
+        dragBarHoverSources.clear();
 
         if ( presentationMode !== PRESENTATION_MODES.DESKTOP ) {
 
-          requestXRPanelReanchor( true );
+          ensurePanelPlacementForCurrentMode();
 
         }
+
+        updatePanelVisualState();
 
       },
       handleBackgroundSelect( payload ) {
@@ -1668,6 +1832,5 @@ export const example1SceneDefinition = Object.freeze( {
 
       },
     };
-
   },
 } );

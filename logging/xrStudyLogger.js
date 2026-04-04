@@ -9,7 +9,6 @@ import {
   POINTER_SAMPLING_BEHAVIORS,
   PRESENTATION_MODES,
   REPLAY_POINTER_IDS,
-  SAMPLING_CONFIG,
   REPLAY_POINTER_TOOLTIP_STATES,
   applyReplayPointerTooltipState,
   createHiddenReplayPointer,
@@ -21,6 +20,7 @@ import {
   getSceneStateChangeLabel,
   getSessionEndLabel,
   getSessionStartLabel,
+  resolveLoggingConfig,
 } from './xrLoggingSchema.js';
 import {
   buildAnswerPayload,
@@ -173,6 +173,7 @@ export function createXRStudyLogger( {
   bridge,
   getSceneSnapshot,
   applyReplayState,
+  getLoggingConfig = () => null,
   normalizeSceneReplayState = ( sceneKey, sceneState, fallbackSceneState ) => (
     structuredClone( sceneState ?? fallbackSceneState ?? {} )
   ),
@@ -430,6 +431,12 @@ export function createXRStudyLogger( {
 
   }
 
+  function resolveActiveLoggingConfig() {
+
+    return resolveLoggingConfig( getLoggingConfig?.() );
+
+  }
+
   function cancelPendingOutboundSync() {
 
     if ( pendingOutboundSyncTimer !== null ) {
@@ -468,9 +475,12 @@ export function createXRStudyLogger( {
 
   }
 
-  function scheduleOutboundStateSync( eventType = null ) {
+  function scheduleOutboundStateSync( eventType = null, {
+    flushImmediately = false,
+  } = {} ) {
 
     currentState = cloneValue( trrack.getState() );
+    const activeLoggingConfig = resolveActiveLoggingConfig();
 
     if ( ! canSyncOutbound() ) {
 
@@ -479,7 +489,7 @@ export function createXRStudyLogger( {
 
     }
 
-    if ( SAMPLING_CONFIG.outboundSync.forceFlushEventTypes.includes( eventType ) ) {
+    if ( flushImmediately || activeLoggingConfig.outboundSync.forceFlushEventTypes.includes( eventType ) ) {
 
       return flushOutboundState( { forced: true } );
 
@@ -488,7 +498,7 @@ export function createXRStudyLogger( {
     const now = performance.now();
     const elapsedMs = now - lastOutboundSyncAt;
 
-    if ( elapsedMs >= SAMPLING_CONFIG.outboundSync.minIntervalMs ) {
+    if ( elapsedMs >= activeLoggingConfig.outboundSync.minIntervalMs ) {
 
       return flushOutboundState();
 
@@ -506,13 +516,13 @@ export function createXRStudyLogger( {
       pendingOutboundSyncTimer = null;
       flushOutboundState();
 
-    }, Math.max( 0, SAMPLING_CONFIG.outboundSync.minIntervalMs - elapsedMs ) );
+    }, Math.max( 0, activeLoggingConfig.outboundSync.minIntervalMs - elapsedMs ) );
 
     return false;
 
   }
 
-  function runAction( label, action, eventType = null ) {
+  function runAction( label, action, eventType = null, options = {} ) {
 
     if ( ! canRecord() ) {
 
@@ -521,7 +531,7 @@ export function createXRStudyLogger( {
     }
 
     trrack.apply( label, action );
-    scheduleOutboundStateSync( eventType );
+    scheduleOutboundStateSync( eventType, options );
     return true;
 
   }
@@ -707,6 +717,11 @@ export function createXRStudyLogger( {
       return cloneValue( buildInteractionPolicy() );
 
     },
+    getActiveLoggingConfig() {
+
+      return cloneValue( resolveActiveLoggingConfig() );
+
+    },
     onInteractionPolicyChange( fn ) {
 
       return addInteractionPolicyListener( fn );
@@ -850,6 +865,7 @@ export function createXRStudyLogger( {
       source = 'scene',
       interactor = null,
       label = null,
+      flushImmediately = false,
     } = {} ) {
 
       return runAction(
@@ -859,6 +875,7 @@ export function createXRStudyLogger( {
           source,
         } ) ),
         ACTION_TYPES.SCENE_STATE_CHANGE,
+        { flushImmediately },
       );
 
     },
@@ -875,9 +892,10 @@ export function createXRStudyLogger( {
       }
 
       const sceneSnapshot = getSceneSnapshot();
-      const objectSamplingProfile = getObjectSamplingProfile( sceneSnapshot.presentationMode, SAMPLING_CONFIG );
+      const activeLoggingConfig = resolveActiveLoggingConfig();
+      const objectSamplingProfile = getObjectSamplingProfile( sceneSnapshot.presentationMode, activeLoggingConfig );
 
-      if ( ! objectTransformChanged( sceneSnapshot, currentState, SAMPLING_CONFIG ) ) {
+      if ( ! objectTransformChanged( sceneSnapshot, currentState, activeLoggingConfig ) ) {
 
         loggingStats.object.skippedUnchanged += 1;
         return 'unchanged';
@@ -924,9 +942,10 @@ export function createXRStudyLogger( {
       }
 
       const sceneSnapshot = getSceneSnapshot();
-      const cameraSamplingProfile = getCameraSamplingProfile( sceneSnapshot.presentationMode, SAMPLING_CONFIG );
+      const activeLoggingConfig = resolveActiveLoggingConfig();
+      const cameraSamplingProfile = getCameraSamplingProfile( sceneSnapshot.presentationMode, activeLoggingConfig );
 
-      if ( ! cameraTransformChanged( sceneSnapshot, currentState, SAMPLING_CONFIG ) ) {
+      if ( ! cameraTransformChanged( sceneSnapshot, currentState, activeLoggingConfig ) ) {
 
         loggingStats.camera.skippedUnchanged += 1;
         return 'unchanged';
@@ -965,7 +984,9 @@ export function createXRStudyLogger( {
       now = performance.now(),
     } = {} ) {
 
-      if ( ! canRecord() || ! SAMPLING_CONFIG.pointer.enabled ) {
+      const activeLoggingConfig = resolveActiveLoggingConfig();
+
+      if ( ! canRecord() || ! activeLoggingConfig.pointer.enabled ) {
 
         return 'unchanged';
 
@@ -976,7 +997,7 @@ export function createXRStudyLogger( {
         sceneSnapshot.replayPointers,
         currentState.replayPointers,
       );
-      const pointerChangeDetails = getReplayPointerChangeDetails( sceneSnapshot, currentState, SAMPLING_CONFIG );
+      const pointerChangeDetails = getReplayPointerChangeDetails( sceneSnapshot, currentState, activeLoggingConfig );
       const changedPointerDetails = REPLAY_POINTER_IDS
         .map( ( interactor ) => pointerChangeDetails[ interactor ] )
         .filter( ( detail ) => detail.semanticChanged || detail.geometryChanged );
@@ -993,10 +1014,10 @@ export function createXRStudyLogger( {
 
       if (
         semanticDetails.length > 0 &&
-        SAMPLING_CONFIG.pointer.logImmediateSemanticTransitions &&
+        activeLoggingConfig.pointer.logImmediateSemanticTransitions &&
         ! semanticDetails.every( ( detail ) => (
           detail.nextPointer.mode === POINTER_MODES.GRAB &&
-          SAMPLING_CONFIG.pointer.grabbing.behavior === POINTER_SAMPLING_BEHAVIORS.OFF
+          activeLoggingConfig.pointer.grabbing.behavior === POINTER_SAMPLING_BEHAVIORS.OFF
         ) )
       ) {
 
@@ -1029,7 +1050,7 @@ export function createXRStudyLogger( {
       for ( const detail of changedPointerDetails ) {
 
         const isGrabPointer = detail.nextPointer.mode === POINTER_MODES.GRAB;
-        const grabBehavior = SAMPLING_CONFIG.pointer.grabbing.behavior;
+        const grabBehavior = activeLoggingConfig.pointer.grabbing.behavior;
 
         if ( isGrabPointer && ! detail.semanticChanged && grabBehavior !== POINTER_SAMPLING_BEHAVIORS.FULL ) {
 

@@ -130,6 +130,106 @@ export const SAMPLING_CONFIG = Object.freeze( {
   } ),
 } );
 
+export const DEFAULT_SCENE_STATE_LOGGING_CONFIG = Object.freeze( {
+  minIntervalMs: 0,
+  positionEpsilon: 0,
+  quaternionAngleThresholdDeg: 0,
+  flushOnSelectionChange: false,
+  flushOnYearChange: false,
+  flushOnPanelDragEnd: false,
+} );
+
+export const DEFAULT_LOGGING_CONFIG = Object.freeze( {
+  object: SAMPLING_CONFIG.object,
+  camera: SAMPLING_CONFIG.camera,
+  pointer: SAMPLING_CONFIG.pointer,
+  outboundSync: SAMPLING_CONFIG.outboundSync,
+  sceneState: DEFAULT_SCENE_STATE_LOGGING_CONFIG,
+} );
+
+function isPlainObject( value ) {
+
+  return value !== null && typeof value === 'object' && ! Array.isArray( value );
+
+}
+
+function deepFreeze( value ) {
+
+  if ( ! isPlainObject( value ) && ! Array.isArray( value ) ) {
+
+    return value;
+
+  }
+
+  const nestedValues = Array.isArray( value )
+    ? value
+    : Object.values( value );
+
+  nestedValues.forEach( ( nestedValue ) => deepFreeze( nestedValue ) );
+  return Object.freeze( value );
+
+}
+
+function mergeConfigValues( baseValue, overrideValue ) {
+
+  if ( overrideValue === undefined ) {
+
+    if ( Array.isArray( baseValue ) ) {
+
+      return [ ...baseValue ];
+
+    }
+
+    if ( isPlainObject( baseValue ) ) {
+
+      return Object.fromEntries(
+        Object.entries( baseValue ).map( ( [ key, nestedValue ] ) => (
+          [ key, mergeConfigValues( nestedValue, undefined ) ]
+        ) ),
+      );
+
+    }
+
+    return baseValue;
+
+  }
+
+  if ( Array.isArray( overrideValue ) ) {
+
+    return [ ...overrideValue ];
+
+  }
+
+  if ( ! isPlainObject( overrideValue ) ) {
+
+    return overrideValue;
+
+  }
+
+  const mergedValue = isPlainObject( baseValue ) ? {
+    ...Object.fromEntries(
+      Object.entries( baseValue ).map( ( [ key, nestedValue ] ) => (
+        [ key, mergeConfigValues( nestedValue, undefined ) ]
+      ) ),
+    ),
+  } : {};
+
+  Object.entries( overrideValue ).forEach( ( [ key, nestedValue ] ) => {
+
+    mergedValue[ key ] = mergeConfigValues( mergedValue[ key ], nestedValue );
+
+  } );
+
+  return mergedValue;
+
+}
+
+export function resolveLoggingConfig( overrideConfig = null ) {
+
+  return deepFreeze( mergeConfigValues( DEFAULT_LOGGING_CONFIG, overrideConfig || {} ) );
+
+}
+
 function cloneTransform( transform = {} ) {
 
   return {
