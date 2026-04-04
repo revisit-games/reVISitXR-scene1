@@ -914,16 +914,24 @@ export const example1SceneDefinition = Object.freeze( {
     function updateStaticLabelEmphasis() {
 
       const activeDatum = getActiveDatum();
+      const passiveOpacity = activeDatum ? 0.22 : 1;
+      const focusedOpacity = activeDatum ? 0.58 : 1;
 
       countryLabelSprites.forEach( ( sprite, country ) => {
 
-        setSpriteOpacity( sprite, activeDatum && activeDatum.country === country ? 0.18 : 1 );
+        setSpriteOpacity(
+          sprite,
+          activeDatum && activeDatum.country === country ? focusedOpacity : passiveOpacity,
+        );
 
       } );
 
       sourceLabelSprites.forEach( ( sprite, source ) => {
 
-        setSpriteOpacity( sprite, activeDatum && activeDatum.source === source ? 0.18 : 1 );
+        setSpriteOpacity(
+          sprite,
+          activeDatum && activeDatum.source === source ? focusedOpacity : passiveOpacity,
+        );
 
       } );
 
@@ -940,6 +948,35 @@ export const example1SceneDefinition = Object.freeze( {
         updateTooltipAndHighlight();
 
       }
+
+    }
+
+    function clearHoveredDatumFromSource( source, { updateVisuals = true } = {} ) {
+
+      if ( ! source || ! hoveredDatumIdsBySource.has( source ) ) {
+
+        return false;
+
+      }
+
+      hoveredDatumIdsBySource.delete( source );
+      const nextHoveredDatumId = resolveHoveredDatumId();
+
+      if ( nextHoveredDatumId === currentHoveredDatumId ) {
+
+        return false;
+
+      }
+
+      currentHoveredDatumId = nextHoveredDatumId;
+
+      if ( updateVisuals ) {
+
+        updateTooltipAndHighlight();
+
+      }
+
+      return true;
 
     }
 
@@ -968,11 +1005,14 @@ export const example1SceneDefinition = Object.freeze( {
       tooltipSprite.setText(
         `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
       );
+      tooltipSprite.setText(
+        `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
+      );
       tooltipSprite.sprite.visible = true;
       tooltipSprite.sprite.position.set(
-        activeDatum.x - Math.sign( activeDatum.x || 1 ) * 0.08,
-        chart.barBaseY + currentHeight + 0.28,
-        activeDatum.z - Math.sign( activeDatum.z || 1 ) * 0.08,
+        activeDatum.x - Math.sign( activeDatum.x || 1 ) * 0.14,
+        chart.barBaseY + currentHeight + 0.38,
+        activeDatum.z - Math.sign( activeDatum.z || 1 ) * 0.14,
       );
       updateStaticLabelEmphasis();
 
@@ -1019,6 +1059,24 @@ export const example1SceneDefinition = Object.freeze( {
     }
 
     function updateDesktopSelectionText() {
+
+      if ( ! desktopSelectionValue ) {
+
+        return;
+
+      }
+
+      const readablePinnedDatum = getDatumForId( selectedDatumId );
+
+      if ( ! readablePinnedDatum ) {
+
+        desktopSelectionValue.textContent = 'Hover for a quick tooltip or pin a bar to keep a country-source value in focus.';
+        return;
+
+      }
+
+      desktopSelectionValue.textContent = `${readablePinnedDatum.country} · ${readablePinnedDatum.source} · ${selectedYear} · ${formatValue( readablePinnedDatum.value, dataset.unit )}`;
+      return;
 
       if ( ! desktopSelectionValue ) {
 
@@ -1085,6 +1143,9 @@ export const example1SceneDefinition = Object.freeze( {
       panelYearText.setText( String( selectedYear ) );
       panelMinYearText.setText( String( dataset.years[ 0 ] ) );
       panelMaxYearText.setText( String( dataset.years.at( - 1 ) ) );
+      const readablePinnedDatum = getDatumForId( selectedDatumId );
+      panelHelperText.setText( readablePinnedDatum ? `${readablePinnedDatum.country} · ${readablePinnedDatum.source}` : 'Drag the slider to scrub years.' );
+      return;
 
       const pinnedDatum = getDatumForId( selectedDatumId );
       panelHelperText.setText( pinnedDatum ? `${pinnedDatum.country} · ${pinnedDatum.source}` : 'Drag the slider to scrub years.' );
@@ -1545,6 +1606,8 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
+      clearHoveredDatumFromSource( payload.source, { updateVisuals: false } );
+
       if ( ! orbitPanel.beginDrag( payload ) ) {
 
         return;
@@ -1554,6 +1617,7 @@ export const example1SceneDefinition = Object.freeze( {
       xrPanelDragSource = payload.source;
       xrSliderDragSource = null;
 
+      updateTooltipAndHighlight();
       updatePanelVisualState();
 
     }
@@ -1606,6 +1670,7 @@ export const example1SceneDefinition = Object.freeze( {
       desktopPanelNode.className = 'scene-panel-card';
       desktopPanelNode.setAttribute( 'style', desktopPanel.root );
       desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.eyebrow, 'Scene 1 · Semantic Replay' ) );
+      desktopPanelNode.firstElementChild.textContent = 'Scene 1 · Semantic Replay';
       desktopPanelNode.appendChild( createStyledElement( 'h2', desktopPanel.title, 'Per capita primary energy consumption by source' ) );
       desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.body, 'Explore how a single year reshapes the 3D country-by-source energy matrix. Hover or pin a bar to inspect one country-source pair in detail.' ) );
       desktopPanelNode.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Year' ) );
@@ -1742,6 +1807,12 @@ export const example1SceneDefinition = Object.freeze( {
 
           if ( payload.isHovered ) {
 
+            clearHoveredDatumFromSource( payload.source, { updateVisuals: false } );
+
+          }
+
+          if ( payload.isHovered ) {
+
             panelHoverSources.add( payload.source );
 
           } else {
@@ -1765,6 +1836,12 @@ export const example1SceneDefinition = Object.freeze( {
       name: 'example1-panel-drag-surface',
       handlers: {
         onHoverChange( payload ) {
+
+          if ( payload.isHovered ) {
+
+            clearHoveredDatumFromSource( payload.source, { updateVisuals: false } );
+
+          }
 
           if ( payload.isHovered ) {
 
@@ -1809,6 +1886,12 @@ export const example1SceneDefinition = Object.freeze( {
 
           if ( payload.isHovered ) {
 
+            clearHoveredDatumFromSource( payload.source, { updateVisuals: false } );
+
+          }
+
+          if ( payload.isHovered ) {
+
             sliderHoverSources.add( payload.source );
 
           } else {
@@ -1828,7 +1911,9 @@ export const example1SceneDefinition = Object.freeze( {
 
           }
 
+          clearHoveredDatumFromSource( payload.source, { updateVisuals: false } );
           xrSliderDragSource = payload.source;
+          updateTooltipAndHighlight();
           updatePanelVisualState();
           updateYearFromXRRay( payload.rayOrigin, payload.rayDirection, payload.source );
 

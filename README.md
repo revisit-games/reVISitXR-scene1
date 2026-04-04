@@ -345,6 +345,7 @@ Use `createFloatingOrbitPanel(context, options)` when a scene needs a floating w
 - keeps the panel world-fixed instead of re-anchoring to the moving camera
 - drags only along a fixed-radius horizontal orbit
 - keeps the panel facing the fixed orbit center
+- latches the drag state on `selectstart` even if the first ray-plane intersection is not yet valid, so the first good `selectmove` can still start orbital motion
 
 Recommended pattern:
 
@@ -415,6 +416,8 @@ Example 1 now keeps its visual tuning in `example1/example1VisualConfig.js`, inc
 Example 1 now keeps its logging tuning in `example1/example1LoggingConfig.js`, including:
 
 - replay-pointer behavior during XR slider drags
+- immersive camera sampling overrides for scenes that do not need dense head-motion provenance
+- immersive object sampling overrides for authored scenes that are semantic-first rather than manipulation-heavy
 - scene-state throttling for panel dragging
 - year-commit debounce timing
 - stable legend-friendly scene labels
@@ -454,6 +457,7 @@ For floating XR panels, start with `scenes/core/floatingOrbitPanel.js` instead o
 - add a dedicated drag bar if users should be able to reposition it
 - keep the draggable transform in semantic `sceneState` if participant replay should reconstruct the interaction honestly
 - prefer stable semantic labels such as `Change Example 1 Year` over value-specific labels that fragment the replay legend
+- keep scene-local logging overrides in the scene folder so immersive camera/object sampling can be reduced without changing global defaults
 
 Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floatingOrbitPanel.js`, and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, fixed-orbit repositioning, and semantic replay of the panel transform.
 

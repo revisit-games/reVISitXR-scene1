@@ -343,7 +343,8 @@ export function createFloatingOrbitPanel( context, {
 
     syncOrbitFromCurrentTransform();
     activeDragSource = payload.source;
-    return updateDrag( payload );
+    updateDrag( payload );
+    return true;
 
   }
 
