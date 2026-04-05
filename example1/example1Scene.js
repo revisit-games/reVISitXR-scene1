@@ -502,8 +502,10 @@ export const example1SceneDefinition = Object.freeze( {
       panelInitialOffset: xrPanel.panelInitialOffset,
       panelInitialYawDeg: xrPanel.panelInitialYawDeg,
       orbitCenterMode: xrPanel.orbitCenterMode,
+      orbitHeightOffset: xrPanel.orbitHeightOffset,
       dragMode: xrPanel.dragMode,
       faceOrbitCenter: xrPanel.faceOrbitCenter,
+      lockVerticalOrientation: xrPanel.lockVerticalOrientation,
     } );
 
     function getInteractionPolicy() {
@@ -1503,15 +1505,18 @@ export const example1SceneDefinition = Object.freeze( {
       getDisplayTickValues().filter( ( tickValue ) => tickValue > 0 ).slice( 0, 5 ).forEach( ( tickValue ) => {
 
         const tickHeight = chart.barBaseY + tickValue / displayMax * chart.maxBarHeight;
+        const slicePlaneGeometry = new THREE.PlaneGeometry( sliceWidth, sliceDepth );
         const slicePlaneMesh = new THREE.Mesh(
-          new THREE.PlaneGeometry( sliceWidth, sliceDepth ),
-          new THREE.MeshBasicMaterial( {
+          slicePlaneGeometry,
+          new THREE.MeshStandardMaterial( {
             color: chart.slicePlaneColor,
+            emissive: chart.slicePlaneEmissive,
             transparent: true,
             opacity: chart.slicePlaneOpacity,
+            roughness: 0.88,
+            metalness: 0.03,
             depthWrite: false,
-            side: THREE.FrontSide,
-            toneMapped: false,
+            side: chart.sliceUseDoubleSide ? THREE.DoubleSide : THREE.FrontSide,
           } ),
         );
         slicePlaneMesh.rotation.x = - Math.PI * 0.5;
@@ -1519,6 +1524,26 @@ export const example1SceneDefinition = Object.freeze( {
         slicePlaneMesh.renderOrder = chart.slicePlaneRenderOrder;
         chartRoot.add( slicePlaneMesh );
         axisGuideMeshes.push( slicePlaneMesh );
+
+        if ( chart.sliceOutlineOpacity > 0 ) {
+
+          const sliceOutline = new THREE.LineSegments(
+            new THREE.EdgesGeometry( slicePlaneGeometry ),
+            new THREE.LineBasicMaterial( {
+              color: chart.sliceOutlineColor,
+              transparent: true,
+              opacity: chart.sliceOutlineOpacity,
+              depthWrite: false,
+              toneMapped: false,
+            } ),
+          );
+          sliceOutline.rotation.x = - Math.PI * 0.5;
+          sliceOutline.position.set( 0, tickHeight + chart.sliceOutlineLift, 0 );
+          sliceOutline.renderOrder = chart.sliceOutlineRenderOrder;
+          chartRoot.add( sliceOutline );
+          axisGuideMeshes.push( sliceOutline );
+
+        }
 
         createTrackedTextPlane(
           labelCollections.ticks,

@@ -61,6 +61,7 @@ export function createFloatingOrbitPanel( context, {
   orbitHeightOffset = null,
   dragMode = 'orbital-horizontal',
   faceOrbitCenter = true,
+  lockVerticalOrientation = true,
   minOrbitRadius = 0.25,
 } = {} ) {
 
@@ -79,6 +80,7 @@ export function createFloatingOrbitPanel( context, {
   const tempLeft = new THREE.Vector3();
   const tempOffset = new THREE.Vector3();
   const tempOrbitVector = new THREE.Vector3();
+  const tempLookDirection = new THREE.Vector3();
   const tempQuaternion = new THREE.Quaternion();
   const yawQuaternion = new THREE.Quaternion();
   const dragPlane = new THREE.Plane();
@@ -173,7 +175,49 @@ export function createFloatingOrbitPanel( context, {
 
     }
 
+    panelRoot.getWorldPosition( tempPosition );
+
+    if ( lockVerticalOrientation ) {
+
+      tempLookDirection.set(
+        orbitCenter.x - tempPosition.x,
+        0,
+        orbitCenter.z - tempPosition.z,
+      );
+
+      if ( tempLookDirection.lengthSq() < 1e-6 ) {
+
+        panelRoot.getWorldDirection( tempLookDirection );
+        tempLookDirection.y = 0;
+
+        if ( tempLookDirection.lengthSq() < 1e-6 ) {
+
+          updateCameraBasis();
+          tempLookDirection.copy( tempForward );
+
+        }
+
+      }
+
+      if ( tempLookDirection.lengthSq() < 1e-6 ) {
+
+        tempLookDirection.set( 0, 0, - 1 );
+
+      } else {
+
+        tempLookDirection.normalize();
+
+      }
+
+      tempTarget.copy( tempPosition ).add( tempLookDirection );
+      panelRoot.up.copy( worldUp );
+      panelRoot.lookAt( tempTarget );
+      return;
+
+    }
+
     tempTarget.copy( orbitCenter );
+    panelRoot.up.copy( worldUp );
     panelRoot.lookAt( tempTarget );
 
   }
@@ -316,6 +360,8 @@ export function createFloatingOrbitPanel( context, {
     panelRoot.quaternion.copy( nextQuaternion );
     panelRoot.updateMatrixWorld( true );
     syncOrbitFromCurrentTransform();
+    orientPanelTowardOrbitCenter();
+    panelRoot.updateMatrixWorld( true );
 
     return getPanelSceneState();
 

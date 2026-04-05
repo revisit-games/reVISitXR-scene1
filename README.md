@@ -345,6 +345,7 @@ Use `createFloatingOrbitPanel(context, options)` when a scene needs a floating w
 - keeps the panel world-fixed instead of re-anchoring to the moving camera
 - drags only along a fixed-radius horizontal orbit
 - keeps the panel facing the fixed orbit center
+- keeps the panel vertically upright by default, so orbit-facing changes only affect yaw unless a scene explicitly disables that lock
 - latches the drag state on `selectstart` even if the first ray-plane intersection is not yet valid, so the first good `selectmove` can still start orbital motion
 
 Recommended pattern:
@@ -352,6 +353,7 @@ Recommended pattern:
 - build the window visuals with local `textPlane` labels and authored meshes
 - create a title-bar `sceneUiSurface` for dragging
 - create separate UI surfaces for slider or button controls
+- override placement knobs such as `panelInitialOffset`, `panelInitialYawDeg`, `orbitHeightOffset`, and `lockVerticalOrientation` in scene config, while keeping the orbit-facing math shared
 - keep `panelPosition` and `panelQuaternion` in semantic `sceneState`
 - disable local drag during replay if replay is already restoring the recorded panel transform
 
@@ -408,10 +410,20 @@ Example 1 loads its assets with `new URL('./data/...', import.meta.url)` so Vite
 Example 1 now keeps its visual tuning in `example1/example1VisualConfig.js`, including:
 
 - chart scaffold dimensions
-- XR panel size, initial placement offsets, orbital drag settings, and drag-bar layout
+- XR panel size, initial placement offsets, orbital drag settings, orbit-height/upright-orientation options, and drag-bar layout
 - desktop panel styles
 - shared label and tooltip styles
-- slice-plane value-axis styling and front-side measurement plaques
+- slice-plane value-axis styling, double-sided visibility, light-blue outlines, and front-side measurement plaques
+
+Example 1's slice planes are still built in `example1/example1Scene.js`, but the reusable styling knobs now live in `example1/example1VisualConfig.js`:
+
+- `chart.sliceUseDoubleSide`
+- `chart.sliceOutlineColor`
+- `chart.sliceOutlineOpacity`
+- `chart.sliceOutlineLift`
+- `chart.sliceOutlineRenderOrder`
+
+Future scenes can reuse the same pattern by keeping the plane geometry in scene code, enabling `sliceUseDoubleSide`, and adding a subtle outline with the matching `sliceOutline*` config values.
 
 Example 1 now keeps its logging tuning in `example1/example1LoggingConfig.js`, including:
 
@@ -454,12 +466,13 @@ For floating XR panels, start with `scenes/core/floatingOrbitPanel.js` instead o
 - capture the orbit center from the immersive-entry camera position
 - place the panel slightly forward, to the user's left, and slightly below eye level
 - keep it world-fixed after that
+- keep `lockVerticalOrientation: true` unless the scene truly needs pitch toward the orbit center
 - add a dedicated drag bar if users should be able to reposition it
 - keep the draggable transform in semantic `sceneState` if participant replay should reconstruct the interaction honestly
 - prefer stable semantic labels such as `Change Example 1 Year` over value-specific labels that fragment the replay legend
 - keep scene-local logging overrides in the scene folder so immersive camera/object sampling can be reduced without changing global defaults
 
-Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floatingOrbitPanel.js`, and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, fixed-orbit repositioning, and semantic replay of the panel transform.
+Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floatingOrbitPanel.js`, and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, fixed-orbit repositioning, upright shared yaw-only facing, and semantic replay of the panel transform.
 
 ## Replay Pointer Visuals
 
