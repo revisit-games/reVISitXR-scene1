@@ -59,6 +59,11 @@ export function createFloatingOrbitPanel( context, {
   orbitCenterMode = 'immersive-entry-camera',
   orbitRadius = null,
   orbitHeightOffset = null,
+  followCameraHeight = false,
+  heightFollowOffset = null,
+  minPanelHeight = null,
+  maxPanelHeight = null,
+  heightSmoothing = 0,
   dragMode = 'orbital-horizontal',
   faceOrbitCenter = true,
   lockVerticalOrientation = true,
@@ -79,6 +84,7 @@ export function createFloatingOrbitPanel( context, {
   const tempRight = new THREE.Vector3();
   const tempLeft = new THREE.Vector3();
   const tempOffset = new THREE.Vector3();
+  const tempCameraPosition = new THREE.Vector3();
   const tempOrbitVector = new THREE.Vector3();
   const tempLookDirection = new THREE.Vector3();
   const tempQuaternion = new THREE.Quaternion();
@@ -143,6 +149,37 @@ export function createFloatingOrbitPanel( context, {
 
   }
 
+  function getCurrentCameraWorldY() {
+
+    context.camera.updateMatrixWorld( true );
+    context.camera.getWorldPosition( tempCameraPosition );
+    return tempCameraPosition.y;
+
+  }
+
+  function clampPanelHeight( y ) {
+
+    let nextY = y;
+
+    if ( Number.isFinite( minPanelHeight ) ) {
+
+      nextY = Math.max( minPanelHeight, nextY );
+
+    }
+
+    if ( Number.isFinite( maxPanelHeight ) ) {
+
+      const upperBound = Number.isFinite( minPanelHeight )
+        ? Math.max( minPanelHeight, maxPanelHeight )
+        : maxPanelHeight;
+      nextY = Math.min( upperBound, nextY );
+
+    }
+
+    return nextY;
+
+  }
+
   function getResolvedOrbitRadius() {
 
     if ( Number.isFinite( orbitRadius ) ) {
@@ -155,6 +192,24 @@ export function createFloatingOrbitPanel( context, {
 
   }
 
+  function getResolvedHeightFollowOffset() {
+
+    if ( Number.isFinite( heightFollowOffset ) ) {
+
+      return heightFollowOffset;
+
+    }
+
+    if ( Number.isFinite( orbitHeightOffset ) ) {
+
+      return orbitHeightOffset;
+
+    }
+
+    return - initialOffset.down;
+
+  }
+
   function getResolvedOrbitHeightOffset() {
 
     if ( Number.isFinite( orbitHeightOffset ) ) {
@@ -164,6 +219,48 @@ export function createFloatingOrbitPanel( context, {
     }
 
     return derivedOrbitHeightOffset ?? 0;
+
+  }
+
+  function getTargetPanelY() {
+
+    if ( followCameraHeight ) {
+
+      return clampPanelHeight( getCurrentCameraWorldY() + getResolvedHeightFollowOffset() );
+
+    }
+
+    return clampPanelHeight( orbitCenter.y + getResolvedOrbitHeightOffset() );
+
+  }
+
+  function resolvePanelY( {
+    currentY = panelRoot.position.y,
+    deltaSeconds = null,
+    exactY = null,
+  } = {} ) {
+
+    if ( Number.isFinite( exactY ) ) {
+
+      return clampPanelHeight( exactY );
+
+    }
+
+    const targetY = getTargetPanelY();
+
+    if (
+      followCameraHeight &&
+      Number.isFinite( heightSmoothing ) &&
+      heightSmoothing > 0 &&
+      Number.isFinite( deltaSeconds ) &&
+      deltaSeconds > 0
+    ) {
+
+      return clampPanelHeight( THREE.MathUtils.damp( currentY, targetY, heightSmoothing, deltaSeconds ) );
+
+    }
+
+    return targetY;
 
   }
 
@@ -222,7 +319,9 @@ export function createFloatingOrbitPanel( context, {
 
   }
 
-  function syncOrbitFromCurrentTransform() {
+  function syncOrbitFromCurrentTransform( {
+    includeFixedHeightOffset = ! followCameraHeight,
+  } = {} ) {
 
     if ( ! hasOrbitCenter ) {
 
@@ -240,7 +339,7 @@ export function createFloatingOrbitPanel( context, {
 
     }
 
-    if ( ! Number.isFinite( orbitHeightOffset ) ) {
+    if ( includeFixedHeightOffset && ! Number.isFinite( orbitHeightOffset ) ) {
 
       derivedOrbitHeightOffset = tempPosition.y - orbitCenter.y;
 
@@ -248,7 +347,12 @@ export function createFloatingOrbitPanel( context, {
 
   }
 
-  function applyOrbitalPositionFromPoint( point ) {
+  function applyOrbitalPositionFromPoint( point, {
+    deltaSeconds = null,
+    exactY = null,
+    quaternion = null,
+    preserveQuaternion = false,
+  } = {} ) {
 
     if ( ! hasOrbitCenter ) {
 
@@ -286,10 +390,24 @@ export function createFloatingOrbitPanel( context, {
     tempOrbitVector.normalize().multiplyScalar( getResolvedOrbitRadius() );
     panelRoot.position.set(
       orbitCenter.x + tempOrbitVector.x,
-      orbitCenter.y + getResolvedOrbitHeightOffset(),
+      resolvePanelY( {
+        currentY: panelRoot.position.y,
+        deltaSeconds,
+        exactY,
+      } ),
       orbitCenter.z + tempOrbitVector.z,
     );
-    orientPanelTowardOrbitCenter();
+
+    if ( preserveQuaternion && quaternion ) {
+
+      panelRoot.quaternion.copy( quaternion );
+
+    } else {
+
+      orientPanelTowardOrbitCenter();
+
+    }
+
     panelRoot.updateMatrixWorld( true );
 
     return true;
@@ -326,7 +444,9 @@ export function createFloatingOrbitPanel( context, {
     }
 
     tempPosition.copy( orbitCenter ).add( tempOffset );
-    tempPosition.y = orbitCenter.y - initialOffset.down;
+    tempPosition.y = followCameraHeight
+      ? clampPanelHeight( getCurrentCameraWorldY() + getResolvedHeightFollowOffset() )
+      : clampPanelHeight( orbitCenter.y - initialOffset.down );
 
     if ( ! Number.isFinite( orbitRadius ) ) {
 
@@ -340,7 +460,7 @@ export function createFloatingOrbitPanel( context, {
 
     }
 
-    if ( ! Number.isFinite( orbitHeightOffset ) ) {
+    if ( ! followCameraHeight && ! Number.isFinite( orbitHeightOffset ) ) {
 
       derivedOrbitHeightOffset = tempPosition.y - orbitCenter.y;
 
@@ -360,10 +480,77 @@ export function createFloatingOrbitPanel( context, {
     panelRoot.quaternion.copy( nextQuaternion );
     panelRoot.updateMatrixWorld( true );
     syncOrbitFromCurrentTransform();
+
+    return getPanelSceneState();
+
+  }
+
+  function applyLiveWorldTransform( position, quaternion ) {
+
+    const nextPosition = toVector3( position, panelRoot.position );
+    const nextQuaternion = toQuaternion( quaternion, panelRoot.quaternion );
+
+    if ( ! hasOrbitCenter ) {
+
+      captureOrbitCenterFromCamera();
+
+    }
+
+    if ( ! hasOrbitCenter ) {
+
+      return applyWorldTransform( position, quaternion );
+
+    }
+
+    if ( ! Number.isFinite( orbitRadius ) ) {
+
+      const dx = nextPosition.x - orbitCenter.x;
+      const dz = nextPosition.z - orbitCenter.z;
+      derivedOrbitRadius = Math.max( minOrbitRadius, Math.sqrt( dx * dx + dz * dz ) );
+
+    }
+
+    if ( ! followCameraHeight && ! Number.isFinite( orbitHeightOffset ) ) {
+
+      derivedOrbitHeightOffset = nextPosition.y - orbitCenter.y;
+
+    }
+
+    applyOrbitalPositionFromPoint( nextPosition, {
+      exactY: followCameraHeight ? null : nextPosition.y,
+      quaternion: nextQuaternion,
+      preserveQuaternion: ! faceOrbitCenter,
+    } );
+
+    return getPanelSceneState();
+
+  }
+
+  function updateRuntimePlacement( { deltaSeconds = null } = {} ) {
+
+    if ( ! followCameraHeight || ! hasOrbitCenter || activeDragSource !== null ) {
+
+      return false;
+
+    }
+
+    panelRoot.getWorldPosition( tempPosition );
+    const nextY = resolvePanelY( {
+      currentY: tempPosition.y,
+      deltaSeconds,
+    } );
+
+    if ( Math.abs( nextY - tempPosition.y ) <= 1e-4 ) {
+
+      return false;
+
+    }
+
+    panelRoot.position.y = nextY;
     orientPanelTowardOrbitCenter();
     panelRoot.updateMatrixWorld( true );
 
-    return getPanelSceneState();
+    return true;
 
   }
 
@@ -402,7 +589,10 @@ export function createFloatingOrbitPanel( context, {
 
     }
 
-    dragPlane.set( worldUp, - ( orbitCenter.y + getResolvedOrbitHeightOffset() ) );
+    const dragPlaneHeight = followCameraHeight
+      ? panelRoot.getWorldPosition( tempPosition ).y
+      : orbitCenter.y + getResolvedOrbitHeightOffset();
+    dragPlane.set( worldUp, - dragPlaneHeight );
     dragRay.origin.copy( payload.rayOrigin );
     dragRay.direction.copy( payload.rayDirection );
 
@@ -438,8 +628,15 @@ export function createFloatingOrbitPanel( context, {
     },
     placeAtDefault,
     applyWorldTransform,
+    applyLiveWorldTransform,
     getPanelSceneState,
     syncOrbitFromCurrentTransform,
+    updateRuntimePlacement,
+    isFollowingCameraHeight() {
+
+      return followCameraHeight;
+
+    },
     setLocalDragEnabled,
     isDragEnabled() {
 

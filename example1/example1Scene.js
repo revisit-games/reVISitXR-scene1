@@ -311,6 +311,7 @@ export const example1SceneDefinition = Object.freeze( {
     let yearCommitTimeoutId = null;
     let hasPendingYearCommit = false;
     let pendingYearCommitSource = null;
+    let pendingYearCommitShouldCommitPanelTransform = false;
     let lastLoggedYearValue = null;
 
     let desktopPanelNode = null;
@@ -503,6 +504,11 @@ export const example1SceneDefinition = Object.freeze( {
       panelInitialYawDeg: xrPanel.panelInitialYawDeg,
       orbitCenterMode: xrPanel.orbitCenterMode,
       orbitHeightOffset: xrPanel.orbitHeightOffset,
+      followCameraHeight: xrPanel.followCameraHeight,
+      heightFollowOffset: xrPanel.heightFollowOffset,
+      minPanelHeight: xrPanel.minPanelHeight,
+      maxPanelHeight: xrPanel.maxPanelHeight,
+      heightSmoothing: xrPanel.heightSmoothing,
       dragMode: xrPanel.dragMode,
       faceOrbitCenter: xrPanel.faceOrbitCenter,
       lockVerticalOrientation: xrPanel.lockVerticalOrientation,
@@ -531,7 +537,11 @@ export const example1SceneDefinition = Object.freeze( {
 
       return context.getLoggingConfig?.()?.example1 || {
         yearCommitDebounceMs: 0,
-        panelDragIntermediateMinIntervalMs: getSceneStateLoggingConfig().minIntervalMs,
+        panelTransformCommitMinIntervalMs: getSceneStateLoggingConfig().minIntervalMs,
+        logPanelTransformOnPassiveHeightFollow: false,
+        logPanelTransformOnSliderInteraction: true,
+        logPanelTransformOnPanelDrag: true,
+        logPanelTransformOnPanelDragEnd: true,
         stableLabels: {
           year: 'Change Example 1 Year',
           selectDatum: 'Select Example 1 Datum',
@@ -578,42 +588,119 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
+    function shouldApplyLivePanelHeightFollow() {
+
+      if (
+        context.getPresentationMode() === PRESENTATION_MODES.DESKTOP ||
+        orbitPanel.isFollowingCameraHeight() !== true
+      ) {
+
+        return false;
+
+      }
+
+      const interactionPolicy = getInteractionPolicy();
+
+      if ( ! interactionPolicy ) {
+
+        return true;
+
+      }
+
+      return (
+        interactionPolicy.isAnalysisSession !== true &&
+        interactionPolicy.hasReceivedReplayState !== true &&
+        interactionPolicy.isApplyingReplayState !== true
+      );
+
+    }
+
     function getCurrentPanelSceneState() {
 
       return orbitPanel.getPanelSceneState();
 
     }
 
-    function rememberPanelTransformAsLogged( now = performance.now() ) {
+    function getCommittedPanelSceneState() {
 
-      const nextState = getCurrentPanelSceneState();
+      const panelPosition = normalizePanelPosition( pendingSceneState?.panelPosition, null );
+      const panelQuaternion = normalizePanelQuaternion( pendingSceneState?.panelQuaternion, null );
 
-      lastLoggedPanelPosition.fromArray( nextState.panelPosition );
-      lastLoggedPanelQuaternion.fromArray( nextState.panelQuaternion );
-      lastPanelStateLogAt = now;
-      panelPlacementInitialized = true;
-      pendingSceneState = {
-        ...pendingSceneState,
-        ...nextState,
+      if ( ! panelPosition || ! panelQuaternion ) {
+
+        return null;
+
+      }
+
+      return {
+        panelPosition,
+        panelQuaternion,
       };
 
     }
 
-    function applyPanelTransform( panelPosition, panelQuaternion ) {
+    function commitPanelTransformToSceneState( panelPosition, panelQuaternion ) {
 
-      orbitPanel.applyWorldTransform(
-        normalizePanelPosition( panelPosition, PANEL_DEFAULT_POSITION ),
-        normalizePanelQuaternion( panelQuaternion, PANEL_DEFAULT_QUATERNION ),
-      );
-      rememberPanelTransformAsLogged();
+      const committedPanelState = {
+        panelPosition: normalizePanelPosition( panelPosition, PANEL_DEFAULT_POSITION ),
+        panelQuaternion: normalizePanelQuaternion( panelQuaternion, PANEL_DEFAULT_QUATERNION ),
+      };
+
+      pendingSceneState = {
+        ...pendingSceneState,
+        ...committedPanelState,
+      };
+      panelPlacementInitialized = true;
+
+      return committedPanelState;
+
+    }
+
+    function commitCurrentPanelTransformToSceneState() {
+
+      const nextState = getCurrentPanelSceneState();
+      return commitPanelTransformToSceneState( nextState.panelPosition, nextState.panelQuaternion );
+
+    }
+
+    function rememberPanelTransformAsLogged( panelState = getCommittedPanelSceneState() ?? getCurrentPanelSceneState(), now = performance.now() ) {
+
+      lastLoggedPanelPosition.fromArray( panelState.panelPosition );
+      lastLoggedPanelQuaternion.fromArray( panelState.panelQuaternion );
+      lastPanelStateLogAt = now;
+      panelPlacementInitialized = true;
+
+    }
+
+    function applyPanelTransform( panelPosition, panelQuaternion, { useExactTransform = false } = {} ) {
+
+      const nextPanelPosition = normalizePanelPosition( panelPosition, PANEL_DEFAULT_POSITION );
+      const nextPanelQuaternion = normalizePanelQuaternion( panelQuaternion, PANEL_DEFAULT_QUATERNION );
+
+      if ( useExactTransform ) {
+
+        orbitPanel.applyWorldTransform( nextPanelPosition, nextPanelQuaternion );
+
+      } else {
+
+        orbitPanel.applyLiveWorldTransform( nextPanelPosition, nextPanelQuaternion );
+
+      }
+
+      const committedPanelState = commitPanelTransformToSceneState( nextPanelPosition, nextPanelQuaternion );
+      rememberPanelTransformAsLogged( committedPanelState );
 
     }
 
     function placePanelAtDefault() {
 
       orbitPanel.captureOrbitCenterFromCamera();
-      orbitPanel.placeAtDefault();
-      rememberPanelTransformAsLogged();
+      const defaultPanelState = orbitPanel.placeAtDefault();
+      const committedPanelState = commitPanelTransformToSceneState(
+        defaultPanelState.panelPosition,
+        defaultPanelState.panelQuaternion,
+      );
+      rememberPanelTransformAsLogged( committedPanelState );
 
     }
 
@@ -640,7 +727,9 @@ export const example1SceneDefinition = Object.freeze( {
 
       if ( nextPanelPosition && nextPanelQuaternion ) {
 
-        applyPanelTransform( nextPanelPosition, nextPanelQuaternion );
+        applyPanelTransform( nextPanelPosition, nextPanelQuaternion, {
+          useExactTransform: false,
+        } );
         return;
 
       }
@@ -664,8 +753,8 @@ export const example1SceneDefinition = Object.freeze( {
       const positionChanged = positionDistance( nextState.panelPosition, lastLoggedPanelPosition.toArray() ) > loggingConfig.positionEpsilon;
       const rotationChanged = quaternionAngularDifferenceDeg( nextState.panelQuaternion, lastLoggedPanelQuaternion.toArray() ) > loggingConfig.quaternionAngleThresholdDeg;
       const now = performance.now();
-      const dragMinInterval = Number.isFinite( example1Logging.panelDragIntermediateMinIntervalMs )
-        ? example1Logging.panelDragIntermediateMinIntervalMs
+      const commitMinInterval = Number.isFinite( example1Logging.panelTransformCommitMinIntervalMs )
+        ? example1Logging.panelTransformCommitMinIntervalMs
         : loggingConfig.minIntervalMs;
 
       if ( ! force ) {
@@ -676,7 +765,7 @@ export const example1SceneDefinition = Object.freeze( {
 
         }
 
-        if ( now - lastPanelStateLogAt < Math.max( loggingConfig.minIntervalMs, dragMinInterval ) ) {
+        if ( now - lastPanelStateLogAt < Math.max( loggingConfig.minIntervalMs, commitMinInterval ) ) {
 
           return false;
 
@@ -684,6 +773,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       }
 
+      const committedPanelState = commitCurrentPanelTransformToSceneState();
       const didLog = context.recordSceneStateChange( {
         source,
         label: getStableSceneLabel( 'movePanel' ),
@@ -692,7 +782,7 @@ export const example1SceneDefinition = Object.freeze( {
 
       if ( didLog ) {
 
-        rememberPanelTransformAsLogged( now );
+        rememberPanelTransformAsLogged( committedPanelState, now );
 
       }
 
@@ -719,12 +809,14 @@ export const example1SceneDefinition = Object.freeze( {
 
         hasPendingYearCommit = false;
         pendingYearCommitSource = null;
+        pendingYearCommitShouldCommitPanelTransform = false;
         return false;
 
       }
 
       if ( ! hasPendingYearCommit && ! force ) {
 
+        pendingYearCommitShouldCommitPanelTransform = false;
         return false;
 
       }
@@ -732,6 +824,7 @@ export const example1SceneDefinition = Object.freeze( {
       if ( selectedYear === lastLoggedYearValue && ! hasPendingYearCommit ) {
 
         pendingYearCommitSource = null;
+        pendingYearCommitShouldCommitPanelTransform = false;
         return false;
 
       }
@@ -740,12 +833,22 @@ export const example1SceneDefinition = Object.freeze( {
 
         hasPendingYearCommit = false;
         pendingYearCommitSource = null;
+        pendingYearCommitShouldCommitPanelTransform = false;
         return false;
 
       }
 
+      const shouldCommitPanelTransform = pendingYearCommitShouldCommitPanelTransform === true;
       hasPendingYearCommit = false;
       pendingYearCommitSource = null;
+      pendingYearCommitShouldCommitPanelTransform = false;
+
+      const committedPanelState = (
+        shouldCommitPanelTransform &&
+        getExample1LoggingTuning().logPanelTransformOnSliderInteraction === true
+      )
+        ? commitCurrentPanelTransformToSceneState()
+        : null;
 
       const didLog = context.recordSceneStateChange( {
         source: source || 'scene',
@@ -757,18 +860,28 @@ export const example1SceneDefinition = Object.freeze( {
 
         lastLoggedYearValue = selectedYear;
 
+        if ( committedPanelState ) {
+
+          rememberPanelTransformAsLogged( committedPanelState );
+
+        }
+
       }
 
       return didLog;
 
     }
 
-    function scheduleYearCommit( source, { flushImmediately = false } = {} ) {
+    function scheduleYearCommit( source, {
+      flushImmediately = false,
+      commitPanelTransform = false,
+    } = {} ) {
 
       const debounceMs = getExample1LoggingTuning().yearCommitDebounceMs;
 
       hasPendingYearCommit = true;
       pendingYearCommitSource = source;
+      pendingYearCommitShouldCommitPanelTransform = pendingYearCommitShouldCommitPanelTransform || commitPanelTransform;
       clearPendingYearCommitTimer();
 
       if ( ! Number.isFinite( debounceMs ) || debounceMs <= 0 ) {
@@ -1299,7 +1412,12 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
-    function setSelectedYear( nextYear, { source = 'scene', shouldLog = true, animate = true } = {} ) {
+    function setSelectedYear( nextYear, {
+      source = 'scene',
+      shouldLog = true,
+      animate = true,
+      commitPanelTransform = false,
+    } = {} ) {
 
       if ( ! dataset || ! Number.isFinite( nextYear ) || ! dataset.years.includes( nextYear ) ) {
 
@@ -1347,6 +1465,7 @@ export const example1SceneDefinition = Object.freeze( {
       if ( shouldLog ) {
 
         scheduleYearCommit( source, {
+          commitPanelTransform,
           flushImmediately: getSceneStateLoggingConfig().flushOnYearChange,
         } );
 
@@ -1619,7 +1738,12 @@ export const example1SceneDefinition = Object.freeze( {
       const ratio = THREE.MathUtils.clamp( localPoint.x / xrPanel.sliderTrackLength + 0.5, 0, 1 );
       const nextIndex = Math.round( ratio * ( dataset.years.length - 1 ) );
       const nextYear = dataset.years[ nextIndex ];
-      setSelectedYear( nextYear, { source, shouldLog: true, animate: true } );
+      setSelectedYear( nextYear, {
+        source,
+        shouldLog: true,
+        animate: true,
+        commitPanelTransform: true,
+      } );
 
     }
 
@@ -1662,11 +1786,13 @@ export const example1SceneDefinition = Object.freeze( {
       }
 
       panelPlacementInitialized = true;
-      pendingSceneState = {
-        ...pendingSceneState,
-        ...getCurrentPanelSceneState(),
-      };
-      recordPanelTransformIfNeeded( payload.source );
+
+      if ( getExample1LoggingTuning().logPanelTransformOnPanelDrag === true ) {
+
+        recordPanelTransformIfNeeded( payload.source );
+
+      }
+
       updatePanelVisualState();
 
     }
@@ -1681,10 +1807,16 @@ export const example1SceneDefinition = Object.freeze( {
 
       orbitPanel.endDrag( payload );
       xrPanelDragSource = null;
-      recordPanelTransformIfNeeded( payload.source, {
-        force: true,
-        flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd,
-      } );
+
+      if ( getExample1LoggingTuning().logPanelTransformOnPanelDragEnd === true ) {
+
+        recordPanelTransformIfNeeded( payload.source, {
+          force: true,
+          flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd,
+        } );
+
+      }
+
       updatePanelVisualState();
 
     }
@@ -1785,6 +1917,7 @@ export const example1SceneDefinition = Object.freeze( {
         clearPendingYearCommitTimer();
         hasPendingYearCommit = false;
         pendingYearCommitSource = null;
+        pendingYearCommitShouldCommitPanelTransform = false;
         resetHoverState( { updateVisuals: false } );
 
       }
@@ -1795,7 +1928,9 @@ export const example1SceneDefinition = Object.freeze( {
 
       if ( nextPanelPosition && nextPanelQuaternion ) {
 
-        applyPanelTransform( nextPanelPosition, nextPanelQuaternion );
+        applyPanelTransform( nextPanelPosition, nextPanelQuaternion, {
+          useExactTransform: options.source === 'replay-scene',
+        } );
 
       } else if ( options.forceDefaultPanel === true || ( context.getPresentationMode() !== PRESENTATION_MODES.DESKTOP && ! panelPlacementInitialized ) ) {
 
@@ -1985,6 +2120,7 @@ export const example1SceneDefinition = Object.freeze( {
 
         flushYearCommit( pendingYearCommitSource, { force: false } );
         clearPendingYearCommitTimer();
+        pendingYearCommitShouldCommitPanelTransform = false;
 
         if ( barsMesh ) {
 
@@ -2012,6 +2148,16 @@ export const example1SceneDefinition = Object.freeze( {
 
       },
       update( deltaSeconds ) {
+
+        if ( shouldApplyLivePanelHeightFollow() && orbitPanel.updateRuntimePlacement( { deltaSeconds } ) ) {
+
+          if ( getExample1LoggingTuning().logPanelTransformOnPassiveHeightFollow === true ) {
+
+            recordPanelTransformIfNeeded( 'panel-height-follow' );
+
+          }
+
+        }
 
         if ( dataset && animationElapsed < chart.animationDuration ) {
 
@@ -2041,10 +2187,8 @@ export const example1SceneDefinition = Object.freeze( {
         return {
           selectedYear,
           selectedDatumId,
-          ...( panelPlacementInitialized ? getCurrentPanelSceneState() : {
-            panelPosition: pendingSceneState.panelPosition,
-            panelQuaternion: pendingSceneState.panelQuaternion,
-          } ),
+          panelPosition: pendingSceneState.panelPosition,
+          panelQuaternion: pendingSceneState.panelQuaternion,
         };
 
       },

@@ -42,7 +42,11 @@ export const example1LoggingConfig = Object.freeze( {
   } ),
   example1: Object.freeze( {
     yearCommitDebounceMs: 360,
-    panelDragIntermediateMinIntervalMs: 900,
+    panelTransformCommitMinIntervalMs: 900,
+    logPanelTransformOnPassiveHeightFollow: false,
+    logPanelTransformOnSliderInteraction: true,
+    logPanelTransformOnPanelDrag: true,
+    logPanelTransformOnPanelDragEnd: true,
     stableLabels: Object.freeze( {
       year: 'Change Example 1 Year',
       selectDatum: 'Select Example 1 Datum',

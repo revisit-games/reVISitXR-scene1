@@ -137,17 +137,21 @@ Default knobs:
 Example 1 now overrides a small subset in `example1/example1LoggingConfig.js`:
 
 - `pointer.grabbing.behavior: 'state-only'`
-- `pointer.hover.minIntervalMs: 320`
-- `pointer.grabbing.minIntervalMs: 320`
-- `outboundSync.minIntervalMs: 700`
-- `sceneState.minIntervalMs: 320`
-- `sceneState.positionEpsilon: 0.03`
-- `sceneState.quaternionAngleThresholdDeg: 2.5`
+- `pointer.hover.minIntervalMs: 420`
+- `pointer.grabbing.minIntervalMs: 420`
+- `outboundSync.minIntervalMs: 900`
+- `sceneState.minIntervalMs: 450`
+- `sceneState.positionEpsilon: 0.04`
+- `sceneState.quaternionAngleThresholdDeg: 3.5`
 - `sceneState.flushOnSelectionChange: true`
 - `sceneState.flushOnYearChange: false`
 - `sceneState.flushOnPanelDragEnd: true`
-- `example1.yearCommitDebounceMs: 240`
-- `example1.panelDragIntermediateMinIntervalMs: 520`
+- `example1.yearCommitDebounceMs: 360`
+- `example1.panelTransformCommitMinIntervalMs: 900`
+- `example1.logPanelTransformOnPassiveHeightFollow: false`
+- `example1.logPanelTransformOnSliderInteraction: true`
+- `example1.logPanelTransformOnPanelDrag: true`
+- `example1.logPanelTransformOnPanelDragEnd: true`
 - `example1.stableLabels.*`
 
 If you want less graph growth:
@@ -292,6 +296,8 @@ Example 1 uses:
 
 This means replay reconstructs the bar matrix from the selected year, pinned datum, and floating year-window placement instead of recording dozens of individual bar transforms.
 
+For the floating panel, `panelPosition` and `panelQuaternion` are the committed semantic transform, not a continuously sampled runtime pose. Example 1 can now let the panel height follow the live immersive camera without rewriting scene state until an authored panel interaction chooses to commit that transform.
+
 ## Shared World Labels
 
 Reusable world-label sprites now live in `scenes/core/textSprite.js`.
@@ -343,6 +349,7 @@ Use `createFloatingOrbitPanel(context, options)` when a scene needs a floating w
 - captures the immersive-entry camera position as a fixed orbit center
 - places the panel once at a configurable left-front offset
 - keeps the panel world-fixed instead of re-anchoring to the moving camera
+- can optionally keep only the panel height adaptive to the current camera height while preserving the original orbit-center X/Z, orbit radius, and horizontal yaw-facing behavior
 - drags only along a fixed-radius horizontal orbit
 - keeps the panel facing the fixed orbit center
 - keeps the panel vertically upright by default, so orbit-facing changes only affect yaw unless a scene explicitly disables that lock
@@ -353,9 +360,13 @@ Recommended pattern:
 - build the window visuals with local `textPlane` labels and authored meshes
 - create a title-bar `sceneUiSurface` for dragging
 - create separate UI surfaces for slider or button controls
-- override placement knobs such as `panelInitialOffset`, `panelInitialYawDeg`, `orbitHeightOffset`, and `lockVerticalOrientation` in scene config, while keeping the orbit-facing math shared
-- keep `panelPosition` and `panelQuaternion` in semantic `sceneState`
+- override placement knobs such as `panelInitialOffset`, `panelInitialYawDeg`, `orbitHeightOffset`, `followCameraHeight`, `heightFollowOffset`, `minPanelHeight`, `maxPanelHeight`, `heightSmoothing`, and `lockVerticalOrientation` in scene config, while keeping the orbit-facing math shared
+- use `applyLiveWorldTransform()` when a live immersive scene should restore authored X/Z placement while still letting runtime height-follow stay active
+- use `applyWorldTransform()` when replay should restore the exact logged transform
+- keep `panelPosition` and `panelQuaternion` in semantic `sceneState`, but commit them from authored panel interactions instead of passive runtime height updates
 - disable local drag during replay if replay is already restoring the recorded panel transform
+
+Adaptive height is a runtime convenience, not a logging requirement. A scene can let the shared helper move the panel vertically for comfort while still deciding locally which authored panel interactions should commit `panelPosition` and `panelQuaternion` back into semantic replay state.
 
 ## Scene Interaction Hooks
 
@@ -410,7 +421,7 @@ Example 1 loads its assets with `new URL('./data/...', import.meta.url)` so Vite
 Example 1 now keeps its visual tuning in `example1/example1VisualConfig.js`, including:
 
 - chart scaffold dimensions
-- XR panel size, initial placement offsets, orbital drag settings, orbit-height/upright-orientation options, and drag-bar layout
+- XR panel size, initial placement offsets, orbital drag settings, adaptive-height options, orbit-height/upright-orientation options, and drag-bar layout
 - desktop panel styles
 - shared label and tooltip styles
 - slice-plane value-axis styling, double-sided visibility, light-blue outlines, and front-side measurement plaques
@@ -430,7 +441,8 @@ Example 1 now keeps its logging tuning in `example1/example1LoggingConfig.js`, i
 - replay-pointer behavior during XR slider drags
 - immersive camera sampling overrides for scenes that do not need dense head-motion provenance
 - immersive object sampling overrides for authored scenes that are semantic-first rather than manipulation-heavy
-- scene-state throttling for panel dragging
+- scene-state throttling for panel-transform commits
+- panel-policy knobs for passive height-follow, XR slider commits, drag commits, and drag-end commits
 - year-commit debounce timing
 - stable legend-friendly scene labels
 - immediate flush policy for selection and panel-drag-end semantics
@@ -471,8 +483,9 @@ For floating XR panels, start with `scenes/core/floatingOrbitPanel.js` instead o
 - keep the draggable transform in semantic `sceneState` if participant replay should reconstruct the interaction honestly
 - prefer stable semantic labels such as `Change Example 1 Year` over value-specific labels that fragment the replay legend
 - keep scene-local logging overrides in the scene folder so immersive camera/object sampling can be reduced without changing global defaults
+- let the shared helper own orbit mechanics and adaptive height, while the scene decides which authored panel interactions are allowed to commit transform state
 
-Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floatingOrbitPanel.js`, and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, fixed-orbit repositioning, upright shared yaw-only facing, and semantic replay of the panel transform.
+Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floatingOrbitPanel.js`, and `example1/example1Scene.js`: a left-front initial placement, a draggable title bar, fixed-orbit repositioning, adaptive live height follow, upright shared yaw-only facing, and semantic replay of the committed panel transform.
 
 ## Replay Pointer Visuals
 
