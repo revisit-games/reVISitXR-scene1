@@ -322,7 +322,38 @@ export function buildCompactStateSummary( state ) {
 
 }
 
-export function buildAnswerPayload( state ) {
+function isSerializableAnswerValue( value ) {
+
+  return (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    value === null
+  );
+
+}
+
+function normalizeSceneAnswerSummary( sceneAnswerSummary ) {
+
+  if ( ! sceneAnswerSummary || typeof sceneAnswerSummary !== 'object' || Array.isArray( sceneAnswerSummary ) ) {
+
+    return {};
+
+  }
+
+  return Object.fromEntries(
+    Object.entries( sceneAnswerSummary )
+      .filter( ( [ key, value ] ) => (
+        typeof key === 'string' &&
+        key.trim().length > 0 &&
+        value !== undefined &&
+        isSerializableAnswerValue( value )
+      ) ),
+  );
+
+}
+
+export function buildAnswerPayload( state, sceneAnswerSummary = null ) {
 
   return {
     [ SUMMARY_RESPONSE_KEYS.XR_MODE ]: state.presentationMode,
@@ -331,6 +362,7 @@ export function buildAnswerPayload( state ) {
     [ SUMMARY_RESPONSE_KEYS.XR_SESSION_COUNT ]: state.metrics.sessionCount,
     [ SUMMARY_RESPONSE_KEYS.XR_LAST_EVENT ]: `${state.lastEvent.type}:${state.lastEvent.source}`,
     [ SUMMARY_RESPONSE_KEYS.XR_STATE_SUMMARY_JSON ]: buildCompactStateSummary( state ),
+    ...normalizeSceneAnswerSummary( sceneAnswerSummary ),
   };
 
 }

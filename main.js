@@ -659,6 +659,12 @@ function getActiveSceneStateForReplay() {
 
 }
 
+function getActiveSceneAnswerSummary() {
+
+  return activeSceneController?.getAnswerSummary?.() || null;
+
+}
+
 function normalizeSceneStateForReplay( sceneKey, candidateSceneState, fallbackSceneState ) {
 
   return getSceneDefinitionByKey( sceneKey ).normalizeSceneState(
@@ -2539,6 +2545,7 @@ studyLogger = createXRStudyLogger( {
   getSceneSnapshot,
   applyReplayState,
   getLoggingConfig: getActiveSceneLoggingConfig,
+  getSceneAnswerSummary: getActiveSceneAnswerSummary,
   normalizeSceneReplayState: normalizeSceneStateForReplay,
 } );
 

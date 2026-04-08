@@ -221,8 +221,8 @@ function createTrackedMesh( collection, geometry, material ) {
 
 export const example1SceneDefinition = Object.freeze( {
   sceneKey: 'example1',
-  queryValue: '1',
-  label: 'Example 1 Energy Matrix',
+  queryValue: '0',
+  label: 'Legacy Example 1 Energy Matrix',
   loggingConfig: example1LoggingConfig,
   templateConfig: Object.freeze( {
     showFloor: true,

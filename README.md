@@ -154,6 +154,13 @@ Example 1 now overrides a small subset in `example1/example1LoggingConfig.js`:
 - `example1.logPanelTransformOnPanelDragEnd: true`
 - `example1.stableLabels.*`
 
+Demo 1 keeps its scatterplot-specific semantic logging in `demo1/demo1LoggingConfig.js`, including:
+
+- coarser immersive camera/object sampling for navigation-heavy use
+- pointer grabbing behavior set to `'state-only'`
+- scene-state flushes for nav-mode switch, overview toggle, point selection, and task submit
+- debounced scale commits with stable labels such as `Scale Demo 1 Plot`
+
 If you want less graph growth:
 
 - increase immersive object intervals and epsilons first
@@ -220,8 +227,10 @@ Scene selection is URL-driven:
 
 - `index.html`
   Loads the reusable default template scene.
+- `index.html?scene=0`
+  Loads the legacy Example 1 OWID energy-source bar matrix.
 - `index.html?scene=1`
-  Loads Example 1, the OWID energy-source bar matrix.
+  Loads Demo 1, the paper-facing 3D scatterplot navigation baseline.
 - `index.html?scene=2`
   Loads the Example 2 placeholder scene.
 - `index.html?scene=3`
@@ -245,6 +254,7 @@ The active scene controller can expose:
 - `getSceneStateForReplay()`
 - `applySceneStateFromReplay(sceneState)`
 - `getHudContent(presentationMode)`
+- optional `getAnswerSummary()`
 - optional `onPresentationModeChange(presentationMode)`
 
 ## Default Template Scene
@@ -268,7 +278,7 @@ The most important template flags are:
 - `showTemplateCube`
 - `enableDefaultObjectManipulation`
 
-Example 1 keeps the floor and grid, but turns off the pedestal, hides the template cube, and disables default cube manipulation.
+Demo 1 and Example 1 both keep the floor and grid, but turn off the pedestal, hide the template cube, and disable default cube manipulation.
 
 ## Scene-Specific Replay State
 
@@ -286,6 +296,25 @@ The shared runtime snapshot still owns:
 - `replayPointers`
 
 Scene modules own the compact semantic state under `sceneState`. The logger now supports a `scene-state-change` action so authored scenes can log semantic updates without treating all scene content as draggable transforms.
+
+Demo 1 uses:
+
+- `demoId`
+- `dataYear`
+- `taskId`
+- `navMode`
+- `colorEncoding`
+- `overviewEnabled`
+- `overviewVisible`
+- `overviewToggleCount`
+- `scaleFactor`
+- `selectedPointId`
+- `selectedPointIds`
+- `selectionCount`
+- `taskAnswer`
+- `taskSubmitted`
+
+This keeps scatterplot replay semantic. The scene restores authored navigation mode, overview visibility, plot scale, selection, and task state without logging or replaying per-point animation.
 
 Example 1 uses:
 
@@ -405,9 +434,56 @@ This is the recommended pattern for future in-world controls such as:
 
 Because these surfaces use the same `registerRaycastTarget()` path as the rest of the scene system, live controller cursor dots and replay ghost pointer targets remain visible without scene-specific replay hacks.
 
+## Demo 1 Dataset Layout
+
+Demo 1 keeps its local OWID bundle under `demo1/`:
+
+- `demo1/data/gdp-per-capita-worldbank.csv`
+- `demo1/data/gdp-per-capita-worldbank.metadata.json`
+- `demo1/data/life-expectancy.csv`
+- `demo1/data/life-expectancy.metadata.json`
+- `demo1/data/co-emissions-per-capita.csv`
+- `demo1/data/co-emissions-per-capita.metadata.json`
+- optional `demo1/data/population-unwpp.csv`
+- optional `demo1/data/population-unwpp.metadata.json`
+- `demo1/demo1Data.js`
+- `demo1/demo1Scene.js`
+- `demo1/demo1VisualConfig.js`
+- `demo1/demo1LoggingConfig.js`
+- `demo1/demo1Tasks.js`
+- `demo1/demo1Conditions.js`
+
+Demo 1 joins the required local files on `(Code, Year)` and keeps only shared country-year rows with 3-letter country codes. It uses:
+
+- `x = GDP per capita`
+- `y = life expectancy`
+- `z = CO2 emissions per capita`
+- `color = region` by default
+- `color = income` as an optional alternate grouping
+- `size = population` when the optional population file is available, otherwise a fixed fallback radius
+
+The required bundle is loaded locally with `new URL('./data/...', import.meta.url)` plus `fetch`. There are no runtime network requests back to OWID.
+
+If a required file is missing, Demo 1 fails gracefully by showing an explanatory desktop/XR panel instead of crashing the scene. The expected filenames remain:
+
+- `demo1/data/gdp-per-capita-worldbank.csv`
+- `demo1/data/gdp-per-capita-worldbank.metadata.json`
+- `demo1/data/life-expectancy.csv`
+- `demo1/data/life-expectancy.metadata.json`
+- `demo1/data/co-emissions-per-capita.csv`
+- `demo1/data/co-emissions-per-capita.metadata.json`
+
+Demo 1 also demonstrates the reusable scene-specific reactive-answer hook:
+
+- the scene controller can expose `getAnswerSummary()`
+- `main.js` forwards that hook into `createXRStudyLogger(...)`
+- `buildAnswerPayload()` merges generic XR fields with scene-specific summary fields at outbound sync time
+
+This keeps reactive summaries compact and scene-owned instead of hardcoding Demo 1 logic into the generic logger.
+
 ## Example 1 Dataset Layout
 
-The already-downloaded OWID files now live under `example1/`:
+The legacy Example 1 OWID files now live under `example1/`:
 
 - `example1/data/per-capita-energy-stacked.csv`
 - `example1/data/per-capita-energy-stacked.metadata.json`
@@ -601,7 +677,7 @@ If you add new replay-only visuals later, keep them behind the same analysis-ses
 
 Compact reactive answers are built from `buildAnswerPayload()` in `logging/xrSerialization.js`.
 
-The default answer ids are:
+Generic answer ids are always available:
 
 - `xrMode`
 - `xrInteractionPhase`
@@ -609,6 +685,20 @@ The default answer ids are:
 - `xrSessionCount`
 - `xrLastEvent`
 - `xrStateSummaryJson`
+
+Scenes can now contribute additional reactive fields through an optional `getAnswerSummary()` hook on the active scene controller.
+
+Demo 1 uses that hook to expose:
+
+- `xrDemoId`
+- `xrTaskId`
+- `xrNavMode`
+- `xrOverviewVisible`
+- `xrOverviewToggleCount`
+- `xrScaleFactor`
+- `xrSelectedPointCount`
+- `xrSelectedPointIdsJson`
+- `xrLastSelectedPointId`
 
 Do not put the full Trrack graph into reactive answers. The full graph is still sent through `postProvenance()`.
 
