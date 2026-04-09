@@ -1,0 +1,30 @@
+{
+  "chart": {
+    "note": "For most countries, immigrant means \"born in another country\". Someone who has gained citizenship in the country they live in is still counted as an immigrant if they were born elsewhere. For some countries, place of birth information is not available; in this case citizenship is used to define whether someone counts as an immigrant.",
+    "citation": "United Nations Department of Economic and Social Affairs (2024)",
+    "originalChartUrl": "https://ourworldindata.org/explorers/migration-flows?Country=Afghanistan&Metric=Emigrants%3A+People+moving+away+from+country&Gender=All+migrants&country=~OWID_WRL",
+    "selection": [
+      "World"
+    ]
+  },
+  "columns": {
+    "Emigrants from Afghanistan: Where did they move to?": {
+      "titleShort": "Emigrants from Afghanistan: Where did they move to?",
+      "titleLong": "Emigrants from Afghanistan: Where did they move to?",
+      "descriptionShort": "The number of people who were born in Afghanistan and now live abroad. This is a measure of emigrant stocks at mid-year, not the annual flow of emigrants.",
+      "shortUnit": "",
+      "unit": "people",
+      "timespan": "1990-2024",
+      "type": "NumberOrString",
+      "owidVariableId": 1023062,
+      "shortName": "migrants__country_select_afghanistan__metric_emigrants__gender_all",
+      "lastUpdated": "2025-03-18",
+      "nextUpdate": "2027-03-17",
+      "citationShort": "United Nations Department of Economic and Social Affairs (2024) – with major processing by Our World in Data",
+      "citationLong": "United Nations Department of Economic and Social Affairs (2024) – with major processing by Our World in Data. “Emigrants from Afghanistan: Where did they move to?” [dataset]. United Nations Department of Economic and Social Affairs, “International Migrant Stock 2024 - POP/DB/MIG/Stock/Rev.2024” [original data].",
+      "fullMetadata": "https://api.ourworldindata.org/v1/indicators/1023062.metadata.json"
+    }
+  },
+  "dateDownloaded": "2026-04-09",
+  "activeFilters": {}
+}

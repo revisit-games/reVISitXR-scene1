@@ -1,6 +1,6 @@
 import { defaultTemplateSceneDefinition } from '../defaultTemplate/defaultTemplateScene.js';
 import { demo1SceneDefinition } from '../../demo1/demo1Scene.js';
-import { example2SceneDefinition } from '../../example2/example2Scene.js';
+import { demo2SceneDefinition } from '../../demo2/demo2Scene.js';
 import { example3SceneDefinition } from '../../example3/example3Scene.js';
 import { example1SceneDefinition } from '../../example1/example1Scene.js';
 
@@ -8,7 +8,7 @@ const sceneDefinitions = [
   defaultTemplateSceneDefinition,
   demo1SceneDefinition,
   example1SceneDefinition,
-  example2SceneDefinition,
+  demo2SceneDefinition,
   example3SceneDefinition,
 ];
 

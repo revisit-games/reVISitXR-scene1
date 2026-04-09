@@ -232,7 +232,7 @@ Scene selection is URL-driven:
 - `index.html?scene=1`
   Loads Demo 1, the paper-facing 3D scatterplot navigation baseline.
 - `index.html?scene=2`
-  Loads the Example 2 placeholder scene.
+  Loads Demo 2, the paper-facing migration globe baseline.
 - `index.html?scene=3`
   Loads the Example 3 placeholder scene.
 
@@ -478,6 +478,26 @@ Demo 1 also demonstrates the reusable scene-specific reactive-answer hook:
 - `buildAnswerPayload()` merges generic XR fields with scene-specific summary fields at outbound sync time
 
 This keeps reactive summaries compact and scene-owned instead of hardcoding Demo 1 logic into the generic logger.
+
+## Demo 2 Dataset Layout
+
+Demo 2 keeps its migration baseline under `demo2/`:
+
+- `demo2/data/demo2Nodes.json`
+- `demo2/data/demo2Flows.csv`
+- `demo2/data/raw/owid-migration-flows-export.csv`
+- `demo2/data/raw/owid-migrant-stock-total.csv`
+- `demo2/data/raw/owid-migrant-stock-total.metadata.json`
+- `demo2/demo2Data.js`
+- `demo2/demo2Scene.js`
+- `demo2/demo2VisualConfig.js`
+- `demo2/demo2Conditions.js`
+- `demo2/demo2Tasks.js`
+- `demo2/demo2LoggingConfig.js`
+
+The current Demo 2 runtime bundle is intentionally an Afghanistan-centered outbound migration baseline because the provided OWID flow export is already scoped to emigration from Afghanistan. The scene-local data contract stays generalized around node and flow bundles so future demos can swap in broader OD datasets without changing the shared runtime.
+
+Demo 2 uses the same scene-local answer-summary hook pattern as Demo 1. Its controller contributes compact geo state such as year, direction mode, threshold, focused country, selected route, visible-flow count, label visibility, and globe yaw while the generic XR answers still continue to provide `xrMode`, `xrInteractionPhase`, `xrGrabCount`, `xrSessionCount`, `xrLastEvent`, and `xrStateSummaryJson`.
 
 ## Example 1 Dataset Layout
 
