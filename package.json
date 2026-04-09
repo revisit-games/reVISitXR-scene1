@@ -6,7 +6,8 @@
   },
   "dependencies": {
     "@trrack/core": "^1.4.0",
-    "three": "^0.183.2"
+    "three": "^0.183.2",
+    "topojson-client": "^3.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",

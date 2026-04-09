@@ -45,6 +45,7 @@ export const demo2LoggingConfig = Object.freeze( {
     flushOnResetView: true,
     flushOnResetFilters: true,
     flushOnTaskSubmit: true,
+    flushOnGlobeDragEnd: true,
     flushOnPanelDragEnd: true,
   } ),
   demo2: Object.freeze( {

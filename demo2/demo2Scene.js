@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mesh as buildTopojsonMesh } from 'topojson-client';
 import { PRESENTATION_MODES } from '../logging/xrLoggingSchema.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
@@ -14,7 +15,6 @@ import {
   DEMO2_DEFAULT_THRESHOLD,
   DEMO2_DEFAULT_YEAR,
   DEMO2_DIRECTION_MODES,
-  DEMO2_GLOBE_YAW_STEP_DEG,
   DEMO2_THRESHOLD_PRESETS,
   normalizeDemo2PanelPosition,
   normalizeDemo2PanelQuaternion,
@@ -81,6 +81,12 @@ function formatFlowValue( value ) {
 function formatThreshold( value ) {
 
   return value <= 0 ? 'All' : `>= ${formatFlowValue( value )}`;
+
+}
+
+function formatCompactThreshold( value ) {
+
+  return value <= 0 ? 'all' : `>=${formatFlowValue( value )}`;
 
 }
 
@@ -182,6 +188,38 @@ function normalizeAngleDegrees( value ) {
 
 }
 
+function getAngleDifferenceDegrees( angleA, angleB ) {
+
+  return Math.abs( normalizeAngleDegrees( angleA - angleB ) );
+
+}
+
+function appendSurfaceSegmentPositions( positions, startCoordinate, endCoordinate, radius ) {
+
+  const startPoint = latLonToVector3( startCoordinate[ 1 ], startCoordinate[ 0 ], radius ).normalize();
+  const endPoint = latLonToVector3( endCoordinate[ 1 ], endCoordinate[ 0 ], radius ).normalize();
+  const angleRadians = Math.acos( THREE.MathUtils.clamp( startPoint.dot( endPoint ), - 1, 1 ) );
+  const subdivisions = Math.max( 1, Math.ceil( angleRadians / THREE.MathUtils.degToRad( 4 ) ) );
+  let previousPoint = startPoint.clone().multiplyScalar( radius );
+
+  for ( let step = 1; step <= subdivisions; step += 1 ) {
+
+    const nextPoint = startPoint
+      .clone()
+      .lerp( endPoint, step / subdivisions )
+      .normalize()
+      .multiplyScalar( radius );
+
+    positions.push(
+      previousPoint.x, previousPoint.y, previousPoint.z,
+      nextPoint.x, nextPoint.y, nextPoint.z,
+    );
+    previousPoint = nextPoint;
+
+  }
+
+}
+
 export const demo2SceneDefinition = Object.freeze( {
   sceneKey: 'demo2',
   queryValue: '2',
@@ -218,6 +256,7 @@ export const demo2SceneDefinition = Object.freeze( {
     const root = new THREE.Group();
     const globeRoot = new THREE.Group();
     const globeYawRoot = new THREE.Group();
+    const globeBoundaryRoot = new THREE.Group();
     const globeArcRoot = new THREE.Group();
     const globeNodeRoot = new THREE.Group();
     const globeLabelRoot = new THREE.Group();
@@ -232,7 +271,12 @@ export const demo2SceneDefinition = Object.freeze( {
     const nodeHoverBySource = new Map();
     const lastLoggedPanelPosition = new THREE.Vector3();
     const lastLoggedPanelQuaternion = new THREE.Quaternion();
+    const globeInteractionSphere = new THREE.Sphere( new THREE.Vector3(), globe.interactionRadius );
     const tempTooltipPosition = new THREE.Vector3();
+    const tempGlobeWorldCenter = new THREE.Vector3();
+    const tempGlobeWorldHit = new THREE.Vector3();
+    const tempGlobeLocalHit = new THREE.Vector3();
+    const tempGlobeRay = new THREE.Ray();
     let hoverSequence = 0;
     let dataset = null;
     let loadStatus = 'loading';
@@ -243,11 +287,16 @@ export const demo2SceneDefinition = Object.freeze( {
     let currentVisibleFlows = [];
     let currentVisibleFlowEntries = [];
     let currentFlowEntryById = new Map();
+    let currentBoundaryLines = null;
+    let activeGlobeDrag = null;
+    let lastLoggedGlobeYawDeg = currentSceneState.globeYawDeg;
+    let lastGlobeYawLogAt = 0;
 
     root.add( globeRoot );
     root.add( xrPanelRoot );
     globeRoot.position.fromArray( globe.rootPosition );
     globeRoot.add( globeYawRoot );
+    globeYawRoot.add( globeBoundaryRoot );
     globeYawRoot.add( globeArcRoot );
     globeYawRoot.add( globeNodeRoot );
     globeYawRoot.add( globeLabelRoot );
@@ -327,6 +376,21 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function createTrackedLineSegments( collection, parent, geometry, material ) {
+
+      const lineSegments = new THREE.LineSegments( geometry, material );
+      parent.add( lineSegments );
+      trackDisposable( collection, lineSegments, () => {
+
+        lineSegments.removeFromParent();
+        geometry.dispose();
+        material.dispose();
+
+      } );
+      return lineSegments;
+
+    }
+
     function clearTrackedCollection( collection ) {
 
       collection.splice( 0 ).forEach( ( entry ) => {
@@ -377,6 +441,101 @@ export const demo2SceneDefinition = Object.freeze( {
       } ),
     );
     atmosphere.renderOrder = 2;
+    const globeInteractionShell = createInteractiveTrackedMesh(
+      staticObjects,
+      globeYawRoot,
+      new THREE.SphereGeometry( globe.interactionRadius, 48, 32 ),
+      new THREE.MeshBasicMaterial( {
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        toneMapped: false,
+      } ),
+      {
+        onSelectStart( payload ) {
+
+          if ( context.getInteractionPolicy?.()?.canInteract === false ) {
+
+            return;
+
+          }
+
+          const startAzimuthDeg = resolveGlobeDragAzimuth( payload.rayOrigin, payload.rayDirection );
+
+          if ( startAzimuthDeg === null ) {
+
+            return;
+
+          }
+
+          activeGlobeDrag = {
+            source: payload.source,
+            startYawDeg: currentSceneState.globeYawDeg,
+            startAzimuthDeg,
+            hasMoved: false,
+          };
+          clearHoverState();
+
+        },
+        onSelectMove( payload ) {
+
+          if ( activeGlobeDrag?.source !== payload.source ) {
+
+            return;
+
+          }
+
+          const nextAzimuthDeg = resolveGlobeDragAzimuth( payload.rayOrigin, payload.rayDirection );
+
+          if ( nextAzimuthDeg === null ) {
+
+            return;
+
+          }
+
+          const nextYawDeg = normalizeAngleDegrees(
+            activeGlobeDrag.startYawDeg + ( nextAzimuthDeg - activeGlobeDrag.startAzimuthDeg ),
+          );
+
+          if ( getAngleDifferenceDegrees( nextYawDeg, currentSceneState.globeYawDeg ) <= 0.08 ) {
+
+            return;
+
+          }
+
+          activeGlobeDrag.hasMoved = true;
+          currentSceneState.globeYawDeg = nextYawDeg;
+          applyGlobeYaw();
+          updateHighlightsAndTooltip();
+          syncAllUi();
+          recordGlobeYawIfNeeded( `${payload.source}-globe-drag` );
+
+        },
+        onSelectEnd( payload ) {
+
+          if ( activeGlobeDrag?.source !== payload.source ) {
+
+            return;
+
+          }
+
+          const shouldFlush = activeGlobeDrag.hasMoved === true;
+          activeGlobeDrag = null;
+
+          if ( shouldFlush ) {
+
+            recordGlobeYawIfNeeded( `${payload.source}-globe-drag-end`, {
+              force: true,
+              flushImmediately: getSceneStateLoggingConfig().flushOnGlobeDragEnd === true,
+            } );
+
+          }
+
+        },
+      },
+    );
+    globeInteractionShell.renderOrder = 1;
 
     const focusHalo = createTrackedMesh(
       staticObjects,
@@ -527,6 +686,77 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function rememberGlobeYawAsLogged( globeYawDeg, timestamp = performance.now() ) {
+
+      lastLoggedGlobeYawDeg = normalizeAngleDegrees( globeYawDeg );
+      lastGlobeYawLogAt = timestamp;
+
+    }
+
+    function resolveGlobeDragAzimuth( rayOrigin, rayDirection ) {
+
+      globeRoot.getWorldPosition( tempGlobeWorldCenter );
+      globeInteractionSphere.center.copy( tempGlobeWorldCenter );
+      tempGlobeRay.origin.copy( rayOrigin );
+      tempGlobeRay.direction.copy( rayDirection ).normalize();
+
+      if ( tempGlobeRay.intersectSphere( globeInteractionSphere, tempGlobeWorldHit ) === null ) {
+
+        return null;
+
+      }
+
+      tempGlobeLocalHit.copy( tempGlobeWorldHit );
+      globeRoot.worldToLocal( tempGlobeLocalHit );
+
+      if ( ( tempGlobeLocalHit.x * tempGlobeLocalHit.x ) + ( tempGlobeLocalHit.z * tempGlobeLocalHit.z ) <= 1e-4 ) {
+
+        return null;
+
+      }
+
+      return THREE.MathUtils.radToDeg( Math.atan2( tempGlobeLocalHit.x, tempGlobeLocalHit.z ) );
+
+    }
+
+    function recordGlobeYawIfNeeded( source = 'scene-globe-drag', {
+      force = false,
+      flushImmediately = false,
+    } = {} ) {
+
+      const loggingConfig = getSceneStateLoggingConfig();
+      const yawEpsilonDeg = 0.1;
+      const yawChanged = getAngleDifferenceDegrees(
+        currentSceneState.globeYawDeg,
+        lastLoggedGlobeYawDeg,
+      ) > yawEpsilonDeg;
+
+      if ( ! yawChanged ) {
+
+        return false;
+
+      }
+
+      const now = performance.now();
+
+      if ( ! force && ( now - lastGlobeYawLogAt ) < Math.max( 0, loggingConfig.minIntervalMs ?? 0 ) ) {
+
+        return false;
+
+      }
+
+      const didLog = recordSceneChange( 'rotateGlobe', source, { flushImmediately } );
+
+      if ( didLog ) {
+
+        rememberGlobeYawAsLogged( currentSceneState.globeYawDeg, now );
+
+      }
+
+      return didLog;
+
+    }
+
     function maybeLogPanelTransform( source = 'panel-drag-end', {
       flushImmediately = false,
     } = {} ) {
@@ -665,7 +895,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       }
 
-      return 'Select a node to refocus the globe, then select a route and submit your answer.';
+      return 'Select a route, then submit your answer.';
 
     }
 
@@ -676,6 +906,97 @@ export const demo2SceneDefinition = Object.freeze( {
       return selectedFlow
         ? `${selectedFlow.label} (${selectedFlow.year})`
         : null;
+
+    }
+
+    function createBoundaryGeometryFromTopology( topology ) {
+
+      const countriesObject = topology?.objects?.countries;
+
+      if ( ! countriesObject ) {
+
+        return null;
+
+      }
+
+      const boundaryMesh = buildTopojsonMesh( topology, countriesObject );
+      const lineCoordinates = boundaryMesh?.type === 'LineString'
+        ? [ boundaryMesh.coordinates ]
+        : boundaryMesh?.coordinates;
+
+      if ( ! Array.isArray( lineCoordinates ) || lineCoordinates.length === 0 ) {
+
+        return null;
+
+      }
+
+      const positions = [];
+      const boundaryRadius = globe.radius + globe.boundaryLift;
+
+      lineCoordinates.forEach( ( line ) => {
+
+        if ( ! Array.isArray( line ) || line.length < 2 ) {
+
+          return;
+
+        }
+
+        for ( let index = 1; index < line.length; index += 1 ) {
+
+          appendSurfaceSegmentPositions(
+            positions,
+            line[ index - 1 ],
+            line[ index ],
+            boundaryRadius,
+          );
+
+        }
+
+      } );
+
+      if ( positions.length === 0 ) {
+
+        return null;
+
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
+      return geometry;
+
+    }
+
+    function ensureBoundaryLines() {
+
+      if ( currentBoundaryLines || ! dataset?.boundaryTopology ) {
+
+        return;
+
+      }
+
+      const geometry = createBoundaryGeometryFromTopology( dataset.boundaryTopology );
+
+      if ( ! geometry ) {
+
+        return;
+
+      }
+
+      currentBoundaryLines = createTrackedLineSegments(
+        staticObjects,
+        globeBoundaryRoot,
+        geometry,
+        new THREE.LineBasicMaterial( {
+          color: globe.boundaryColor,
+          linewidth: globe.boundaryLineWidthFallback,
+          transparent: true,
+          opacity: globe.boundaryOpacity,
+          depthWrite: false,
+          toneMapped: false,
+        } ),
+      );
+      currentBoundaryLines.renderOrder = 3;
+      currentBoundaryLines.frustumCulled = false;
 
     }
 
@@ -735,7 +1056,7 @@ export const demo2SceneDefinition = Object.freeze( {
     const panelBodyText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
-      { ...labelStyles.panelBody, text: 'Loading Demo 2 task...' },
+      { ...labelStyles.panelBody, text: 'Drag the globe to rotate.\nSelect a node to refocus, then choose a route.' },
       new THREE.Vector3( 0, xrPanel.bodyTopY, xrPanel.contentZ ),
     );
     const panelMetaText = createTrackedTextPlane(
@@ -747,7 +1068,7 @@ export const demo2SceneDefinition = Object.freeze( {
     const panelSelectionText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
-      { ...labelStyles.panelSelection, text: 'Focus Afghanistan\nNo route selected' },
+      { ...labelStyles.panelSelection, text: 'Focus Afghanistan\nNo route yet' },
       new THREE.Vector3( 0, xrPanel.selectionY, xrPanel.contentZ ),
     );
     const panelFooterText = createTrackedTextPlane(
@@ -871,7 +1192,6 @@ export const demo2SceneDefinition = Object.freeze( {
     function buildXrPanelButtons() {
 
       const rowOffset = xrPanel.buttonWidth + xrPanel.buttonGap;
-      const halfOffset = rowOffset * 0.5;
 
       createXrButton( 'year-prev', {
         label: buildButtonLabel( 'Year', '-' ),
@@ -927,27 +1247,9 @@ export const demo2SceneDefinition = Object.freeze( {
 
         },
       } );
-      createXrButton( 'rotate-left', {
-        label: buildButtonLabel( 'Globe', 'Left' ),
-        position: new THREE.Vector3( - rowOffset, xrPanel.buttonRow3Y, 0 ),
-        onPress( source ) {
-
-          rotateGlobe( - DEMO2_GLOBE_YAW_STEP_DEG, { source, shouldLog: true } );
-
-        },
-      } );
-      createXrButton( 'rotate-right', {
-        label: buildButtonLabel( 'Globe', 'Right' ),
-        position: new THREE.Vector3( 0, xrPanel.buttonRow3Y, 0 ),
-        onPress( source ) {
-
-          rotateGlobe( DEMO2_GLOBE_YAW_STEP_DEG, { source, shouldLog: true } );
-
-        },
-      } );
       createXrButton( 'reset-filters', {
         label: buildButtonLabel( 'Reset', 'Filters' ),
-        position: new THREE.Vector3( rowOffset, xrPanel.buttonRow3Y, 0 ),
+        position: new THREE.Vector3( - rowOffset, xrPanel.buttonRow3Y, 0 ),
         onPress( source ) {
 
           resetFilters( source );
@@ -956,7 +1258,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'reset-view', {
         label: buildButtonLabel( 'Reset', 'View' ),
-        position: new THREE.Vector3( - halfOffset, xrPanel.buttonRow4Y, 0 ),
+        position: new THREE.Vector3( 0, xrPanel.buttonRow3Y, 0 ),
         onPress( source ) {
 
           resetView( source );
@@ -965,7 +1267,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'submit', {
         label: buildButtonLabel( 'Task', 'Submit' ),
-        position: new THREE.Vector3( halfOffset, xrPanel.buttonRow4Y, 0 ),
+        position: new THREE.Vector3( rowOffset, xrPanel.buttonRow3Y, 0 ),
         onPress( source ) {
 
           submitTask( source );
@@ -1299,6 +1601,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       normalizeCurrentSceneState();
       applyGlobeYaw();
+      ensureBoundaryLines();
 
       if ( dataset && nodeEntriesById.size === 0 ) {
 
@@ -1622,32 +1925,6 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function rotateGlobe( deltaDegrees, {
-      source = 'scene-globe-rotate',
-      shouldLog = true,
-    } = {} ) {
-
-      if ( ! isFiniteNumber( deltaDegrees ) || deltaDegrees === 0 ) {
-
-        return;
-
-      }
-
-      currentSceneState.globeYawDeg = normalizeAngleDegrees( currentSceneState.globeYawDeg + deltaDegrees );
-      applyGlobeYaw();
-      updateHighlightsAndTooltip();
-      syncAllUi();
-
-      if ( shouldLog ) {
-
-        recordSceneChange( 'rotateGlobe', source, {
-          flushImmediately: true,
-        } );
-
-      }
-
-    }
-
     function resetView( source = 'scene-reset-view' ) {
 
       currentSceneState.globeYawDeg = DEMO2_DEFAULT_GLOBE_YAW_DEG;
@@ -1655,9 +1932,15 @@ export const demo2SceneDefinition = Object.freeze( {
       updateHighlightsAndTooltip();
       syncAllUi();
       resetDesktopCameraView();
-      recordSceneChange( 'resetView', source, {
+      const didLog = recordSceneChange( 'resetView', source, {
         flushImmediately: getSceneStateLoggingConfig().flushOnResetView === true,
       } );
+
+      if ( didLog ) {
+
+        rememberGlobeYawAsLogged( currentSceneState.globeYawDeg );
+
+      }
 
     }
 
@@ -1703,7 +1986,7 @@ export const demo2SceneDefinition = Object.freeze( {
       node.setAttribute( 'style', desktopPanel.root );
       node.appendChild( createStyledElement( 'p', desktopPanel.eyebrow, 'reVISit-XR Demo 2' ) );
       node.appendChild( createStyledElement( 'h2', desktopPanel.title, 'Migration Globe Baseline' ) );
-      node.appendChild( createStyledElement( 'p', desktopPanel.body, 'A local Afghanistan-centered migration globe with semantic provenance, reactive answers, and replay hydration.' ) );
+      node.appendChild( createStyledElement( 'p', desktopPanel.body, 'A local Afghanistan-centered migration globe with direct globe dragging, semantic provenance, reactive answers, and replay hydration.' ) );
       node.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Task' ) );
       desktopRefs.taskValue = createStyledElement( 'p', desktopPanel.detail, 'Loading Demo 2 task...' );
       node.appendChild( desktopRefs.taskValue );
@@ -1744,16 +2027,10 @@ export const demo2SceneDefinition = Object.freeze( {
       node.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'View' ) );
       const rowView = document.createElement( 'div' );
       rowView.setAttribute( 'style', desktopPanel.buttonRow );
-      desktopRefs.rotateLeftButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Rotate Left' );
-      desktopRefs.rotateRightButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Rotate Right' );
       desktopRefs.resetFiltersButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Reset Filters' );
       desktopRefs.resetViewButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Reset View' );
-      desktopRefs.rotateLeftButton.addEventListener( 'click', () => rotateGlobe( - DEMO2_GLOBE_YAW_STEP_DEG, { source: 'desktop-rotate-left', shouldLog: true } ) );
-      desktopRefs.rotateRightButton.addEventListener( 'click', () => rotateGlobe( DEMO2_GLOBE_YAW_STEP_DEG, { source: 'desktop-rotate-right', shouldLog: true } ) );
       desktopRefs.resetFiltersButton.addEventListener( 'click', () => resetFilters( 'desktop-reset-filters' ) );
       desktopRefs.resetViewButton.addEventListener( 'click', () => resetView( 'desktop-reset-view' ) );
-      rowView.appendChild( desktopRefs.rotateLeftButton );
-      rowView.appendChild( desktopRefs.rotateRightButton );
       rowView.appendChild( desktopRefs.resetFiltersButton );
       rowView.appendChild( desktopRefs.resetViewButton );
       node.appendChild( rowView );
@@ -1820,8 +2097,6 @@ export const demo2SceneDefinition = Object.freeze( {
         desktopRefs.thresholdNextButton,
         desktopRefs.directionButton,
         desktopRefs.labelsButton,
-        desktopRefs.rotateLeftButton,
-        desktopRefs.rotateRightButton,
         desktopRefs.resetFiltersButton,
         desktopRefs.resetViewButton,
       ].forEach( ( button ) => {
@@ -1847,22 +2122,25 @@ export const demo2SceneDefinition = Object.freeze( {
       const isReady = loadStatus === 'ready';
       const canInteract = context.getInteractionPolicy?.()?.canInteract !== false;
       const controlsEnabled = isReady && canInteract;
+      const compactMode = formatDirectionMode( currentSceneState.flowDirectionMode ).toLowerCase();
+      const compactThreshold = formatCompactThreshold( currentSceneState.minFlowThreshold );
+      const visibleRouteLabel = `${currentSceneState.visibleFlowCount} ${currentSceneState.visibleFlowCount === 1 ? 'route' : 'routes'}`;
 
       panelTitle.setText?.( 'Demo 2 Migration Globe' );
-      panelBodyText.setText( `${task.prompt}\n${task.hint}` );
+      panelBodyText.setText( 'Drag the globe to rotate.\nSelect a node to refocus, then choose a route.' );
       panelMetaText.setText(
         isReady
-          ? `${currentSceneState.geoYear} | ${formatDirectionMode( currentSceneState.flowDirectionMode ).toLowerCase()} | ${formatThreshold( currentSceneState.minFlowThreshold )} | ${currentSceneState.visibleFlowCount} visible`
+          ? `${currentSceneState.geoYear} | ${compactMode} | ${compactThreshold} | ${visibleRouteLabel}`
           : 'Loading data...',
       );
       panelSelectionText.setText(
         selectedFlow
-          ? `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 18 )}\nRoute ${truncateLabel( selectedFlow.destinationName, 18 )}`
-          : `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 18 )}\nNo route selected`,
+          ? `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 16 )}\nRoute ${truncateLabel( selectedFlow.destinationName, 16 )}`
+          : `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 16 )}\nNo route yet`,
       );
       panelFooterText.setText(
         loadStatus === 'error'
-          ? `${loadError?.message || 'Missing local Demo 2 files.'}\nExpected files:\ndemo2/data/demo2Nodes.json + demo2Flows.csv`
+          ? `${loadError?.message || 'Missing local Demo 2 files.'}\nExpected files:\ndemo2Nodes.json, demo2Flows.csv,\nand world-atlas-countries-110m.json`
           : (
             currentSceneState.taskSubmitted
               ? `Submitted answer:\n${getSelectedFlowAnswerLabel() || currentSceneState.taskAnswer}`
@@ -1882,10 +2160,6 @@ export const demo2SceneDefinition = Object.freeze( {
       xrButtons.get( 'threshold-next' ).label = buildButtonLabel( 'Flow', '+' );
       xrButtons.get( 'labels' ).disabled = ! controlsEnabled;
       xrButtons.get( 'labels' ).label = buildButtonLabel( 'Labels', currentSceneState.labelsVisible ? 'On' : 'Off' );
-      xrButtons.get( 'rotate-left' ).disabled = ! controlsEnabled;
-      xrButtons.get( 'rotate-left' ).label = buildButtonLabel( 'Globe', 'Left' );
-      xrButtons.get( 'rotate-right' ).disabled = ! controlsEnabled;
-      xrButtons.get( 'rotate-right' ).label = buildButtonLabel( 'Globe', 'Right' );
       xrButtons.get( 'reset-filters' ).disabled = ! controlsEnabled;
       xrButtons.get( 'reset-filters' ).label = buildButtonLabel( 'Reset', 'Filters' );
       xrButtons.get( 'reset-view' ).disabled = ! controlsEnabled;
@@ -1913,6 +2187,7 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( source === 'replay-scene' ) {
 
         clearHoverState();
+        activeGlobeDrag = null;
 
       }
 
@@ -1955,6 +2230,7 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       syncDataDrivenScene();
+      rememberGlobeYawAsLogged( currentSceneState.globeYawDeg );
       syncAllUi();
 
     }

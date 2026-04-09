@@ -1,9 +1,11 @@
 const NODES_URL = new URL( './data/demo2Nodes.json', import.meta.url );
 const FLOWS_URL = new URL( './data/demo2Flows.csv', import.meta.url );
+const BOUNDARIES_URL = new URL( './data/geo/world-atlas-countries-110m.json', import.meta.url );
 
 export const DEMO2_REQUIRED_DATA_FILES = Object.freeze( [
   'demo2/data/demo2Nodes.json',
   'demo2/data/demo2Flows.csv',
+  'demo2/data/geo/world-atlas-countries-110m.json',
 ] );
 
 let datasetPromise = null;
@@ -152,7 +154,8 @@ export async function loadDemo2Dataset() {
   datasetPromise = Promise.all( [
     fetchRequiredJson( NODES_URL, 'demo2Nodes.json' ),
     fetchRequiredText( FLOWS_URL, 'demo2Flows.csv' ),
-  ] ).then( ( [ rawNodes, rawFlowsCsv ] ) => {
+    fetchRequiredJson( BOUNDARIES_URL, 'world-atlas-countries-110m.json' ),
+  ] ).then( ( [ rawNodes, rawFlowsCsv, boundaryTopology ] ) => {
 
     if ( ! Array.isArray( rawNodes ) || rawNodes.length === 0 ) {
 
@@ -243,6 +246,7 @@ export async function loadDemo2Dataset() {
       initialYear: supportedYears.includes( 2024 ) ? 2024 : supportedYears.at( - 1 ),
       defaultFocusedCountryId: 'AFG',
       maxFlowValue: flowList.reduce( ( maxValue, flow ) => Math.max( maxValue, flow.value ), 0 ),
+      boundaryTopology,
     } );
 
   } ).catch( ( error ) => {

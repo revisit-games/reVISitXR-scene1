@@ -485,6 +485,7 @@ Demo 2 keeps its migration baseline under `demo2/`:
 
 - `demo2/data/demo2Nodes.json`
 - `demo2/data/demo2Flows.csv`
+- `demo2/data/geo/world-atlas-countries-110m.json`
 - `demo2/data/raw/owid-migration-flows-export.csv`
 - `demo2/data/raw/owid-migrant-stock-total.csv`
 - `demo2/data/raw/owid-migrant-stock-total.metadata.json`
@@ -495,9 +496,9 @@ Demo 2 keeps its migration baseline under `demo2/`:
 - `demo2/demo2Tasks.js`
 - `demo2/demo2LoggingConfig.js`
 
-The current Demo 2 runtime bundle is intentionally an Afghanistan-centered outbound migration baseline because the provided OWID flow export is already scoped to emigration from Afghanistan. The scene-local data contract stays generalized around node and flow bundles so future demos can swap in broader OD datasets without changing the shared runtime.
+The current Demo 2 runtime bundle is intentionally an Afghanistan-centered outbound migration baseline because the provided OWID flow export is already scoped to emigration from Afghanistan. The scene-local data contract stays generalized around node and flow bundles so future demos can swap in broader OD datasets without changing the shared runtime. Demo 2 now also bundles a local Natural Earth-derived world boundary topology for subtle country linework on the globe, so there is still no runtime network fetch.
 
-Demo 2 uses the same scene-local answer-summary hook pattern as Demo 1. Its controller contributes compact geo state such as year, direction mode, threshold, focused country, selected route, visible-flow count, label visibility, and globe yaw while the generic XR answers still continue to provide `xrMode`, `xrInteractionPhase`, `xrGrabCount`, `xrSessionCount`, `xrLastEvent`, and `xrStateSummaryJson`.
+Demo 2 uses the same scene-local answer-summary hook pattern as Demo 1. Its controller contributes compact geo state such as year, direction mode, threshold, focused country, selected route, visible-flow count, label visibility, and globe yaw while the generic XR answers still continue to provide `xrMode`, `xrInteractionPhase`, `xrGrabCount`, `xrSessionCount`, `xrLastEvent`, and `xrStateSummaryJson`. Globe rotation is still semantic and replay-safe because Demo 2 now drives `globeYawDeg` through direct globe dragging rather than dedicated rotate buttons.
 
 ## Example 1 Dataset Layout
 

@@ -28,6 +28,7 @@ Demo 2 uses only local files that ship with Repo A:
 - curated runtime files:
   - `demo2/data/demo2Nodes.json`
   - `demo2/data/demo2Flows.csv`
+  - `demo2/data/geo/world-atlas-countries-110m.json`
 - raw source files kept for provenance and future curation:
   - `demo2/data/raw/owid-migration-flows-export.csv`
   - `demo2/data/raw/owid-migrant-stock-total.csv`
@@ -39,6 +40,19 @@ The current curated baseline is intentionally Afghanistan-centered because the p
 - flows: `flowId`, `year`, `originId`, `destinationId`, `value`
 
 That keeps Demo 2 extensible for broader OD datasets later without redesigning the scene architecture.
+
+The local globe boundary asset is derived from `world-atlas` `countries-110m.json`, which in turn is built from Natural Earth public-domain data. Demo 2 loads that file through `demo2Data.js` and renders scene-local country outline linework without any runtime network fetch.
+
+## Globe Interaction
+
+Demo 2 keeps globe orientation semantic and replay-safe:
+
+- the scene still stores only `globeYawDeg`
+- globe rotation now comes from direct pointer/controller dragging on a raycastable interaction shell around the globe
+- node and flow meshes remain their own interactive targets, so selecting a node or route still wins over bare-globe dragging when those marks are under the pointer
+- replay restores the logged yaw directly through semantic scene-state hydration instead of replaying dense animation
+
+The drag interaction intentionally stays yaw-only in v1. Demo 2 does not record globe pitch, roll, or free quaternion motion.
 
 ## Semantic Replay State
 
