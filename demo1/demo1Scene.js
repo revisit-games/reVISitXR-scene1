@@ -3,7 +3,7 @@ import { PRESENTATION_MODES } from '../logging/xrLoggingSchema.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
-import { createFloatingOrbitPanel } from '../scenes/core/floatingOrbitPanel.js';
+import { createFloatingOrbitPanelShell } from '../scenes/core/floatingOrbitPanelShell.js';
 import { loadDemo1Dataset } from './demo1Data.js';
 import { demo1VisualConfig } from './demo1VisualConfig.js';
 import { demo1LoggingConfig } from './demo1LoggingConfig.js';
@@ -11,6 +11,8 @@ import {
   DEMO1_COLOR_ENCODINGS,
   DEMO1_DEFAULT_YEAR,
   DEMO1_NAV_MODES,
+  normalizeDemo1PanelPosition,
+  normalizeDemo1PanelQuaternion,
   DEMO1_SCALE_LIMITS,
   normalizeDemo1ScaleFactor,
   normalizeDemo1SceneState,
@@ -249,46 +251,86 @@ export const demo1SceneDefinition = Object.freeze( {
     const tempScaleVector = new THREE.Vector3();
     const tempMainWorldPosition = new THREE.Vector3();
     const tempMainLocalPosition = new THREE.Vector3();
+    const lastLoggedPanelPosition = new THREE.Vector3();
+    const lastLoggedPanelQuaternion = new THREE.Quaternion();
     const unitQuaternion = new THREE.Quaternion();
-    const panelBackground = createTrackedMesh(
-      staticObjects,
-      xrPanelRoot,
-      new THREE.PlaneGeometry( xrPanel.width, xrPanel.height ),
-      new THREE.MeshStandardMaterial( {
-        color: xrPanel.backgroundColor,
-        emissive: xrPanel.backgroundEmissive,
-        transparent: true,
-        opacity: xrPanel.backgroundOpacity,
-        roughness: 0.88,
-        metalness: 0.05,
-        side: THREE.DoubleSide,
-      } ),
-    );
-    const panelInset = createTrackedMesh(
-      staticObjects,
-      xrPanelRoot,
-      new THREE.PlaneGeometry( xrPanel.width - 0.06, xrPanel.height - xrPanel.titleBarHeight - 0.06 ),
-      new THREE.MeshStandardMaterial( {
-        color: xrPanel.insetColor,
-        emissive: 0x08121b,
-        transparent: true,
-        opacity: 0.75,
-        roughness: 0.9,
-        metalness: 0.02,
-        side: THREE.DoubleSide,
-      } ),
-    );
-    const panelBorder = createTrackedLineSegments(
-      staticObjects,
-      xrPanelRoot,
-      new THREE.EdgesGeometry( new THREE.PlaneGeometry( xrPanel.width, xrPanel.height ) ),
-      new THREE.LineBasicMaterial( {
-        color: xrPanel.edgeColor,
-        transparent: true,
-        opacity: xrPanel.edgeOpacity,
-        toneMapped: false,
-      } ),
-    );
+    const panelShell = createFloatingOrbitPanelShell( context, {
+      panelRoot: xrPanelRoot,
+      namePrefix: 'demo1-panel',
+      width: xrPanel.width,
+      height: xrPanel.height,
+      titleBarHeight: xrPanel.titleBarHeight,
+      titleBarY: xrPanel.titleY,
+      dragSurfaceHeight: xrPanel.dragSurfaceHeight,
+      backgroundColor: xrPanel.backgroundColor,
+      backgroundEmissive: xrPanel.backgroundEmissive,
+      backgroundOpacity: xrPanel.backgroundOpacity,
+      bodyInsetColor: xrPanel.bodyInsetColor,
+      bodyInsetOpacity: xrPanel.bodyInsetOpacity,
+      edgeColor: xrPanel.edgeColor,
+      edgeOpacity: xrPanel.edgeOpacity,
+      edgeMode: 'line',
+      titleBarColor: xrPanel.titleBarColor,
+      titleBarEmissive: xrPanel.titleBarEmissive,
+      surfacePanelZ: xrPanel.surfacePanelZ,
+      surfaceDragZ: xrPanel.surfaceDragZ,
+      panelInitialOffset: xrPanel.panelInitialOffset,
+      panelInitialYawDeg: xrPanel.panelInitialYawDeg,
+      orbitCenterMode: xrPanel.orbitCenterMode,
+      followCameraHeight: xrPanel.followCameraHeight,
+      heightFollowOffset: xrPanel.heightFollowOffset,
+      minPanelHeight: xrPanel.minPanelHeight,
+      maxPanelHeight: xrPanel.maxPanelHeight,
+      heightSmoothing: xrPanel.heightSmoothing,
+      faceOrbitCenter: true,
+      lockVerticalOrientation: true,
+      onPanelHoverChange( payload ) {
+
+        updateHoveredPointFromSource( payload.source, null );
+        updateXrPanelVisualState();
+
+      },
+      onTitleBarHoverChange( payload ) {
+
+        updateHoveredPointFromSource( payload.source, null );
+        updateXrPanelVisualState();
+
+      },
+      onDragStart( payload ) {
+
+        updateHoveredPointFromSource( payload.source, null );
+        updateXrPanelVisualState();
+
+      },
+      onDragMove( payload ) {
+
+        if ( getDemo1LoggingTuning().logPanelTransformOnPanelDrag === true ) {
+
+          recordPanelTransformIfNeeded( payload.source );
+
+        }
+
+        updateXrPanelVisualState();
+
+      },
+      onDragEnd( payload ) {
+
+        if ( getDemo1LoggingTuning().logPanelTransformOnPanelDragEnd === true ) {
+
+          recordPanelTransformIfNeeded( payload.source, {
+            force: true,
+            flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd === true,
+          } );
+
+        }
+
+        updateXrPanelVisualState();
+
+      },
+    } );
+    const panelBackground = panelShell.meshes.background;
+    const panelBorder = panelShell.meshes.edge;
+    const titleBarMesh = panelShell.meshes.titleBar;
     const panelTitle = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
@@ -305,18 +347,18 @@ export const demo1SceneDefinition = Object.freeze( {
       staticObjects,
       xrPanelRoot,
       { ...labelStyles.panelMeta, text: 'Preparing local OWID bundle...' },
-      new THREE.Vector3( 0, 0.02, xrPanel.contentZ ),
+      new THREE.Vector3( 0, xrPanel.metaY, xrPanel.contentZ ),
     );
     const panelSelectionText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
       { ...labelStyles.panelMeta, text: 'No point selected yet.' },
-      new THREE.Vector3( 0, - 0.17, xrPanel.contentZ ),
+      new THREE.Vector3( 0, xrPanel.selectionY, xrPanel.contentZ ),
     );
     const panelFooterText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
-      { ...labelStyles.panelMeta, text: 'Use the panel buttons or desktop wheel to navigate.' },
+      { ...labelStyles.panelMeta, text: 'Drag the title bar to move the panel. Use the buttons to navigate.' },
       new THREE.Vector3( 0, xrPanel.footerY, xrPanel.contentZ ),
     );
     const tooltip = createTextSprite( { ...labelStyles.tooltip, text: '' } );
@@ -371,24 +413,10 @@ export const demo1SceneDefinition = Object.freeze( {
       selectionValue: null,
       statusValue: null,
     };
-    const orbitPanel = createFloatingOrbitPanel( context, {
-      panelRoot: xrPanelRoot,
-      panelInitialOffset: xrPanel.panelInitialOffset,
-      panelInitialYawDeg: xrPanel.panelInitialYawDeg,
-      orbitCenterMode: xrPanel.orbitCenterMode,
-      followCameraHeight: xrPanel.followCameraHeight,
-      heightFollowOffset: xrPanel.heightFollowOffset,
-      minPanelHeight: xrPanel.minPanelHeight,
-      maxPanelHeight: xrPanel.maxPanelHeight,
-      heightSmoothing: xrPanel.heightSmoothing,
-      faceOrbitCenter: true,
-      lockVerticalOrientation: true,
-    } );
 
     let dataset = null;
     let loadStatus = 'loading';
     let loadError = null;
-    let panelPlacementInitialized = false;
     let mainPointsMesh = null;
     let overviewPointsMesh = null;
     let currentPointEntries = [];
@@ -396,6 +424,7 @@ export const demo1SceneDefinition = Object.freeze( {
     let currentHoveredPointId = null;
     let hoverSequence = 0;
     let scaleCommitTimer = null;
+    let lastPanelStateLogAt = 0;
     let currentSceneState = normalizeDemo1SceneState( defaultSceneState, null, {
       defaultYear: DEMO1_DEFAULT_YEAR,
     } );
@@ -409,8 +438,6 @@ export const demo1SceneDefinition = Object.freeze( {
     mainScaleRoot.add( mainDynamicRoot );
     overviewRoot.position.fromArray( overview.position );
     overviewRoot.add( overviewDynamicRoot );
-    panelInset.position.set( 0, - 0.03, 0.001 );
-    panelBorder.position.z = 0.004;
     xrPanelRoot.visible = false;
     overviewRoot.visible = false;
     selectedHighlightMain.visible = false;
@@ -424,16 +451,19 @@ export const demo1SceneDefinition = Object.freeze( {
     overviewDynamicRoot.add( selectedHighlightOverview );
     overviewDynamicRoot.add( hoverHighlightOverview );
     root.add( tooltip.sprite );
-    orbitPanel.setLocalDragEnabled( false );
 
     function getSceneStateLoggingConfig() {
 
       return context.getLoggingConfig?.()?.sceneState || {
+        minIntervalMs: 420,
+        positionEpsilon: 0.04,
+        quaternionAngleThresholdDeg: 3.5,
         flushOnNavModeChange: true,
         flushOnOverviewToggle: true,
         flushOnScaleChange: false,
         flushOnSelectionChange: true,
         flushOnTaskSubmit: true,
+        flushOnPanelDragEnd: true,
       };
 
     }
@@ -443,14 +473,119 @@ export const demo1SceneDefinition = Object.freeze( {
       return context.getLoggingConfig?.()?.demo1 || {
         scaleCommitDebounceMs: 320,
         scaleCommitMinDelta: 0.04,
+        panelTransformCommitMinIntervalMs: 420,
+        logPanelTransformOnPanelDrag: true,
+        logPanelTransformOnPanelDragEnd: true,
         stableLabels: {
           navMode: 'Switch Demo 1 Nav Mode',
           overview: 'Toggle Demo 1 Overview',
           scale: 'Scale Demo 1 Plot',
           selection: 'Select Demo 1 Point',
           taskSubmit: 'Submit Demo 1 Task',
+          movePanel: 'Move Demo 1 Panel',
         },
       };
+
+    }
+
+    function getCurrentPanelSceneState() {
+
+      return panelShell.getPanelSceneState();
+
+    }
+
+    function getCommittedPanelSceneState() {
+
+      const panelPosition = normalizeDemo1PanelPosition( currentSceneState.panelPosition, null );
+      const panelQuaternion = normalizeDemo1PanelQuaternion( currentSceneState.panelQuaternion, null );
+
+      if ( ! panelPosition || ! panelQuaternion ) {
+
+        return null;
+
+      }
+
+      return {
+        panelPosition,
+        panelQuaternion,
+      };
+
+    }
+
+    function commitPanelTransformToSceneState( panelPosition, panelQuaternion ) {
+
+      const committedPanelState = {
+        panelPosition: normalizeDemo1PanelPosition( panelPosition, null ),
+        panelQuaternion: normalizeDemo1PanelQuaternion( panelQuaternion, null ),
+      };
+
+      currentSceneState.panelPosition = committedPanelState.panelPosition;
+      currentSceneState.panelQuaternion = committedPanelState.panelQuaternion;
+
+      return committedPanelState;
+
+    }
+
+    function commitCurrentPanelTransformToSceneState() {
+
+      const nextPanelState = getCurrentPanelSceneState();
+      return commitPanelTransformToSceneState( nextPanelState.panelPosition, nextPanelState.panelQuaternion );
+
+    }
+
+    function rememberPanelTransformAsLogged( panelState = getCommittedPanelSceneState() ?? getCurrentPanelSceneState(), now = performance.now() ) {
+
+      lastLoggedPanelPosition.fromArray( panelState.panelPosition );
+      lastLoggedPanelQuaternion.fromArray( panelState.panelQuaternion );
+      lastPanelStateLogAt = now;
+
+    }
+
+    function recordPanelTransformIfNeeded( source, {
+      force = false,
+      flushImmediately = false,
+    } = {} ) {
+
+      const loggingConfig = getSceneStateLoggingConfig();
+      const demo1Logging = getDemo1LoggingTuning();
+      const nextState = getCurrentPanelSceneState();
+      const positionChanged = lastLoggedPanelPosition.distanceTo( new THREE.Vector3().fromArray( nextState.panelPosition ) ) > loggingConfig.positionEpsilon;
+      const rotationChanged = 2 * Math.acos( Math.min( 1, Math.max( - 1, Math.abs( lastLoggedPanelQuaternion.dot( new THREE.Quaternion().fromArray( nextState.panelQuaternion ) ) ) ) ) ) * 180 / Math.PI > loggingConfig.quaternionAngleThresholdDeg;
+      const now = performance.now();
+      const commitMinInterval = Number.isFinite( demo1Logging.panelTransformCommitMinIntervalMs )
+        ? demo1Logging.panelTransformCommitMinIntervalMs
+        : loggingConfig.minIntervalMs;
+
+      if ( ! force ) {
+
+        if ( ! positionChanged && ! rotationChanged ) {
+
+          return false;
+
+        }
+
+        if ( now - lastPanelStateLogAt < Math.max( loggingConfig.minIntervalMs, commitMinInterval ) ) {
+
+          return false;
+
+        }
+
+      }
+
+      const committedPanelState = commitCurrentPanelTransformToSceneState();
+      const didLog = context.recordSceneStateChange?.( {
+        source,
+        label: getStableSceneLabel( 'movePanel' ),
+        flushImmediately,
+      } ) === true;
+
+      if ( didLog ) {
+
+        rememberPanelTransformAsLogged( committedPanelState, now );
+
+      }
+
+      return didLog;
 
     }
 
@@ -650,6 +785,8 @@ export const demo1SceneDefinition = Object.freeze( {
         selectionCount: currentSceneState.selectionCount,
         taskAnswer: currentSceneState.taskAnswer,
         taskSubmitted: currentSceneState.taskSubmitted,
+        panelPosition: normalizeDemo1PanelPosition( currentSceneState.panelPosition, null ),
+        panelQuaternion: normalizeDemo1PanelQuaternion( currentSceneState.panelQuaternion, null ),
       };
 
     }
@@ -892,20 +1029,19 @@ export const demo1SceneDefinition = Object.freeze( {
         dynamicObjects,
         mainDynamicRoot,
         { ...labelStyles.axisTitle, text: `${dataset.axisMetadata.x.title}\n(${dataset.axisMetadata.x.note})` },
-        new THREE.Vector3( 0, plot.baseY - 0.04, - plot.depth * 0.5 - 0.18 ),
+        new THREE.Vector3( 0, plot.baseY + plot.height + 0.08, - plot.depth * 0.5 - 0.34 ),
       );
       createTrackedTextPlane(
         dynamicObjects,
         mainDynamicRoot,
         { ...labelStyles.axisTitle, text: `${dataset.axisMetadata.y.title}\n${dataset.axisMetadata.y.unit}` },
-        new THREE.Vector3( - plot.width * 0.5 - 0.22, plot.baseY + plot.height * 0.5, - plot.depth * 0.5 ),
-        new THREE.Euler( 0, Math.PI * 0.5, 0 ),
+        new THREE.Vector3( - plot.width * 0.5 - 0.12, plot.baseY + plot.height + 0.16, - plot.depth * 0.5 - 0.08 ),
       );
       createTrackedTextPlane(
         dynamicObjects,
         mainDynamicRoot,
         { ...labelStyles.axisTitle, text: `${dataset.axisMetadata.z.title}\n(${dataset.axisMetadata.z.note})` },
-        new THREE.Vector3( - plot.width * 0.5 - 0.14, plot.baseY - 0.02, 0 ),
+        new THREE.Vector3( - plot.width * 0.5 - 0.42, plot.baseY + plot.height + 0.02, 0 ),
         new THREE.Euler( 0, Math.PI * 0.5, 0 ),
       );
 
@@ -1194,6 +1330,25 @@ export const demo1SceneDefinition = Object.freeze( {
 
     }
 
+    function updateXrPanelVisualState() {
+
+      const isButtonHovered = [ ...xrButtons.values() ].some( ( button ) => button.hoverSources.size > 0 );
+      const isPanelHovered = panelShell.isPanelHovered() || panelShell.isTitleBarHovered() || isButtonHovered;
+      const isDragAffordanceActive = panelShell.isTitleBarHovered() || panelShell.isDragging();
+
+      panelBackground.material.emissive.setHex( isPanelHovered ? 0x0d1a28 : xrPanel.backgroundEmissive );
+      panelBorder.material.color.setHex(
+        panelShell.isDragging()
+          ? xrPanel.dragAccentColor
+          : ( isDragAffordanceActive ? xrPanel.hoverAccentColor : xrPanel.edgeColor ),
+      );
+      panelBorder.material.opacity = panelShell.isDragging() ? 0.32 : ( isPanelHovered ? 0.24 : xrPanel.edgeOpacity );
+      titleBarMesh.material.emissive.setHex(
+        isDragAffordanceActive ? xrPanel.titleBarHoverEmissive : xrPanel.titleBarEmissive,
+      );
+
+    }
+
     function syncXrButtonVisuals() {
 
       xrButtons.forEach( ( button ) => {
@@ -1209,6 +1364,8 @@ export const demo1SceneDefinition = Object.freeze( {
         button.text.setText( button.label );
 
       } );
+
+      updateXrPanelVisualState();
 
     }
 
@@ -1236,7 +1393,7 @@ export const demo1SceneDefinition = Object.freeze( {
           : (
             currentSceneState.taskSubmitted
               ? `Submitted answer: ${currentSceneState.taskAnswer}`
-              : 'Use the panel buttons to switch nav modes, adjust scale, and submit a selected point.'
+              : 'Drag the title bar to move the panel. Use the buttons to switch mode, adjust scale, and submit.'
           ),
       );
 
@@ -1635,7 +1792,18 @@ export const demo1SceneDefinition = Object.freeze( {
 
     }
 
-    function applySceneState( sceneState ) {
+    function applySceneState( sceneState, {
+      source = 'scene-state',
+      useExactPanelTransform = false,
+      forceDefaultPanel = false,
+    } = {} ) {
+
+      if ( source === 'replay-scene' ) {
+
+        clearScaleCommitTimer();
+        clearHoverState();
+
+      }
 
       currentSceneState = normalizeDemo1SceneState(
         sceneState,
@@ -1645,27 +1813,72 @@ export const demo1SceneDefinition = Object.freeze( {
           defaultYear: dataset?.initialYear || DEMO1_DEFAULT_YEAR,
         },
       );
+
+      const nextPanelPosition = normalizeDemo1PanelPosition( currentSceneState.panelPosition, null );
+      const nextPanelQuaternion = normalizeDemo1PanelQuaternion( currentSceneState.panelQuaternion, null );
+      if ( nextPanelPosition && nextPanelQuaternion ) {
+
+        const appliedPanelState = panelShell.applyPanelTransform(
+          nextPanelPosition,
+          nextPanelQuaternion,
+          { useExactTransform: useExactPanelTransform },
+        );
+        const committedPanelState = commitPanelTransformToSceneState(
+          appliedPanelState.panelPosition,
+          appliedPanelState.panelQuaternion,
+        );
+        rememberPanelTransformAsLogged( committedPanelState );
+
+      } else if ( forceDefaultPanel === true || ( context.getPresentationMode?.() !== PRESENTATION_MODES.DESKTOP && ! panelShell.hasPlacementInitialized() ) ) {
+
+        const defaultPanelState = panelShell.placeAtDefault();
+        const committedPanelState = commitPanelTransformToSceneState(
+          defaultPanelState.panelPosition,
+          defaultPanelState.panelQuaternion,
+        );
+        rememberPanelTransformAsLogged( committedPanelState );
+
+      }
+
       syncDataDrivenScene();
 
     }
 
-    function ensureXrPanelPlacement() {
+    function ensureXrPanelPlacement( {
+      forceDefault = false,
+      useExactTransform = false,
+    } = {} ) {
 
-      if ( context.getPresentationMode?.() === PRESENTATION_MODES.DESKTOP ) {
+      const nextPanelPosition = normalizeDemo1PanelPosition( currentSceneState.panelPosition, null );
+      const nextPanelQuaternion = normalizeDemo1PanelQuaternion( currentSceneState.panelQuaternion, null );
+      const nextPanelState = panelShell.ensurePlacement( {
+        panelPosition: nextPanelPosition,
+        panelQuaternion: nextPanelQuaternion,
+        forceDefault,
+        useExactTransform,
+      } );
 
-        xrPanelRoot.visible = false;
+      if ( ! nextPanelState ) {
+
         return;
 
       }
 
-      xrPanelRoot.visible = true;
+      if ( nextPanelPosition && nextPanelQuaternion ) {
 
-      if ( ! panelPlacementInitialized ) {
-
-        orbitPanel.placeAtDefault();
-        panelPlacementInitialized = true;
+        rememberPanelTransformAsLogged( {
+          panelPosition: nextPanelPosition,
+          panelQuaternion: nextPanelQuaternion,
+        } );
+        return;
 
       }
+
+      const committedPanelState = commitPanelTransformToSceneState(
+        nextPanelState.panelPosition,
+        nextPanelState.panelQuaternion,
+      );
+      rememberPanelTransformAsLogged( committedPanelState );
 
     }
 
@@ -1734,6 +1947,7 @@ export const demo1SceneDefinition = Object.freeze( {
         pointHoverBySource.clear();
         context.renderer.domElement.removeEventListener( 'wheel', onWheel );
         uiSurfaces.forEach( ( surface ) => surface.dispose() );
+        panelShell.dispose();
         clearDynamicObjects();
         staticObjects.forEach( ( entry ) => {
 
@@ -1758,8 +1972,7 @@ export const demo1SceneDefinition = Object.freeze( {
 
         if ( context.getPresentationMode?.() !== PRESENTATION_MODES.DESKTOP ) {
 
-          ensureXrPanelPlacement();
-          orbitPanel.updateRuntimePlacement( { deltaSeconds } );
+          panelShell.updateRuntimePlacement( { deltaSeconds } );
 
         }
 
@@ -1771,7 +1984,11 @@ export const demo1SceneDefinition = Object.freeze( {
       },
       applySceneStateFromReplay( sceneState ) {
 
-        applySceneState( sceneState );
+        applySceneState( sceneState, {
+          source: 'replay-scene',
+          useExactPanelTransform: true,
+          forceDefaultPanel: true,
+        } );
 
       },
       getAnswerSummary() {
@@ -1806,6 +2023,21 @@ export const demo1SceneDefinition = Object.freeze( {
           body: 'Use the desktop panel and wheel zoom to navigate a semantic 3D scatterplot baseline built for study embedding and replay.',
           note: 'Switch between scale-only and overview-assisted navigation from the scene controls.',
         };
+
+      },
+      onPresentationModeChange( presentationMode ) {
+
+        xrPanelRoot.visible = presentationMode !== PRESENTATION_MODES.DESKTOP;
+        clearHoverState();
+        xrButtons.forEach( ( button ) => button.hoverSources.clear() );
+
+        if ( presentationMode !== PRESENTATION_MODES.DESKTOP ) {
+
+          ensureXrPanelPlacement();
+
+        }
+
+        syncAllUi();
 
       },
     };

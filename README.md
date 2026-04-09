@@ -371,31 +371,29 @@ Recommended split:
 
 ## Floating Orbital Panels
 
-Reusable orbital XR-window behavior now lives in `scenes/core/floatingOrbitPanel.js`.
+Reusable orbit math still lives in `scenes/core/floatingOrbitPanel.js`, but scenes should usually consume the shared shell helper in `scenes/core/floatingOrbitPanelShell.js`.
 
-Use `createFloatingOrbitPanel(context, options)` when a scene needs a floating world-space window that:
+Use `createFloatingOrbitPanelShell(context, options)` when a scene needs a floating world-space panel that:
 
 - captures the immersive-entry camera position as a fixed orbit center
 - places the panel once at a configurable left-front offset
 - keeps the panel world-fixed instead of re-anchoring to the moving camera
-- can optionally keep only the panel height adaptive to the current camera height while preserving the original orbit-center X/Z, orbit radius, and horizontal yaw-facing behavior
-- drags only along a fixed-radius horizontal orbit
-- keeps the panel facing the fixed orbit center
-- keeps the panel vertically upright by default, so orbit-facing changes only affect yaw unless a scene explicitly disables that lock
-- latches the drag state on `selectstart` even if the first ray-plane intersection is not yet valid, so the first good `selectmove` can still start orbital motion
+- can optionally keep only the panel height adaptive to the live camera height while preserving the original orbit-center X/Z, orbit radius, and yaw-facing behavior
+- restores authored transforms in live mode with `applyLiveWorldTransform()` semantics, but restores exact logged transforms in replay with `applyWorldTransform()` semantics
+- auto-creates shared shell chrome plus distinct `background-hit` and `titlebar-drag` ray surfaces through `sceneUiSurface`
+- keeps drag affordance separate from generic panel hit blocking, so only the title bar highlights and drags while the panel body still receives hit points
+- disables local drag and passive height-follow during replay/analysis policy states
 
 Recommended pattern:
 
-- build the window visuals with local `textPlane` labels and authored meshes
-- create a title-bar `sceneUiSurface` for dragging
-- create separate UI surfaces for slider or button controls
+- use the shared shell for panel chrome, default placement, runtime height-follow policy, and title-bar-only dragging
+- layer scene-specific slider or button surfaces on top of the shell instead of rebuilding panel hit planes in every scene
 - override placement knobs such as `panelInitialOffset`, `panelInitialYawDeg`, `orbitHeightOffset`, `followCameraHeight`, `heightFollowOffset`, `minPanelHeight`, `maxPanelHeight`, `heightSmoothing`, and `lockVerticalOrientation` in scene config, while keeping the orbit-facing math shared
-- use `applyLiveWorldTransform()` when a live immersive scene should restore authored X/Z placement while still letting runtime height-follow stay active
-- use `applyWorldTransform()` when replay should restore the exact logged transform
-- keep `panelPosition` and `panelQuaternion` in semantic `sceneState`, but commit them from authored panel interactions instead of passive runtime height updates
-- disable local drag during replay if replay is already restoring the recorded panel transform
+- call `ensurePlacement()` when the scene activates or presentation mode changes so older recordings without panel state still get a sensible default placement
+- call `applyPanelTransform(..., { useExactTransform: true })` when replay is restoring a logged `panelPosition` and `panelQuaternion`
+- commit `panelPosition` and `panelQuaternion` from authored panel interactions such as title-bar drags, not from passive runtime height updates
 
-Adaptive height is a runtime convenience, not a logging requirement. A scene can let the shared helper move the panel vertically for comfort while still deciding locally which authored panel interactions should commit `panelPosition` and `panelQuaternion` back into semantic replay state.
+Adaptive height is a live-study comfort behavior, not a replay-analysis behavior. The shared shell intentionally stops passive height-follow whenever replay state is being applied or inspected, so paused free-camera analysis stays tied to the logged panel transform.
 
 ## Scene Interaction Hooks
 
@@ -428,8 +426,8 @@ For authored scene UI, prefer `scenes/core/sceneUiSurface.js` instead of creatin
 This is the recommended pattern for future in-world controls such as:
 
 - slider hit strips
-- floating panel hit planes
-- draggable XR window title bars
+- floating panel hit planes when a scene is not already using `floatingOrbitPanelShell.js`
+- draggable XR window title bars when a scene is not already using `floatingOrbitPanelShell.js`
 - authored XR control cards that need replay-visible pointer targets
 
 Because these surfaces use the same `registerRaycastTarget()` path as the rest of the scene system, live controller cursor dots and replay ghost pointer targets remain visible without scene-specific replay hacks.

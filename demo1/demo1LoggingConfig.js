@@ -41,16 +41,21 @@ export const demo1LoggingConfig = Object.freeze( {
     flushOnScaleChange: false,
     flushOnSelectionChange: true,
     flushOnTaskSubmit: true,
+    flushOnPanelDragEnd: true,
   } ),
   demo1: Object.freeze( {
     scaleCommitDebounceMs: 320,
     scaleCommitMinDelta: 0.04,
+    panelTransformCommitMinIntervalMs: 420,
+    logPanelTransformOnPanelDrag: true,
+    logPanelTransformOnPanelDragEnd: true,
     stableLabels: Object.freeze( {
       navMode: 'Switch Demo 1 Nav Mode',
       overview: 'Toggle Demo 1 Overview',
       scale: 'Scale Demo 1 Plot',
       selection: 'Select Demo 1 Point',
       taskSubmit: 'Submit Demo 1 Task',
+      movePanel: 'Move Demo 1 Panel',
     } ),
   } ),
 } );

@@ -20,6 +20,30 @@ export const DEMO1_DEFAULT_YEAR = 2023;
 export const DEMO1_DEFAULT_TASK_ID = 'target-a';
 export const DEMO1_SUPPORTED_TASK_IDS = Object.freeze( [ 'target-a', 'target-b', 'target-c' ] );
 
+export function normalizeDemo1PanelPosition( candidateValue, fallbackValue = null ) {
+
+  if ( Array.isArray( candidateValue ) && candidateValue.length === 3 && candidateValue.every( isFiniteNumber ) ) {
+
+    return [ candidateValue[ 0 ], candidateValue[ 1 ], candidateValue[ 2 ] ];
+
+  }
+
+  return Array.isArray( fallbackValue ) ? [ ...fallbackValue ] : null;
+
+}
+
+export function normalizeDemo1PanelQuaternion( candidateValue, fallbackValue = null ) {
+
+  if ( Array.isArray( candidateValue ) && candidateValue.length === 4 && candidateValue.every( isFiniteNumber ) ) {
+
+    return [ candidateValue[ 0 ], candidateValue[ 1 ], candidateValue[ 2 ], candidateValue[ 3 ] ];
+
+  }
+
+  return Array.isArray( fallbackValue ) ? [ ...fallbackValue ] : null;
+
+}
+
 function clamp( value, minValue, maxValue ) {
 
   return Math.min( maxValue, Math.max( minValue, value ) );
@@ -113,6 +137,8 @@ export function parseDemo1Conditions( search = window.location.search, {
     selectionCount: 0,
     taskAnswer: null,
     taskSubmitted: false,
+    panelPosition: null,
+    panelQuaternion: null,
   };
 
 }
@@ -208,6 +234,8 @@ export function normalizeDemo1SceneState( candidateState, fallbackState = null, 
       ? candidateState.taskAnswer
       : ( typeof fallback.taskAnswer === 'string' && fallback.taskAnswer.trim().length > 0 ? fallback.taskAnswer : null ),
     taskSubmitted: candidateState?.taskSubmitted === true || ( candidateState?.taskSubmitted !== false && fallback.taskSubmitted === true ),
+    panelPosition: normalizeDemo1PanelPosition( candidateState?.panelPosition, fallback.panelPosition ),
+    panelQuaternion: normalizeDemo1PanelQuaternion( candidateState?.panelQuaternion, fallback.panelQuaternion ),
   };
 
 }
