@@ -208,6 +208,22 @@ function buildButtonLabel( label, state ) {
 
 }
 
+function formatCompactSelectionText( selectedPoint ) {
+
+  if ( ! selectedPoint?.entity ) {
+
+    return 'No selection yet.';
+
+  }
+
+  const entityLabel = selectedPoint.entity.length > 22
+    ? `${selectedPoint.entity.slice( 0, 19 ).trimEnd()}...`
+    : selectedPoint.entity;
+
+  return `Selected: ${entityLabel}`;
+
+}
+
 export const demo1SceneDefinition = Object.freeze( {
   sceneKey: 'demo1',
   queryValue: '1',
@@ -346,19 +362,19 @@ export const demo1SceneDefinition = Object.freeze( {
     const panelMetaText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
-      { ...labelStyles.panelMeta, text: 'Preparing local OWID bundle...' },
+      { ...labelStyles.panelMeta, text: 'Loading data...' },
       new THREE.Vector3( 0, xrPanel.metaY, xrPanel.contentZ ),
     );
     const panelSelectionText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
-      { ...labelStyles.panelMeta, text: 'No point selected yet.' },
+      { ...labelStyles.panelSelection, text: 'No selection yet.' },
       new THREE.Vector3( 0, xrPanel.selectionY, xrPanel.contentZ ),
     );
     const panelFooterText = createTrackedTextPlane(
       staticObjects,
       xrPanelRoot,
-      { ...labelStyles.panelMeta, text: 'Drag the title bar to move the panel. Use the buttons to navigate.' },
+      { ...labelStyles.panelStatus, text: 'Drag title bar to move panel.\nUse buttons to change mode, scale, and submit.' },
       new THREE.Vector3( 0, xrPanel.footerY, xrPanel.contentZ ),
     );
     const tooltip = createTextSprite( { ...labelStyles.tooltip, text: '' } );
@@ -399,6 +415,22 @@ export const demo1SceneDefinition = Object.freeze( {
         transparent: true,
         opacity: plot.highlightOpacity,
         wireframe: true,
+        toneMapped: false,
+      } ),
+    );
+    const selectedGuideGeometry = new THREE.BufferGeometry();
+    const selectedGuidePositions = new Float32Array( 18 );
+    const selectedGuidePositionAttribute = new THREE.BufferAttribute( selectedGuidePositions, 3 );
+    selectedGuideGeometry.setAttribute( 'position', selectedGuidePositionAttribute );
+    const selectedPointGuides = createTrackedLineSegments(
+      staticObjects,
+      mainScaleRoot,
+      selectedGuideGeometry,
+      new THREE.LineBasicMaterial( {
+        color: plot.selectedGuideColor,
+        transparent: true,
+        opacity: plot.selectedGuideOpacity,
+        depthWrite: false,
         toneMapped: false,
       } ),
     );
@@ -444,6 +476,9 @@ export const demo1SceneDefinition = Object.freeze( {
     hoverHighlightMain.visible = false;
     selectedHighlightOverview.visible = false;
     hoverHighlightOverview.visible = false;
+    selectedPointGuides.visible = false;
+    selectedPointGuides.frustumCulled = false;
+    selectedPointGuides.renderOrder = 12;
     tooltip.sprite.visible = false;
     tooltip.sprite.renderOrder = 30;
     mainScaleRoot.add( selectedHighlightMain );
@@ -838,6 +873,7 @@ export const demo1SceneDefinition = Object.freeze( {
       selectedHighlightOverview.visible = Boolean( selectedEntry ) && overviewRoot.visible;
       hoverHighlightMain.visible = Boolean( hoveredEntry );
       hoverHighlightOverview.visible = Boolean( hoveredEntry ) && overviewRoot.visible;
+      selectedPointGuides.visible = Boolean( selectedEntry );
 
       if ( selectedEntry ) {
 
@@ -845,6 +881,15 @@ export const demo1SceneDefinition = Object.freeze( {
         selectedHighlightMain.scale.setScalar( selectedEntry.mainRadius * 2.4 );
         selectedHighlightOverview.position.copy( selectedEntry.overviewPosition );
         selectedHighlightOverview.scale.setScalar( selectedEntry.overviewRadius * 2.8 );
+        selectedGuidePositions.set( [
+          selectedEntry.mainPosition.x, selectedEntry.mainPosition.y, selectedEntry.mainPosition.z,
+          selectedEntry.mainPosition.x, plot.baseY, selectedEntry.mainPosition.z,
+          selectedEntry.mainPosition.x, plot.baseY, selectedEntry.mainPosition.z,
+          selectedEntry.mainPosition.x, plot.baseY, - plot.depth * 0.5,
+          selectedEntry.mainPosition.x, plot.baseY, selectedEntry.mainPosition.z,
+          - plot.width * 0.5, plot.baseY, selectedEntry.mainPosition.z,
+        ] );
+        selectedGuidePositionAttribute.needsUpdate = true;
 
       }
 
@@ -986,14 +1031,20 @@ export const demo1SceneDefinition = Object.freeze( {
 
     function createAxisLabels() {
 
-      const axisOrigin = new THREE.Vector3( - plot.width * 0.5, plot.baseY, - plot.depth * 0.5 );
+      const xMin = - plot.width * 0.5;
+      const xMax = plot.width * 0.5;
+      const yMin = plot.baseY;
+      const yMax = plot.baseY + plot.height;
+      const zMin = - plot.depth * 0.5;
+      const zMax = plot.depth * 0.5;
+      const axisOrigin = new THREE.Vector3( xMin, yMin, zMin );
       const axisPoints = [
         axisOrigin,
-        new THREE.Vector3( plot.width * 0.5, plot.baseY, - plot.depth * 0.5 ),
+        new THREE.Vector3( xMax, yMin, zMin ),
         axisOrigin,
-        new THREE.Vector3( - plot.width * 0.5, plot.baseY + plot.height, - plot.depth * 0.5 ),
+        new THREE.Vector3( xMin, yMax, zMin ),
         axisOrigin,
-        new THREE.Vector3( - plot.width * 0.5, plot.baseY, plot.depth * 0.5 ),
+        new THREE.Vector3( xMin, yMin, zMax ),
       ];
 
       const platformMesh = createTrackedMesh(
@@ -1052,58 +1103,121 @@ export const demo1SceneDefinition = Object.freeze( {
       const yTicks = Array.from( { length: plot.axisTickCount }, ( _, index ) => (
         dataset.domains.lifeExpectancy.min + ( index / Math.max( 1, plot.axisTickCount - 1 ) ) * ( dataset.domains.lifeExpectancy.max - dataset.domains.lifeExpectancy.min )
       ) );
-
-      xTicks.forEach( ( value ) => {
-
-        const x = lerpInRange(
+      const xTickPositions = xTicks.map( ( value ) => ( {
+        value,
+        position: lerpInRange(
           dataset.transformGdp( value ),
           dataset.domains.transformedGdp.min,
           dataset.domains.transformedGdp.max,
-          - plot.width * 0.5,
-          plot.width * 0.5,
-        );
-        createTrackedTextPlane(
-          dynamicObjects,
-          mainDynamicRoot,
-          { ...labelStyles.tick, text: formatAxisTick( value ) },
-          new THREE.Vector3( x, plot.baseY - 0.06, - plot.depth * 0.5 - 0.05 ),
-        );
-
-      } );
-
-      yTicks.forEach( ( value ) => {
-
-        const y = plot.baseY + lerpInRange(
+          xMin,
+          xMax,
+        ),
+      } ) );
+      const yTickPositions = yTicks.map( ( value ) => ( {
+        value,
+        position: yMin + lerpInRange(
           value,
           dataset.domains.lifeExpectancy.min,
           dataset.domains.lifeExpectancy.max,
           0,
           plot.height,
-        );
+        ),
+      } ) );
+      const zTickPositions = zTicks.map( ( value ) => ( {
+        value,
+        position: lerpInRange(
+          dataset.transformCo2( value ),
+          dataset.domains.transformedCo2.min,
+          dataset.domains.transformedCo2.max,
+          zMin,
+          zMax,
+        ),
+      } ) );
+      const guideVertices = [];
+
+      function appendGuideSegment( startX, startY, startZ, endX, endY, endZ ) {
+
+        guideVertices.push( startX, startY, startZ, endX, endY, endZ );
+
+      }
+
+      function appendGuideRectangleAtX( x ) {
+
+        appendGuideSegment( x, yMin, zMin, x, yMin, zMax );
+        appendGuideSegment( x, yMin, zMax, x, yMax, zMax );
+        appendGuideSegment( x, yMax, zMax, x, yMax, zMin );
+        appendGuideSegment( x, yMax, zMin, x, yMin, zMin );
+
+      }
+
+      function appendGuideRectangleAtY( y ) {
+
+        appendGuideSegment( xMin, y, zMin, xMax, y, zMin );
+        appendGuideSegment( xMax, y, zMin, xMax, y, zMax );
+        appendGuideSegment( xMax, y, zMax, xMin, y, zMax );
+        appendGuideSegment( xMin, y, zMax, xMin, y, zMin );
+
+      }
+
+      function appendGuideRectangleAtZ( z ) {
+
+        appendGuideSegment( xMin, yMin, z, xMax, yMin, z );
+        appendGuideSegment( xMax, yMin, z, xMax, yMax, z );
+        appendGuideSegment( xMax, yMax, z, xMin, yMax, z );
+        appendGuideSegment( xMin, yMax, z, xMin, yMin, z );
+
+      }
+
+      xTickPositions.forEach( ( { position } ) => appendGuideRectangleAtX( position ) );
+      yTickPositions.forEach( ( { position } ) => appendGuideRectangleAtY( position ) );
+      zTickPositions.forEach( ( { position } ) => appendGuideRectangleAtZ( position ) );
+
+      createTrackedLineSegments(
+        dynamicObjects,
+        mainDynamicRoot,
+        new THREE.BufferGeometry().setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute( guideVertices, 3 ),
+        ),
+        new THREE.LineBasicMaterial( {
+          color: plot.majorGuideColor,
+          transparent: true,
+          opacity: plot.majorGuideOpacity,
+          depthWrite: false,
+          toneMapped: false,
+        } ),
+      );
+
+      xTickPositions.forEach( ( { value, position } ) => {
+
         createTrackedTextPlane(
           dynamicObjects,
           mainDynamicRoot,
           { ...labelStyles.tick, text: formatAxisTick( value ) },
-          new THREE.Vector3( - plot.width * 0.5 - 0.08, y, - plot.depth * 0.5 ),
+          new THREE.Vector3( position, plot.baseY - 0.06, - plot.depth * 0.5 - 0.05 ),
+        );
+
+      } );
+
+      yTickPositions.forEach( ( { value, position } ) => {
+
+        createTrackedTextPlane(
+          dynamicObjects,
+          mainDynamicRoot,
+          { ...labelStyles.tick, text: formatAxisTick( value ) },
+          new THREE.Vector3( - plot.width * 0.5 - 0.08, position, - plot.depth * 0.5 ),
           new THREE.Euler( 0, Math.PI * 0.5, 0 ),
         );
 
       } );
 
-      zTicks.forEach( ( value ) => {
+      zTickPositions.forEach( ( { value, position } ) => {
 
-        const z = lerpInRange(
-          dataset.transformCo2( value ),
-          dataset.domains.transformedCo2.min,
-          dataset.domains.transformedCo2.max,
-          - plot.depth * 0.5,
-          plot.depth * 0.5,
-        );
         createTrackedTextPlane(
           dynamicObjects,
           mainDynamicRoot,
           { ...labelStyles.tick, text: formatAxisTick( value ) },
-          new THREE.Vector3( - plot.width * 0.5 - 0.03, plot.baseY + 0.04, z ),
+          new THREE.Vector3( - plot.width * 0.5 - 0.03, plot.baseY + 0.04, position ),
           new THREE.Euler( 0, Math.PI * 0.5, 0 ),
         );
 
@@ -1379,21 +1493,19 @@ export const demo1SceneDefinition = Object.freeze( {
       panelBodyText.setText( `${task.prompt}\n${task.hint}` );
       panelMetaText.setText(
         isReady
-          ? `Year ${currentSceneState.dataYear} | Color ${currentSceneState.colorEncoding} | Scale ${formatScaleFactor( currentSceneState.scaleFactor )}`
-          : 'Loading local OWID bundle...',
+          ? `${currentSceneState.dataYear} | ${currentSceneState.colorEncoding} | ${formatScaleFactor( currentSceneState.scaleFactor )}`
+          : 'Loading data...',
       );
       panelSelectionText.setText(
-        selectedPoint
-          ? `${selectedPoint.entity} | ${selectedPoint.region} | GDP ${formatCurrency( selectedPoint.gdpPerCapita )}`
-          : 'No point selected yet.',
+        formatCompactSelectionText( selectedPoint ),
       );
       panelFooterText.setText(
         loadStatus === 'error'
-          ? `${loadError?.message || 'Missing local Demo 1 files.'}\nExpected: demo1/data/*.csv + *.metadata.json`
+          ? `${loadError?.message || 'Missing local Demo 1 files.'}\nExpected local files:\ndemo1/data/*.csv + *.metadata.json`
           : (
             currentSceneState.taskSubmitted
-              ? `Submitted answer: ${currentSceneState.taskAnswer}`
-              : 'Drag the title bar to move the panel. Use the buttons to switch mode, adjust scale, and submit.'
+              ? `Submitted answer:\n${selectedPoint?.entity || currentSceneState.taskAnswer}`
+              : 'Drag title bar to move panel.\nUse buttons to change mode, scale, and submit.'
           ),
       );
 
@@ -1720,9 +1832,12 @@ export const demo1SceneDefinition = Object.freeze( {
 
     function buildXrPanelButtons() {
 
+      const topRowOffset = xrPanel.buttonWidth + xrPanel.buttonGap;
+      const bottomRowOffset = ( xrPanel.buttonWidth + xrPanel.buttonGap ) * 0.5;
+
       createXrButton( 'nav', {
         label: buildButtonLabel( 'Mode', 'Scale' ),
-        position: new THREE.Vector3( - xrPanel.buttonWidth - xrPanel.buttonGap, xrPanel.buttonRowTopY, 0 ),
+        position: new THREE.Vector3( - topRowOffset, xrPanel.buttonRowTopY, 0 ),
         onPress( source ) {
 
           setNavMode(
@@ -1743,7 +1858,7 @@ export const demo1SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'submit', {
         label: buildButtonLabel( 'Task', 'Pick Point' ),
-        position: new THREE.Vector3( xrPanel.buttonWidth + xrPanel.buttonGap, xrPanel.buttonRowTopY, 0 ),
+        position: new THREE.Vector3( topRowOffset, xrPanel.buttonRowTopY, 0 ),
         onPress( source ) {
 
           submitTask( source );
@@ -1752,7 +1867,7 @@ export const demo1SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'scale-minus', {
         label: buildButtonLabel( 'Scale', '- 0.1' ),
-        position: new THREE.Vector3( - 0.18, xrPanel.buttonRowBottomY, 0 ),
+        position: new THREE.Vector3( - bottomRowOffset, xrPanel.buttonRowBottomY, 0 ),
         onPress( source ) {
 
           setScaleFactor( currentSceneState.scaleFactor - 0.1, { source, shouldLog: true } );
@@ -1761,7 +1876,7 @@ export const demo1SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'scale-plus', {
         label: buildButtonLabel( 'Scale', '+ 0.1' ),
-        position: new THREE.Vector3( 0.18, xrPanel.buttonRowBottomY, 0 ),
+        position: new THREE.Vector3( bottomRowOffset, xrPanel.buttonRowBottomY, 0 ),
         onPress( source ) {
 
           setScaleFactor( currentSceneState.scaleFactor + 0.1, { source, shouldLog: true } );
