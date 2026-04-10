@@ -270,6 +270,7 @@ export const demo2SceneDefinition = Object.freeze( {
     const nodeEntriesById = new Map();
     const flowHoverBySource = new Map();
     const nodeHoverBySource = new Map();
+    const selectionHoverBarrierBySource = new Map();
     const defaultGlobeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
       globe.anchorDefaultPosition || globe.rootPosition,
     );
@@ -1098,6 +1099,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       clearNodeSelectionOwnership();
       clearFlowSelectionOwnership();
+      selectionHoverBarrierBySource.clear();
 
     }
 
@@ -1161,6 +1163,57 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function clearSelectionHoverBarrierForSource( source ) {
+
+      const normalizedSource = resolveSelectionSource( source );
+
+      if ( ! normalizedSource ) {
+
+        return false;
+
+      }
+
+      return selectionHoverBarrierBySource.delete( normalizedSource );
+
+    }
+
+    function getSelectionHoverBarrierForSource( source ) {
+
+      const normalizedSource = resolveSelectionSource( source );
+
+      if ( ! normalizedSource ) {
+
+        return null;
+
+      }
+
+      return selectionHoverBarrierBySource.get( normalizedSource ) || null;
+
+    }
+
+    function armSelectionHoverBarrier( source, kind, id, selectionSequence ) {
+
+      selectionHoverBarrierBySource.clear();
+
+      const normalizedSource = resolveSelectionSource( source );
+
+      if ( ! normalizedSource || ! id || selectionSequence < 0 ) {
+
+        return null;
+
+      }
+
+      const barrier = {
+        source: normalizedSource,
+        kind,
+        id,
+        selectionSequence,
+      };
+      selectionHoverBarrierBySource.set( normalizedSource, barrier );
+      return barrier;
+
+    }
+
     function getActiveSelectionOwnership() {
 
       if ( currentSceneState.selectedFlowId ) {
@@ -1191,14 +1244,16 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function clearHoverEntriesForSource( source ) {
 
-      if ( typeof source !== 'string' || source.length === 0 ) {
+      const normalizedSource = resolveSelectionSource( source );
+
+      if ( ! normalizedSource ) {
 
         return false;
 
       }
 
-      const deletedNodeHover = nodeHoverBySource.delete( source );
-      const deletedFlowHover = flowHoverBySource.delete( source );
+      const deletedNodeHover = nodeHoverBySource.delete( normalizedSource );
+      const deletedFlowHover = flowHoverBySource.delete( normalizedSource );
       return deletedNodeHover || deletedFlowHover;
 
     }
@@ -1222,24 +1277,55 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function updateHoverMap( map, source, id, isHovered ) {
+    function updateHoverMap( map, kind, source, id, isHovered ) {
+
+      const normalizedSource = resolveSelectionSource( source );
+
+      if ( ! normalizedSource ) {
+
+        resolveHoverState();
+        updateHighlightsAndTooltip();
+        return;
+
+      }
 
       if ( isHovered ) {
 
+        const activeBarrier = getSelectionHoverBarrierForSource( normalizedSource );
+
+        if ( activeBarrier ) {
+
+          const confirmsSelection = activeBarrier.kind === kind && activeBarrier.id === id;
+
+          if ( confirmsSelection ) {
+
+            clearSelectionHoverBarrierForSource( normalizedSource );
+
+          } else {
+
+            resolveHoverState();
+            updateHighlightsAndTooltip();
+            return;
+
+          }
+
+        }
+
         const sequence = nextInteractionSequence();
-        map.set( source, {
+        map.set( normalizedSource, {
           id,
-          source,
+          source: normalizedSource,
           sequence,
         } );
 
       } else {
 
-        const entry = map.get( source );
+        clearSelectionHoverBarrierForSource( normalizedSource );
+        const entry = map.get( normalizedSource );
 
-        if ( entry?.id === id ) {
+        if ( entry?.id === id || ! id ) {
 
-          map.delete( source );
+          map.delete( normalizedSource );
 
         }
 
@@ -1254,6 +1340,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       nodeHoverBySource.clear();
       flowHoverBySource.clear();
+      selectionHoverBarrierBySource.clear();
       resolveHoverState();
       updateHighlightsAndTooltip();
 
@@ -1873,7 +1960,7 @@ export const demo2SceneDefinition = Object.freeze( {
           {
             onHoverChange( payload ) {
 
-              updateHoverMap( flowHoverBySource, payload.source, flow.flowId, payload.isHovered );
+              updateHoverMap( flowHoverBySource, 'flow', payload.source, flow.flowId, payload.isHovered );
 
             },
             onSelectStart( payload ) {
@@ -2009,6 +2096,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         currentSceneState.selectedNodeId = null;
         clearNodeSelectionOwnership();
+        selectionHoverBarrierBySource.clear();
 
       }
 
@@ -2020,6 +2108,7 @@ export const demo2SceneDefinition = Object.freeze( {
         currentSceneState.taskAnswer = null;
         currentSceneState.taskSubmitted = false;
         clearFlowSelectionOwnership();
+        selectionHoverBarrierBySource.clear();
 
       }
 
@@ -2058,7 +2147,7 @@ export const demo2SceneDefinition = Object.freeze( {
             {
               onHoverChange( payload ) {
 
-                updateHoverMap( nodeHoverBySource, payload.source, node.id, payload.isHovered );
+                updateHoverMap( nodeHoverBySource, 'node', payload.source, node.id, payload.isHovered );
 
               },
               onSelectStart( payload ) {
@@ -2167,7 +2256,8 @@ export const demo2SceneDefinition = Object.freeze( {
       selectedNodeSource = selectionSource;
       selectedNodeSelectionSequence = selectionSequence;
       clearFlowSelectionOwnership();
-      clearHoverEntriesForSource( source );
+      clearHoverEntriesForSource( selectionSource );
+      armSelectionHoverBarrier( selectionSource, 'node', countryId, selectionSequence );
       resolveHoverState();
       syncDataDrivenScene();
       syncAllUi();
@@ -2203,7 +2293,8 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskSubmitted = false;
       selectedFlowSource = selectionSource;
       selectedFlowSelectionSequence = selectionSequence;
-      clearHoverEntriesForSource( source );
+      clearHoverEntriesForSource( selectionSource );
+      armSelectionHoverBarrier( selectionSource, 'flow', nextFlow.flowId, selectionSequence );
       resolveHoverState();
       updateHighlightsAndTooltip();
       syncAllUi();
@@ -2242,6 +2333,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       clearFlowSelectionOwnership();
+      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2295,6 +2387,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       clearFlowSelectionOwnership();
+      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2341,6 +2434,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       clearFlowSelectionOwnership();
+      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2419,6 +2513,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       resetSelectionOwnershipTracking();
+      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
       recordSceneChange( 'resetFilters', source, {
