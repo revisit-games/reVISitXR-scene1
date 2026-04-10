@@ -11,15 +11,18 @@ import { demo2LoggingConfig } from './demo2LoggingConfig.js';
 import {
   DEMO2_DEFAULT_FOCUSED_COUNTRY_ID,
   DEMO2_DEFAULT_GLOBE_YAW_DEG,
+  DEMO2_DEFAULT_MAP_DISPLAY_MODE,
   DEMO2_DEFAULT_TASK_ID,
   DEMO2_DEFAULT_THRESHOLD,
   DEMO2_DEFAULT_YEAR,
   DEMO2_DIRECTION_MODES,
+  DEMO2_MAP_DISPLAY_MODES,
   DEMO2_THRESHOLD_PRESETS,
   normalizeDemo2GlobeAnchorPosition,
   normalizeDemo2PanelPosition,
   normalizeDemo2PanelQuaternion,
   normalizeDemo2SceneState,
+  normalizeMapDisplayMode,
   parseDemo2Conditions,
 } from './demo2Conditions.js';
 import { getDemo2Task } from './demo2Tasks.js';
@@ -109,6 +112,24 @@ function formatDirectionMode( value ) {
 
 }
 
+function formatMapDisplayMode( value ) {
+
+  if ( value === DEMO2_MAP_DISPLAY_MODES.FLAT ) {
+
+    return '2D';
+
+  }
+
+  if ( value === DEMO2_MAP_DISPLAY_MODES.BOTH ) {
+
+    return 'Both';
+
+  }
+
+  return '3D';
+
+}
+
 function truncateLabel( value, maxLength = 22 ) {
 
   if ( typeof value !== 'string' || value.length <= maxLength ) {
@@ -158,6 +179,38 @@ function createArcPoints( start, end, radius, arcHeight, segments ) {
     const unitPoint = startUnit.clone().lerp( endUnit, t ).normalize();
     const liftedRadius = radius + Math.sin( Math.PI * t ) * arcHeight;
     points.push( unitPoint.multiplyScalar( liftedRadius ) );
+
+  }
+
+  return points;
+
+}
+
+function latLonToFlatMapVector3( latDeg, lonDeg, flatMapConfig, lift = flatMapConfig.nodeLift || 0 ) {
+
+  const width = Math.max( 0.01, flatMapConfig.width || 1 );
+  const height = Math.max( 0.01, flatMapConfig.height || 1 );
+
+  return new THREE.Vector3(
+    ( lonDeg / 180 ) * ( width / 2 ),
+    lift,
+    - ( latDeg / 90 ) * ( height / 2 ),
+  );
+
+}
+
+function createFlatArcPoints( start, end, arcHeight, segments ) {
+
+  const safeSegments = Math.max( 4, Math.round( segments ) );
+  const points = [];
+  const baseY = Math.max( start.y, end.y );
+
+  for ( let index = 0; index <= safeSegments; index += 1 ) {
+
+    const t = index / safeSegments;
+    const point = start.clone().lerp( end, t );
+    point.y = baseY + Math.sin( Math.PI * t ) * arcHeight;
+    points.push( point );
 
   }
 
@@ -221,6 +274,36 @@ function appendSurfaceSegmentPositions( positions, startCoordinate, endCoordinat
 
 }
 
+function appendFlatMapSegmentPositions( positions, startCoordinate, endCoordinate, flatMapConfig ) {
+
+  const startLon = startCoordinate?.[ 0 ];
+  const startLat = startCoordinate?.[ 1 ];
+  const endLon = endCoordinate?.[ 0 ];
+  const endLat = endCoordinate?.[ 1 ];
+
+  if (
+    ! isFiniteNumber( startLon ) ||
+    ! isFiniteNumber( startLat ) ||
+    ! isFiniteNumber( endLon ) ||
+    ! isFiniteNumber( endLat ) ||
+    Math.abs( startLon - endLon ) > 180
+  ) {
+
+    return;
+
+  }
+
+  const lift = flatMapConfig.boundaryLift || 0;
+  const startPoint = latLonToFlatMapVector3( startLat, startLon, flatMapConfig, lift );
+  const endPoint = latLonToFlatMapVector3( endLat, endLon, flatMapConfig, lift );
+
+  positions.push(
+    startPoint.x, startPoint.y, startPoint.z,
+    endPoint.x, endPoint.y, endPoint.z,
+  );
+
+}
+
 export const demo2SceneDefinition = Object.freeze( {
   sceneKey: 'demo2',
   queryValue: '2',
@@ -248,7 +331,7 @@ export const demo2SceneDefinition = Object.freeze( {
   },
   createScene( context ) {
 
-    const { globe, interaction = {}, xrPanel, desktopPanel, palettes, labelStyles } = demo2VisualConfig;
+    const { globe, flatMap = {}, interaction = {}, xrPanel, desktopPanel, palettes, labelStyles } = demo2VisualConfig;
     const debugRayEnabled = new URLSearchParams( window.location.search ).get( 'debugRay' ) === '1';
     const defaultSceneState = parseDemo2Conditions( window.location.search, {
       defaultYear: DEMO2_DEFAULT_YEAR,
@@ -262,6 +345,11 @@ export const demo2SceneDefinition = Object.freeze( {
     const globeArcRoot = new THREE.Group();
     const globeNodeRoot = new THREE.Group();
     const globeLabelRoot = new THREE.Group();
+    const flatMapRoot = new THREE.Group();
+    const flatMapBoundaryRoot = new THREE.Group();
+    const flatMapArcRoot = new THREE.Group();
+    const flatMapNodeRoot = new THREE.Group();
+    const flatMapLabelRoot = new THREE.Group();
     const xrPanelRoot = new THREE.Group();
     const staticObjects = [];
     const dynamicObjects = [];
@@ -272,6 +360,14 @@ export const demo2SceneDefinition = Object.freeze( {
     const targetRecordsById = new Map();
     const targetRecordByObject = new WeakMap();
     const localTargetBySource = new Map();
+    const mapRaycastObjectsBySpace = new Map( [
+      [ DEMO2_MAP_DISPLAY_MODES.GLOBE, new Set() ],
+      [ DEMO2_MAP_DISPLAY_MODES.FLAT, new Set() ],
+    ] );
+    const demo2MapSpaces = Object.freeze( {
+      GLOBE: DEMO2_MAP_DISPLAY_MODES.GLOBE,
+      FLAT: DEMO2_MAP_DISPLAY_MODES.FLAT,
+    } );
     const demo2RaycastRoles = Object.freeze( {
       NODE: 'node',
       FLOW: 'flow',
@@ -318,6 +414,7 @@ export const demo2SceneDefinition = Object.freeze( {
     let currentFlowEntryById = new Map();
     let currentFlowTargetIds = [];
     let currentBoundaryLines = null;
+    let currentFlatBoundaryLines = null;
     let activeGlobeDrag = null;
     let activeGlobeMove = null;
     let lastLoggedGlobeYawDeg = currentSceneState.globeYawDeg;
@@ -327,8 +424,10 @@ export const demo2SceneDefinition = Object.freeze( {
     let lastResolverDebug = null;
 
     root.add( globeRoot );
+    root.add( flatMapRoot );
     root.add( xrPanelRoot );
     globeRoot.position.fromArray( defaultGlobeAnchorPosition );
+    flatMapRoot.position.fromArray( flatMap.position || [ 0, 0, 0 ] );
     globeRoot.add( globeYawRoot );
     const globeHandleRoot = new THREE.Group();
     globeRoot.add( globeHandleRoot );
@@ -336,6 +435,10 @@ export const demo2SceneDefinition = Object.freeze( {
     globeYawRoot.add( globeArcRoot );
     globeYawRoot.add( globeNodeRoot );
     globeYawRoot.add( globeLabelRoot );
+    flatMapRoot.add( flatMapBoundaryRoot );
+    flatMapRoot.add( flatMapArcRoot );
+    flatMapRoot.add( flatMapNodeRoot );
+    flatMapRoot.add( flatMapLabelRoot );
 
     const defaultDesktopCameraPosition = new THREE.Vector3( 0, 1.46, 0.12 );
     const defaultDesktopLookAt = new THREE.Vector3( 0, defaultGlobeAnchorPosition[ 1 ], defaultGlobeAnchorPosition[ 2 ] );
@@ -384,6 +487,7 @@ export const demo2SceneDefinition = Object.freeze( {
       entry.dispose = () => {
 
         context.unregisterRaycastTarget( mesh );
+        unregisterDemo2MapRaycastObject( mesh );
         baseDispose();
 
       };
@@ -391,7 +495,64 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function setDemo2RaycastRole( object3D, role, targetId = null ) {
+    function isDemo2MapSpace( mapSpace ) {
+
+      return mapSpace === demo2MapSpaces.GLOBE || mapSpace === demo2MapSpaces.FLAT;
+
+    }
+
+    function isDemo2MapSpaceActive( mapSpace, displayMode = currentSceneState.mapDisplayMode ) {
+
+      if ( ! isDemo2MapSpace( mapSpace ) ) {
+
+        return true;
+
+      }
+
+      const normalizedMode = normalizeMapDisplayMode( displayMode );
+
+      return normalizedMode === DEMO2_MAP_DISPLAY_MODES.BOTH || normalizedMode === mapSpace;
+
+    }
+
+    function registerDemo2MapRaycastObject( object3D, mapSpace ) {
+
+      if ( ! object3D || ! isDemo2MapSpace( mapSpace ) ) {
+
+        return object3D;
+
+      }
+
+      object3D.userData.demo2MapSpace = mapSpace;
+      mapRaycastObjectsBySpace.get( mapSpace )?.add( object3D );
+
+      if ( isDemo2MapSpaceActive( mapSpace ) ) {
+
+        object3D.layers.enable( 0 );
+
+      } else {
+
+        object3D.layers.disable( 0 );
+
+      }
+
+      return object3D;
+
+    }
+
+    function unregisterDemo2MapRaycastObject( object3D ) {
+
+      if ( ! object3D ) {
+
+        return;
+
+      }
+
+      mapRaycastObjectsBySpace.forEach( ( objects ) => objects.delete( object3D ) );
+
+    }
+
+    function setDemo2RaycastRole( object3D, role, targetId = null, mapSpace = null ) {
 
       if ( object3D ) {
 
@@ -399,10 +560,31 @@ export const demo2SceneDefinition = Object.freeze( {
         object3D.userData.demo2RaycastId = typeof targetId === 'string' && targetId.trim().length > 0
           ? targetId.trim()
           : null;
+        registerDemo2MapRaycastObject( object3D, mapSpace );
 
       }
 
       return object3D;
+
+    }
+
+    function resolveDemo2MapSpace( hitOrObject ) {
+
+      let currentObject = hitOrObject?.object || hitOrObject || null;
+
+      while ( currentObject ) {
+
+        if ( isDemo2MapSpace( currentObject.userData?.demo2MapSpace ) ) {
+
+          return currentObject.userData.demo2MapSpace;
+
+        }
+
+        currentObject = currentObject.parent;
+
+      }
+
+      return null;
 
     }
 
@@ -474,7 +656,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function attachDemo2TargetToObject( object3D, targetRecord, role = null ) {
+    function attachDemo2TargetToObject( object3D, targetRecord, role = null, mapSpace = null ) {
 
       if ( ! object3D || ! targetRecord ) {
 
@@ -483,7 +665,7 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       targetRecordByObject.set( object3D, targetRecord );
-      setDemo2RaycastRole( object3D, role || targetRecord.role || targetRecord.kind, targetRecord.id );
+      setDemo2RaycastRole( object3D, role || targetRecord.role || targetRecord.kind, targetRecord.id, mapSpace );
       return object3D;
 
     }
@@ -571,7 +753,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function resolveDemo2NodeRayMissDistance( nodeId, resolverContext ) {
+    function resolveDemo2NodeRayMissDistance( nodeId, resolverContext, mapSpace = null ) {
 
       if ( ! nodeId || ! resolverContext?.rayOrigin || ! resolverContext?.rayDirection ) {
 
@@ -581,13 +763,17 @@ export const demo2SceneDefinition = Object.freeze( {
 
       const nodeEntry = nodeEntriesById.get( nodeId );
 
-      if ( ! nodeEntry?.hitProxy ) {
+      const hitProxy = mapSpace === demo2MapSpaces.FLAT
+        ? nodeEntry?.flatHitProxy
+        : nodeEntry?.hitProxy;
+
+      if ( ! hitProxy ) {
 
         return null;
 
       }
 
-      nodeEntry.hitProxy.getWorldPosition( tempResolverNodeWorldCenter );
+      hitProxy.getWorldPosition( tempResolverNodeWorldCenter );
       tempResolverRay.origin.copy( resolverContext.rayOrigin );
       tempResolverRay.direction.copy( resolverContext.rayDirection ).normalize();
       return Math.sqrt( tempResolverRay.distanceSqToPoint( tempResolverNodeWorldCenter ) );
@@ -603,20 +789,24 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       const role = resolveDemo2RaycastRole( hit );
+      const mapSpace = resolveDemo2MapSpace( hit );
       tempResolverShellContactPoint.copy( firstHit.point );
 
       if ( role === demo2RaycastRoles.NODE ) {
 
         const nodeId = resolveDemo2RaycastTargetId( hit.object );
         const nodeEntry = nodeEntriesById.get( nodeId );
+        const hitProxy = mapSpace === demo2MapSpaces.FLAT
+          ? nodeEntry?.flatHitProxy
+          : nodeEntry?.hitProxy;
 
-        if ( ! nodeEntry?.hitProxy ) {
+        if ( ! hitProxy ) {
 
           return null;
 
         }
 
-        nodeEntry.hitProxy.getWorldPosition( tempResolverCandidateWorldPoint );
+        hitProxy.getWorldPosition( tempResolverCandidateWorldPoint );
         return tempResolverCandidateWorldPoint.distanceTo( tempResolverShellContactPoint );
 
       }
@@ -636,12 +826,13 @@ export const demo2SceneDefinition = Object.freeze( {
 
       const role = resolveDemo2RaycastRole( hit ) || 'other';
       const id = resolveDemo2RaycastTargetId( hit.object );
+      const mapSpace = resolveDemo2MapSpace( hit );
       const distance = typeof hit?.distance === 'number' ? hit.distance : null;
       const distanceFromFirst = isFiniteNumber( distance ) && isFiniteNumber( firstHit?.distance )
         ? distance - firstHit.distance
         : null;
       const rayMissDistance = role === demo2RaycastRoles.NODE
-        ? resolveDemo2NodeRayMissDistance( id, resolverContext )
+        ? resolveDemo2NodeRayMissDistance( id, resolverContext, mapSpace )
         : null;
       const shellContactDistance = resolveDemo2RaycastRole( firstHit ) === demo2RaycastRoles.GLOBE_SHELL
         ? resolveDemo2ShellContactDistance( hit, firstHit )
@@ -651,6 +842,7 @@ export const demo2SceneDefinition = Object.freeze( {
         hit,
         role,
         id,
+        mapSpace,
         distance,
         distanceFromFirst,
         rayMissDistance,
@@ -668,6 +860,7 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       const targetLabel = candidate.id ? `${candidate.role}:${candidate.id}` : candidate.role;
+      const mapSpaceLabel = candidate.mapSpace ? ` ${candidate.mapSpace}` : '';
       const distanceLabel = formatDebugDistance( candidate.distance );
       const missLabel = isFiniteNumber( candidate.rayMissDistance )
         ? ` miss=${formatDebugDistance( candidate.rayMissDistance )}`
@@ -675,7 +868,7 @@ export const demo2SceneDefinition = Object.freeze( {
       const contactLabel = isFiniteNumber( candidate.shellContactDistance )
         ? ` contact=${formatDebugDistance( candidate.shellContactDistance )}`
         : '';
-      return `${targetLabel}@${distanceLabel}${missLabel}${contactLabel}`;
+      return `${targetLabel}${mapSpaceLabel}@${distanceLabel}${missLabel}${contactLabel}`;
 
     }
 
@@ -969,11 +1162,24 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function filterDemo2RaycastIntersectionsByMapMode( sceneIntersections ) {
+
+      if ( ! Array.isArray( sceneIntersections ) || sceneIntersections.length === 0 ) {
+
+        return [];
+
+      }
+
+      return sceneIntersections.filter( ( hit ) => isDemo2MapSpaceActive( resolveDemo2MapSpace( hit ) ) );
+
+    }
+
     function resolveDemo2RaycastIntersection( sceneIntersections, resolverContext = null ) {
 
+      const filteredIntersections = filterDemo2RaycastIntersectionsByMapMode( sceneIntersections );
       const resolution = resolverContext?.pointerType === 'xr'
-        ? resolveDemo2XrRaycastIntersection( sceneIntersections, resolverContext )
-        : resolveDemo2DesktopRaycastIntersection( sceneIntersections, resolverContext );
+        ? resolveDemo2XrRaycastIntersection( filteredIntersections, resolverContext )
+        : resolveDemo2DesktopRaycastIntersection( filteredIntersections, resolverContext );
 
       updateDemo2ResolverDebugState( resolverContext, resolution );
       return resolution.resolvedHit ?? null;
@@ -1184,8 +1390,51 @@ export const demo2SceneDefinition = Object.freeze( {
         priority: 0,
       } ),
       demo2RaycastRoles.GLOBE_SHELL,
+      demo2MapSpaces.GLOBE,
     );
     globeInteractionShell.renderOrder = 1;
+
+    const flatMapBackground = createTrackedMesh(
+      staticObjects,
+      flatMapRoot,
+      new THREE.PlaneGeometry( flatMap.width, flatMap.height ),
+      new THREE.MeshBasicMaterial( {
+        color: flatMap.backgroundColor,
+        transparent: true,
+        opacity: flatMap.backgroundOpacity,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      } ),
+    );
+    flatMapBackground.rotation.x = - Math.PI * 0.5;
+    flatMapBackground.renderOrder = 1;
+
+    const flatMapHalfWidth = flatMap.width * 0.5;
+    const flatMapHalfHeight = flatMap.height * 0.5;
+    const flatMapBorderGeometry = new THREE.BufferGeometry();
+    flatMapBorderGeometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [
+      - flatMapHalfWidth, flatMap.boundaryLift, - flatMapHalfHeight,
+      flatMapHalfWidth, flatMap.boundaryLift, - flatMapHalfHeight,
+      flatMapHalfWidth, flatMap.boundaryLift, - flatMapHalfHeight,
+      flatMapHalfWidth, flatMap.boundaryLift, flatMapHalfHeight,
+      flatMapHalfWidth, flatMap.boundaryLift, flatMapHalfHeight,
+      - flatMapHalfWidth, flatMap.boundaryLift, flatMapHalfHeight,
+      - flatMapHalfWidth, flatMap.boundaryLift, flatMapHalfHeight,
+      - flatMapHalfWidth, flatMap.boundaryLift, - flatMapHalfHeight,
+    ], 3 ) );
+    const flatMapBorder = createTrackedLineSegments(
+      staticObjects,
+      flatMapRoot,
+      flatMapBorderGeometry,
+      new THREE.LineBasicMaterial( {
+        color: flatMap.backgroundEdgeColor,
+        transparent: true,
+        opacity: flatMap.backgroundEdgeOpacity,
+        toneMapped: false,
+      } ),
+    );
+    flatMapBorder.renderOrder = 2;
 
     const handleLineHeight = Math.max( 0.05, Math.abs( handleLocalFloorY ) );
     const globeHandleLine = createTrackedMesh(
@@ -1375,6 +1624,7 @@ export const demo2SceneDefinition = Object.freeze( {
         priority: 4,
       } ),
       demo2RaycastRoles.GLOBE_HANDLE,
+      demo2MapSpaces.GLOBE,
     );
     globeHandleInteraction.position.set( 0, handleLocalFloorY + 0.07, 0 );
     globeHandleInteraction.renderOrder = 1;
@@ -1421,6 +1671,50 @@ export const demo2SceneDefinition = Object.freeze( {
     focusHalo.visible = false;
     selectedNodeHalo.visible = false;
     hoverNodeHalo.visible = false;
+
+    const flatFocusHalo = createTrackedMesh(
+      staticObjects,
+      flatMapNodeRoot,
+      new THREE.TorusGeometry( flatMap.nodeRadius * 2.15, flatMap.nodeRadius * 0.18, 10, 36 ),
+      new THREE.MeshBasicMaterial( {
+        color: globe.focusHaloColor,
+        transparent: true,
+        opacity: globe.haloOpacity,
+        depthWrite: false,
+        toneMapped: false,
+      } ),
+    );
+    const flatSelectedNodeHalo = createTrackedMesh(
+      staticObjects,
+      flatMapNodeRoot,
+      new THREE.TorusGeometry( flatMap.nodeRadius * 1.82, flatMap.nodeRadius * 0.2, 10, 36 ),
+      new THREE.MeshBasicMaterial( {
+        color: globe.selectedNodeHaloColor,
+        transparent: true,
+        opacity: interaction.selectedNodeHaloOpacity ?? globe.haloOpacity,
+        depthWrite: false,
+        toneMapped: false,
+      } ),
+    );
+    const flatHoverNodeHalo = createTrackedMesh(
+      staticObjects,
+      flatMapNodeRoot,
+      new THREE.TorusGeometry( flatMap.nodeRadius * 1.82, flatMap.nodeRadius * 0.18, 10, 36 ),
+      new THREE.MeshBasicMaterial( {
+        color: globe.hoverHaloColor,
+        transparent: true,
+        opacity: globe.haloOpacity,
+        depthWrite: false,
+        toneMapped: false,
+      } ),
+    );
+    [ flatFocusHalo, flatSelectedNodeHalo, flatHoverNodeHalo ].forEach( ( halo ) => {
+
+      halo.rotation.x = - Math.PI * 0.5;
+      halo.renderOrder = 8;
+      halo.visible = false;
+
+    } );
 
     function getSceneStateLoggingConfig() {
 
@@ -1696,6 +1990,54 @@ export const demo2SceneDefinition = Object.freeze( {
     function applyGlobeYaw() {
 
       globeYawRoot.rotation.y = THREE.MathUtils.degToRad( currentSceneState.globeYawDeg );
+
+    }
+
+    function applyMapDisplayModeVisibility() {
+
+      currentSceneState.mapDisplayMode = normalizeMapDisplayMode( currentSceneState.mapDisplayMode );
+      const isGlobeVisible = currentSceneState.mapDisplayMode === DEMO2_MAP_DISPLAY_MODES.GLOBE
+        || currentSceneState.mapDisplayMode === DEMO2_MAP_DISPLAY_MODES.BOTH;
+      const isFlatVisible = currentSceneState.mapDisplayMode === DEMO2_MAP_DISPLAY_MODES.FLAT
+        || currentSceneState.mapDisplayMode === DEMO2_MAP_DISPLAY_MODES.BOTH;
+
+      globeRoot.visible = isGlobeVisible;
+      flatMapRoot.visible = isFlatVisible;
+
+      mapRaycastObjectsBySpace.get( demo2MapSpaces.GLOBE )?.forEach( ( object3D ) => {
+
+        if ( isGlobeVisible ) {
+
+          object3D.layers.enable( 0 );
+
+        } else {
+
+          object3D.layers.disable( 0 );
+
+        }
+
+      } );
+
+      mapRaycastObjectsBySpace.get( demo2MapSpaces.FLAT )?.forEach( ( object3D ) => {
+
+        if ( isFlatVisible ) {
+
+          object3D.layers.enable( 0 );
+
+        } else {
+
+          object3D.layers.disable( 0 );
+
+        }
+
+      } );
+
+      if ( ! isGlobeVisible ) {
+
+        activeGlobeDrag = null;
+        activeGlobeMove = null;
+
+      }
 
     }
 
@@ -2237,7 +2579,7 @@ export const demo2SceneDefinition = Object.freeze( {
         `shell ${lastResolverDebug?.shellAssistSummary || 'inactive'}`,
         `hover N:${currentHoveredNodeId || '-'} F:${currentHoveredFlowId || '-'}`,
         `selected N:${currentSceneState.selectedNodeId || '-'} F:${currentSceneState.selectedFlowId || '-'}`,
-        `labels ${currentSceneState.labelsVisible ? 'on' : 'off'} mode:${interaction.tooltipMode || 'static-labels-only'}`,
+        `map ${currentSceneState.mapDisplayMode} labels ${currentSceneState.labelsVisible ? 'on' : 'off'} mode:${interaction.tooltipMode || 'static-labels-only'}`,
         `local ${formatDebugLocalTargetSummary()}`,
         `xr hover lock:${xrReplayHoverLockActive ? 'on' : 'off'}`,
         `replay recv:${interactionPolicy?.hasReceivedReplayState === true ? 'on' : 'off'} apply:${interactionPolicy?.isApplyingReplayState === true ? 'on' : 'off'}`,
@@ -2289,6 +2631,12 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( loadStatus === 'error' ) {
 
         return `${loadError?.message || 'Demo 2 could not load its local migration bundle.'}\nExpected: demo2Nodes.json, demo2Flows.csv,\nworld-atlas-countries-110m.json.`;
+
+      }
+
+      if ( currentSceneState.mapDisplayMode === DEMO2_MAP_DISPLAY_MODES.FLAT ) {
+
+        return 'Use the map view to select a node,\nthen choose a route.';
 
       }
 
@@ -2363,37 +2711,120 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function createFlatMapBoundaryGeometryFromTopology( topology ) {
+
+      const countriesObject = topology?.objects?.countries;
+
+      if ( ! countriesObject ) {
+
+        return null;
+
+      }
+
+      const boundaryMesh = buildTopojsonMesh( topology, countriesObject );
+      const lineCoordinates = boundaryMesh?.type === 'LineString'
+        ? [ boundaryMesh.coordinates ]
+        : boundaryMesh?.coordinates;
+
+      if ( ! Array.isArray( lineCoordinates ) || lineCoordinates.length === 0 ) {
+
+        return null;
+
+      }
+
+      const positions = [];
+
+      lineCoordinates.forEach( ( line ) => {
+
+        if ( ! Array.isArray( line ) || line.length < 2 ) {
+
+          return;
+
+        }
+
+        for ( let index = 1; index < line.length; index += 1 ) {
+
+          appendFlatMapSegmentPositions(
+            positions,
+            line[ index - 1 ],
+            line[ index ],
+            flatMap,
+          );
+
+        }
+
+      } );
+
+      if ( positions.length === 0 ) {
+
+        return null;
+
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
+      return geometry;
+
+    }
+
     function ensureBoundaryLines() {
 
-      if ( currentBoundaryLines || ! dataset?.boundaryTopology ) {
+      if ( ! dataset?.boundaryTopology ) {
 
         return;
 
       }
 
-      const geometry = createBoundaryGeometryFromTopology( dataset.boundaryTopology );
+      if ( ! currentBoundaryLines ) {
 
-      if ( ! geometry ) {
+        const geometry = createBoundaryGeometryFromTopology( dataset.boundaryTopology );
 
-        return;
+        if ( geometry ) {
+
+          currentBoundaryLines = createTrackedLineSegments(
+            staticObjects,
+            globeBoundaryRoot,
+            geometry,
+            new THREE.LineBasicMaterial( {
+              color: globe.boundaryColor,
+              linewidth: globe.boundaryLineWidthFallback,
+              transparent: true,
+              opacity: globe.boundaryOpacity,
+              depthWrite: false,
+              toneMapped: false,
+            } ),
+          );
+          currentBoundaryLines.renderOrder = 3;
+          currentBoundaryLines.frustumCulled = false;
+
+        }
 
       }
 
-      currentBoundaryLines = createTrackedLineSegments(
-        staticObjects,
-        globeBoundaryRoot,
-        geometry,
-        new THREE.LineBasicMaterial( {
-          color: globe.boundaryColor,
-          linewidth: globe.boundaryLineWidthFallback,
-          transparent: true,
-          opacity: globe.boundaryOpacity,
-          depthWrite: false,
-          toneMapped: false,
-        } ),
-      );
-      currentBoundaryLines.renderOrder = 3;
-      currentBoundaryLines.frustumCulled = false;
+      if ( ! currentFlatBoundaryLines ) {
+
+        const flatGeometry = createFlatMapBoundaryGeometryFromTopology( dataset.boundaryTopology );
+
+        if ( flatGeometry ) {
+
+          currentFlatBoundaryLines = createTrackedLineSegments(
+            staticObjects,
+            flatMapBoundaryRoot,
+            flatGeometry,
+            new THREE.LineBasicMaterial( {
+              color: flatMap.boundaryColor,
+              transparent: true,
+              opacity: flatMap.boundaryOpacity,
+              depthWrite: false,
+              toneMapped: false,
+            } ),
+          );
+          currentFlatBoundaryLines.renderOrder = 3;
+          currentFlatBoundaryLines.frustumCulled = false;
+
+        }
+
+      }
 
     }
 
@@ -2597,11 +3028,18 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function buildXrPanelButtons() {
 
-      const rowOffset = xrPanel.buttonWidth + xrPanel.buttonGap;
+      const columnOffset = xrPanel.buttonWidth + xrPanel.buttonGap;
+      const columnX = [
+        - columnOffset * 2,
+        - columnOffset,
+        0,
+        columnOffset,
+        columnOffset * 2,
+      ];
 
       createXrButton( 'year-prev', {
         label: buildButtonLabel( 'Year', '-' ),
-        position: new THREE.Vector3( - rowOffset, xrPanel.buttonRow1Y, 0 ),
+        position: new THREE.Vector3( columnX[ 0 ], xrPanel.buttonRow1Y, 0 ),
         onPress( source ) {
 
           shiftYear( - 1, source );
@@ -2610,7 +3048,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'year-next', {
         label: buildButtonLabel( 'Year', '+' ),
-        position: new THREE.Vector3( 0, xrPanel.buttonRow1Y, 0 ),
+        position: new THREE.Vector3( columnX[ 1 ], xrPanel.buttonRow1Y, 0 ),
         onPress( source ) {
 
           shiftYear( 1, source );
@@ -2619,7 +3057,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'direction', {
         label: buildButtonLabel( 'Mode', 'Outbound' ),
-        position: new THREE.Vector3( rowOffset, xrPanel.buttonRow1Y, 0 ),
+        position: new THREE.Vector3( columnX[ 2 ], xrPanel.buttonRow1Y, 0 ),
         onPress( source ) {
 
           cycleDirectionMode( source );
@@ -2628,7 +3066,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'threshold-prev', {
         label: buildButtonLabel( 'Flow', '-' ),
-        position: new THREE.Vector3( - rowOffset, xrPanel.buttonRow2Y, 0 ),
+        position: new THREE.Vector3( columnX[ 3 ], xrPanel.buttonRow1Y, 0 ),
         onPress( source ) {
 
           shiftThreshold( - 1, source );
@@ -2637,7 +3075,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'threshold-next', {
         label: buildButtonLabel( 'Flow', '+' ),
-        position: new THREE.Vector3( 0, xrPanel.buttonRow2Y, 0 ),
+        position: new THREE.Vector3( columnX[ 4 ], xrPanel.buttonRow1Y, 0 ),
         onPress( source ) {
 
           shiftThreshold( 1, source );
@@ -2646,16 +3084,25 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'labels', {
         label: buildButtonLabel( 'Labels', 'On' ),
-        position: new THREE.Vector3( rowOffset, xrPanel.buttonRow2Y, 0 ),
+        position: new THREE.Vector3( columnX[ 0 ], xrPanel.buttonRow2Y, 0 ),
         onPress( source ) {
 
           toggleLabels( source );
 
         },
       } );
+      createXrButton( 'map-display', {
+        label: buildButtonLabel( 'Map', '3D' ),
+        position: new THREE.Vector3( columnX[ 1 ], xrPanel.buttonRow2Y, 0 ),
+        onPress( source ) {
+
+          cycleMapDisplayMode( source );
+
+        },
+      } );
       createXrButton( 'reset-filters', {
         label: buildButtonLabel( 'Reset', 'Filters' ),
-        position: new THREE.Vector3( - rowOffset, xrPanel.buttonRow3Y, 0 ),
+        position: new THREE.Vector3( columnX[ 2 ], xrPanel.buttonRow2Y, 0 ),
         onPress( source ) {
 
           resetFilters( source );
@@ -2664,7 +3111,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'reset-view', {
         label: buildButtonLabel( 'Reset', 'View' ),
-        position: new THREE.Vector3( 0, xrPanel.buttonRow3Y, 0 ),
+        position: new THREE.Vector3( columnX[ 3 ], xrPanel.buttonRow2Y, 0 ),
         onPress( source ) {
 
           resetView( source );
@@ -2673,7 +3120,7 @@ export const demo2SceneDefinition = Object.freeze( {
       } );
       createXrButton( 'submit', {
         label: buildButtonLabel( 'Task', 'Submit' ),
-        position: new THREE.Vector3( rowOffset, xrPanel.buttonRow3Y, 0 ),
+        position: new THREE.Vector3( columnX[ 4 ], xrPanel.buttonRow2Y, 0 ),
         onPress( source ) {
 
           submitTask( source );
@@ -2714,6 +3161,7 @@ export const demo2SceneDefinition = Object.freeze( {
         const radiusScale = THREE.MathUtils.lerp( globe.nodeMinScale, globe.nodeMaxScale, normalizedAlpha );
 
         entry.currentRadius = globe.nodeBaseRadius * radiusScale;
+        entry.flatCurrentRadius = flatMap.nodeRadius * radiusScale;
         entry.mesh.scale.setScalar( radiusScale );
         entry.hitProxy.scale.setScalar( radiusScale );
         entry.mesh.material.color.setHex( resolveNodeColorHex( node ) );
@@ -2722,6 +3170,18 @@ export const demo2SceneDefinition = Object.freeze( {
             ? globe.nodeHoverEmissive
             : globe.nodeEmissive,
         );
+        if ( entry.flatMesh ) {
+
+          entry.flatMesh.scale.setScalar( radiusScale );
+          entry.flatMesh.material.color.setHex( resolveNodeColorHex( node ) );
+          entry.flatMesh.material.emissive.setHex(
+            node.id === hoveredNodeId
+              ? globe.nodeHoverEmissive
+              : globe.nodeEmissive,
+          );
+
+        }
+        entry.flatHitProxy?.scale.setScalar( radiusScale );
         let labelVisible = labelsEnabled;
         let labelOpacity = interaction.defaultLabelOpacity ?? 0.84;
         const isSelectedNode = node.id === selectedNodeId;
@@ -2745,6 +3205,17 @@ export const demo2SceneDefinition = Object.freeze( {
         );
         entry.label.sprite.material.needsUpdate = true;
 
+        if ( entry.flatLabel?.sprite ) {
+
+          entry.flatLabel.sprite.visible = labelVisible;
+          entry.flatLabel.sprite.material.opacity = labelOpacity;
+          entry.flatLabel.sprite.material.color.copy(
+            isSelectedNode ? labelSelectedTintColor : labelDefaultTintColor,
+          );
+          entry.flatLabel.sprite.material.needsUpdate = true;
+
+        }
+
       } );
 
       const focusedEntry = focusedCountryId ? nodeEntriesById.get( focusedCountryId ) : null;
@@ -2754,11 +3225,22 @@ export const demo2SceneDefinition = Object.freeze( {
       focusHalo.visible = Boolean( focusedEntry );
       selectedNodeHalo.visible = Boolean( selectedEntry );
       hoverNodeHalo.visible = Boolean( hoveredEntry );
+      flatFocusHalo.visible = Boolean( focusedEntry?.flatMesh );
+      flatSelectedNodeHalo.visible = Boolean( selectedEntry?.flatMesh );
+      flatHoverNodeHalo.visible = Boolean( hoveredEntry?.flatMesh );
 
       if ( focusedEntry ) {
 
         focusHalo.position.copy( focusedEntry.mesh.position );
         focusHalo.scale.setScalar( Math.max( 1.2, focusedEntry.currentRadius / globe.nodeBaseRadius ) );
+
+        if ( focusedEntry.flatMesh ) {
+
+          flatFocusHalo.position.copy( focusedEntry.flatMesh.position );
+          flatFocusHalo.position.y = flatMap.nodeLift + 0.01;
+          flatFocusHalo.scale.setScalar( Math.max( 1.2, focusedEntry.flatCurrentRadius / flatMap.nodeRadius ) );
+
+        }
 
       }
 
@@ -2768,12 +3250,29 @@ export const demo2SceneDefinition = Object.freeze( {
         selectedNodeHalo.position.copy( selectedEntry.mesh.position );
         selectedNodeHalo.scale.setScalar( Math.max( 1.05, selectedEntry.currentRadius / globe.nodeBaseRadius ) );
 
+        if ( selectedEntry.flatMesh ) {
+
+          flatSelectedNodeHalo.material.opacity = interaction.selectedNodeHaloOpacity ?? globe.haloOpacity;
+          flatSelectedNodeHalo.position.copy( selectedEntry.flatMesh.position );
+          flatSelectedNodeHalo.position.y = flatMap.nodeLift + 0.012;
+          flatSelectedNodeHalo.scale.setScalar( Math.max( 1.05, selectedEntry.flatCurrentRadius / flatMap.nodeRadius ) );
+
+        }
+
       }
 
       if ( hoveredEntry ) {
 
         hoverNodeHalo.position.copy( hoveredEntry.mesh.position );
         hoverNodeHalo.scale.setScalar( Math.max( 1.05, hoveredEntry.currentRadius / globe.nodeBaseRadius ) );
+
+        if ( hoveredEntry.flatMesh ) {
+
+          flatHoverNodeHalo.position.copy( hoveredEntry.flatMesh.position );
+          flatHoverNodeHalo.position.y = flatMap.nodeLift + 0.014;
+          flatHoverNodeHalo.scale.setScalar( Math.max( 1.05, hoveredEntry.flatCurrentRadius / flatMap.nodeRadius ) );
+
+        }
 
       }
 
@@ -2918,6 +3417,89 @@ export const demo2SceneDefinition = Object.freeze( {
             },
           },
         );
+        const flatOriginPosition = originEntry.flatMesh?.position || null;
+        const flatDestinationPosition = destinationEntry.flatMesh?.position || null;
+        let flatVisibleMesh = null;
+        let flatInteractionMesh = null;
+
+        if ( flatOriginPosition && flatDestinationPosition ) {
+
+          const flatSegments = Math.max( 4, flatMap.flowSegments );
+          const flatCurve = new THREE.CatmullRomCurve3(
+            createFlatArcPoints(
+              flatOriginPosition,
+              flatDestinationPosition,
+              flatMap.flowArcHeight,
+              flatSegments,
+            ),
+          );
+          const flatTubeRadius = THREE.MathUtils.lerp( flatMap.flowRadiusMin, flatMap.flowRadiusMax, radiusAlpha );
+
+          flatVisibleMesh = createTrackedMesh(
+            dynamicObjects,
+            flatMapArcRoot,
+            new THREE.TubeGeometry( flatCurve, flatSegments, flatTubeRadius, 8, false ),
+            new THREE.MeshBasicMaterial( {
+              color: flatMap.flowColor,
+              transparent: true,
+              opacity: flatMap.flowOpacity,
+              depthWrite: false,
+              toneMapped: false,
+            } ),
+          );
+          flatVisibleMesh.renderOrder = 4;
+
+          const flatProxyCurve = new THREE.CatmullRomCurve3(
+            sampleCurveSegmentPoints(
+              flatCurve,
+              flatMap.flowProxyTrimStart ?? 0.12,
+              flatMap.flowProxyTrimEnd ?? 0.88,
+              Math.max( 10, flatSegments ),
+            ),
+          );
+          const flatProxyRadius = Math.max(
+            flatMap.flowProxyMinRadius ?? 0.012,
+            flatTubeRadius * ( flatMap.flowProxyRadiusFactor ?? 2.6 ),
+          );
+
+          flatInteractionMesh = createInteractiveTrackedMesh(
+            dynamicObjects,
+            flatMapArcRoot,
+            new THREE.TubeGeometry( flatProxyCurve, Math.max( 10, flatSegments ), flatProxyRadius, 8, false ),
+            new THREE.MeshBasicMaterial( {
+              color: 0xffffff,
+              transparent: true,
+              opacity: 0,
+              depthWrite: false,
+              toneMapped: false,
+            } ),
+            {
+              onHoverChange( payload ) {
+
+                updateHoverState( 'flow', payload.source, flow.flowId, payload.isHovered );
+
+              },
+              onSelectStart( payload ) {
+
+                if ( context.getInteractionPolicy?.()?.canInteract === false ) {
+
+                  return;
+
+                }
+
+                beginLocalXrInteraction( payload.source );
+                updateHoverState( 'flow', payload.source, flow.flowId, true );
+                setSelectedFlowId( flow.flowId, {
+                  source: payload.source,
+                  shouldLog: true,
+                } );
+
+              },
+            },
+          );
+
+        }
+
         const targetRecord = registerDemo2TargetRecord( {
           targetId: buildDemo2TargetId( 'flow', flow.flowId ),
           kind: 'flow',
@@ -2927,11 +3509,14 @@ export const demo2SceneDefinition = Object.freeze( {
           priority: 2,
         } );
         currentFlowTargetIds.push( targetRecord.targetId );
-        attachDemo2TargetToObject( interactionMesh, targetRecord, demo2RaycastRoles.FLOW );
+        attachDemo2TargetToObject( interactionMesh, targetRecord, demo2RaycastRoles.FLOW, demo2MapSpaces.GLOBE );
+        attachDemo2TargetToObject( flatInteractionMesh, targetRecord, demo2RaycastRoles.FLOW, demo2MapSpaces.FLAT );
         const entry = {
           flow,
           visibleMesh,
           interactionMesh,
+          flatVisibleMesh,
+          flatInteractionMesh,
           targetRecord,
         };
         currentVisibleFlowEntries.push( entry );
@@ -2959,6 +3544,21 @@ export const demo2SceneDefinition = Object.freeze( {
         entry.visibleMesh.material.color.setHex( color );
         entry.visibleMesh.material.opacity = opacity;
         entry.visibleMesh.renderOrder = isSelected ? 8 : ( isHovered ? 7 : 4 );
+
+        if ( entry.flatVisibleMesh ) {
+
+          const flatColor = isSelected
+            ? flatMap.flowSelectedColor
+            : ( isHovered ? flatMap.flowHoverColor : flatMap.flowColor );
+          const flatOpacity = isSelected
+            ? flatMap.flowSelectedOpacity
+            : ( isHovered ? flatMap.flowHoverOpacity : flatMap.flowOpacity );
+
+          entry.flatVisibleMesh.material.color.setHex( flatColor );
+          entry.flatVisibleMesh.material.opacity = flatOpacity;
+          entry.flatVisibleMesh.renderOrder = isSelected ? 8 : ( isHovered ? 7 : 4 );
+
+        }
 
       } );
 
@@ -3085,6 +3685,63 @@ export const demo2SceneDefinition = Object.freeze( {
             { ...labelStyles.nodeLabel, text: node.name },
             labelPosition,
           );
+          const flatPosition = latLonToFlatMapVector3( node.lat, node.lon, flatMap, flatMap.nodeLift );
+          const flatLabelPosition = latLonToFlatMapVector3( node.lat, node.lon, flatMap, flatMap.nodeLift + flatMap.labelLift );
+          const flatMesh = createTrackedMesh(
+            staticObjects,
+            flatMapNodeRoot,
+            new THREE.SphereGeometry( flatMap.nodeRadius, 16, 16 ),
+            new THREE.MeshStandardMaterial( {
+              color: resolveNodeColorHex( node ),
+              emissive: globe.nodeEmissive,
+              roughness: 0.42,
+              metalness: 0.05,
+            } ),
+          );
+          flatMesh.position.copy( flatPosition );
+          flatMesh.renderOrder = 5;
+          const flatHitProxy = createInteractiveTrackedMesh(
+            staticObjects,
+            flatMapNodeRoot,
+            new THREE.SphereGeometry( flatMap.nodeHitProxyRadius, 16, 16 ),
+            new THREE.MeshBasicMaterial( {
+              color: 0xffffff,
+              transparent: true,
+              opacity: 0,
+              depthWrite: false,
+              toneMapped: false,
+            } ),
+            {
+              onHoverChange( payload ) {
+
+                updateHoverState( 'node', payload.source, node.id, payload.isHovered );
+
+              },
+              onSelectStart( payload ) {
+
+                if ( context.getInteractionPolicy?.()?.canInteract === false ) {
+
+                  return;
+
+                }
+
+                beginLocalXrInteraction( payload.source );
+                updateHoverState( 'node', payload.source, node.id, true );
+                focusCountry( node.id, {
+                  source: payload.source,
+                  shouldLog: true,
+                } );
+
+              },
+            },
+          );
+          flatHitProxy.position.copy( flatPosition );
+          const flatLabel = createTrackedTextSprite(
+            staticObjects,
+            flatMapLabelRoot,
+            { ...labelStyles.nodeLabel, text: node.name },
+            flatLabelPosition,
+          );
           const targetRecord = registerDemo2TargetRecord( {
             targetId: buildDemo2TargetId( 'node', node.id ),
             kind: 'node',
@@ -3093,13 +3750,18 @@ export const demo2SceneDefinition = Object.freeze( {
             data: node,
             priority: 3,
           } );
-          attachDemo2TargetToObject( hitProxy, targetRecord, demo2RaycastRoles.NODE );
+          attachDemo2TargetToObject( hitProxy, targetRecord, demo2RaycastRoles.NODE, demo2MapSpaces.GLOBE );
+          attachDemo2TargetToObject( flatHitProxy, targetRecord, demo2RaycastRoles.NODE, demo2MapSpaces.FLAT );
           nodeEntriesById.set( node.id, {
             node,
             mesh,
             hitProxy,
             label,
+            flatMesh,
+            flatHitProxy,
+            flatLabel,
             currentRadius: globe.nodeBaseRadius,
+            flatCurrentRadius: flatMap.nodeRadius,
             targetRecord,
           } );
 
@@ -3109,6 +3771,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       rebuildVisibleFlows();
       pruneLocalTargetState();
+      applyMapDisplayModeVisibility();
       updateSceneHighlights();
 
     }
@@ -3125,6 +3788,7 @@ export const demo2SceneDefinition = Object.freeze( {
         selectedNodeId: currentSceneState.selectedNodeId,
         selectedFlowId: currentSceneState.selectedFlowId,
         labelsVisible: currentSceneState.labelsVisible,
+        mapDisplayMode: currentSceneState.mapDisplayMode,
         visibleFlowCount: currentSceneState.visibleFlowCount,
         globeYawDeg: currentSceneState.globeYawDeg,
         globeAnchorPosition: normalizeDemo2GlobeAnchorPosition(
@@ -3152,6 +3816,7 @@ export const demo2SceneDefinition = Object.freeze( {
         xrGeoSelectedFlowId: currentSceneState.selectedFlowId,
         xrGeoVisibleFlowCount: currentSceneState.visibleFlowCount,
         xrGeoLabelsVisible: currentSceneState.labelsVisible,
+        xrGeoMapDisplayMode: currentSceneState.mapDisplayMode,
         xrGeoGlobeYawDeg: currentSceneState.globeYawDeg,
       };
 
@@ -3389,15 +4054,45 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function cycleMapDisplayMode( source = 'scene-map-display-mode-cycle' ) {
+
+      const modes = [
+        DEMO2_MAP_DISPLAY_MODES.GLOBE,
+        DEMO2_MAP_DISPLAY_MODES.FLAT,
+        DEMO2_MAP_DISPLAY_MODES.BOTH,
+      ];
+      const currentIndex = modes.indexOf( normalizeMapDisplayMode( currentSceneState.mapDisplayMode ) );
+      const nextMode = modes[ ( currentIndex + 1 ) % modes.length ];
+
+      if ( nextMode === currentSceneState.mapDisplayMode ) {
+
+        return;
+
+      }
+
+      currentSceneState.mapDisplayMode = nextMode;
+      applyMapDisplayModeVisibility();
+      clearHoverState( { invalidateAllSharedHover: true } );
+      updateSceneHighlights();
+      syncAllUi();
+      recordSceneChange( 'mapDisplayMode', source, {
+        flushImmediately: getSceneStateLoggingConfig().flushOnMapDisplayModeChange === true,
+      } );
+
+    }
+
     function resetView( source = 'scene-reset-view' ) {
 
       currentSceneState.globeYawDeg = DEMO2_DEFAULT_GLOBE_YAW_DEG;
+      currentSceneState.mapDisplayMode = DEMO2_DEFAULT_MAP_DISPLAY_MODE;
       currentSceneState.globeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
         defaultGlobeAnchorPosition,
         defaultGlobeAnchorPosition,
       );
       applyGlobeAnchorPosition();
       applyGlobeYaw();
+      applyMapDisplayModeVisibility();
+      clearHoverState( { invalidateAllSharedHover: true } );
       updateSceneHighlights();
       syncAllUi();
       resetDesktopCameraView();
@@ -3499,10 +4194,13 @@ export const demo2SceneDefinition = Object.freeze( {
       node.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'View' ) );
       const rowView = document.createElement( 'div' );
       rowView.setAttribute( 'style', desktopPanel.buttonRow );
+      desktopRefs.mapDisplayModeButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Map: 3D' );
       desktopRefs.resetFiltersButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Reset Filters' );
       desktopRefs.resetViewButton = createStyledElement( 'button', desktopPanel.buttonDisabled, 'Reset View' );
+      desktopRefs.mapDisplayModeButton.addEventListener( 'click', () => cycleMapDisplayMode( 'desktop-map-display-mode-button' ) );
       desktopRefs.resetFiltersButton.addEventListener( 'click', () => resetFilters( 'desktop-reset-filters' ) );
       desktopRefs.resetViewButton.addEventListener( 'click', () => resetView( 'desktop-reset-view' ) );
+      rowView.appendChild( desktopRefs.mapDisplayModeButton );
       rowView.appendChild( desktopRefs.resetFiltersButton );
       rowView.appendChild( desktopRefs.resetViewButton );
       node.appendChild( rowView );
@@ -3550,10 +4248,10 @@ export const demo2SceneDefinition = Object.freeze( {
 
       desktopRefs.taskValue.textContent = `${task.prompt} ${task.hint}`;
       desktopRefs.metaValue.textContent = isReady
-        ? `Year ${currentSceneState.geoYear} | ${formatDirectionMode( currentSceneState.flowDirectionMode )} | ${formatThreshold( currentSceneState.minFlowThreshold )} | ${currentSceneState.visibleFlowCount} visible`
+        ? `Year ${currentSceneState.geoYear} | ${formatDirectionMode( currentSceneState.flowDirectionMode )} | Map ${formatMapDisplayMode( currentSceneState.mapDisplayMode )} | ${formatThreshold( currentSceneState.minFlowThreshold )} | ${currentSceneState.visibleFlowCount} visible`
         : 'Loading local migration bundle...';
       desktopRefs.focusValue.textContent = focusedNode
-        ? `Focus ${focusedNode.name} | Labels ${currentSceneState.labelsVisible ? 'On' : 'Off'} | Yaw ${Math.round( currentSceneState.globeYawDeg )}\u00b0`
+        ? `Focus ${focusedNode.name} | Map ${formatMapDisplayMode( currentSceneState.mapDisplayMode )} | Labels ${currentSceneState.labelsVisible ? 'On' : 'Off'} | Yaw ${Math.round( currentSceneState.globeYawDeg )}\u00b0`
         : 'Focus Afghanistan';
       desktopRefs.selectionValue.textContent = selectedFlow
         ? [
@@ -3580,6 +4278,7 @@ export const demo2SceneDefinition = Object.freeze( {
         desktopRefs.thresholdNextButton,
         desktopRefs.directionButton,
         desktopRefs.labelsButton,
+        desktopRefs.mapDisplayModeButton,
         desktopRefs.resetFiltersButton,
         desktopRefs.resetViewButton,
       ].forEach( ( button ) => {
@@ -3591,6 +4290,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       desktopRefs.directionButton.textContent = `Mode: ${formatDirectionMode( currentSceneState.flowDirectionMode )}`;
       desktopRefs.labelsButton.textContent = `Labels: ${currentSceneState.labelsVisible ? 'On' : 'Off'}`;
+      desktopRefs.mapDisplayModeButton.textContent = `Map: ${formatMapDisplayMode( currentSceneState.mapDisplayMode )}`;
       desktopRefs.submitButton.disabled = ! controlsEnabled || ! selectedFlow;
       desktopRefs.submitButton.textContent = selectedFlow ? 'Submit Current Route' : 'Pick Route First';
       desktopRefs.submitButton.setAttribute( 'style', getButtonStyle( desktopPanel, controlsEnabled && Boolean( selectedFlow ) ) );
@@ -3622,7 +4322,7 @@ export const demo2SceneDefinition = Object.freeze( {
       panelBodyText.setText( getPanelBodyText() );
       panelMetaText.setText(
         isReady
-          ? `${currentSceneState.geoYear} | ${compactMode} | ${compactThreshold} | ${visibleRouteLabel}`
+          ? `${currentSceneState.geoYear} | ${compactMode} | map ${formatMapDisplayMode( currentSceneState.mapDisplayMode )} | ${compactThreshold} | ${visibleRouteLabel}`
           : 'Loading data...',
       );
       panelSelectionText.setText(
@@ -3653,6 +4353,8 @@ export const demo2SceneDefinition = Object.freeze( {
       xrButtons.get( 'threshold-next' ).label = buildButtonLabel( 'Flow', '+' );
       xrButtons.get( 'labels' ).disabled = ! controlsEnabled;
       xrButtons.get( 'labels' ).label = buildButtonLabel( 'Labels', currentSceneState.labelsVisible ? 'On' : 'Off' );
+      xrButtons.get( 'map-display' ).disabled = ! controlsEnabled;
+      xrButtons.get( 'map-display' ).label = buildButtonLabel( 'Map', formatMapDisplayMode( currentSceneState.mapDisplayMode ) );
       xrButtons.get( 'reset-filters' ).disabled = ! controlsEnabled;
       xrButtons.get( 'reset-filters' ).label = buildButtonLabel( 'Reset', 'Filters' );
       xrButtons.get( 'reset-view' ).disabled = ! controlsEnabled;
@@ -3722,6 +4424,7 @@ export const demo2SceneDefinition = Object.freeze( {
           defaultFocusedCountryId: dataset?.defaultFocusedCountryId || DEMO2_DEFAULT_FOCUSED_COUNTRY_ID,
         },
       );
+      applyMapDisplayModeVisibility();
 
       const nextPanelPosition = normalizeDemo2PanelPosition( currentSceneState.panelPosition, null );
       const nextPanelQuaternion = normalizeDemo2PanelQuaternion( currentSceneState.panelQuaternion, null );
@@ -3797,6 +4500,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     buildDesktopPanel();
     buildXrPanelButtons();
+    applyMapDisplayModeVisibility();
     syncAllUi();
 
     return {

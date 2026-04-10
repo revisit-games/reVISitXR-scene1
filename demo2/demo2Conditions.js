@@ -6,6 +6,12 @@ export const DEMO2_DIRECTION_MODES = Object.freeze( {
   INBOUND: 'inbound',
 } );
 
+export const DEMO2_MAP_DISPLAY_MODES = Object.freeze( {
+  GLOBE: 'globe',
+  FLAT: 'flat',
+  BOTH: 'both',
+} );
+
 export const DEMO2_THRESHOLD_PRESETS = Object.freeze( [ 0, 50000, 100000, 250000, 500000 ] );
 export const DEMO2_DEFAULT_YEAR = 2024;
 export const DEMO2_DEFAULT_THRESHOLD = 50000;
@@ -13,6 +19,7 @@ export const DEMO2_DEFAULT_TASK_ID = 'afg-strongest-outbound';
 export const DEMO2_DEFAULT_FOCUSED_COUNTRY_ID = 'AFG';
 export const DEMO2_DEFAULT_GLOBE_YAW_DEG = - 35;
 export const DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION = Object.freeze( [ 0, 1.28, - 2.45 ] );
+export const DEMO2_DEFAULT_MAP_DISPLAY_MODE = DEMO2_MAP_DISPLAY_MODES.GLOBE;
 export const DEMO2_GLOBE_YAW_STEP_DEG = 30;
 
 function isFiniteNumber( value ) {
@@ -54,6 +61,22 @@ function clampToSupportedYears( candidateYear, supportedYears, fallbackYear ) {
 function normalizeDirectionMode( value, fallbackValue = DEMO2_DIRECTION_MODES.OUTBOUND ) {
 
   if ( value === DEMO2_DIRECTION_MODES.ALL || value === DEMO2_DIRECTION_MODES.OUTBOUND || value === DEMO2_DIRECTION_MODES.INBOUND ) {
+
+    return value;
+
+  }
+
+  return fallbackValue;
+
+}
+
+export function normalizeMapDisplayMode( value, fallbackValue = DEMO2_DEFAULT_MAP_DISPLAY_MODE ) {
+
+  if (
+    value === DEMO2_MAP_DISPLAY_MODES.GLOBE ||
+    value === DEMO2_MAP_DISPLAY_MODES.FLAT ||
+    value === DEMO2_MAP_DISPLAY_MODES.BOTH
+  ) {
 
     return value;
 
@@ -182,6 +205,7 @@ export function parseDemo2Conditions( search = window.location.search, {
     selectedNodeId: null,
     selectedFlowId: null,
     labelsVisible: searchParams.get( 'labels' ) !== '0',
+    mapDisplayMode: normalizeMapDisplayMode( searchParams.get( 'map' ) ),
     visibleFlowCount: 0,
     globeYawDeg: normalizeAngleDegrees( parsedYaw, DEMO2_DEFAULT_GLOBE_YAW_DEG ),
     globeAnchorPosition: normalizeDemo2GlobeAnchorPosition( null, DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION ),
@@ -232,6 +256,10 @@ export function normalizeDemo2SceneState( candidateState, fallbackState = null, 
     labelsVisible: typeof candidateState?.labelsVisible === 'boolean'
       ? candidateState.labelsVisible
       : ( typeof fallback.labelsVisible === 'boolean' ? fallback.labelsVisible : true ),
+    mapDisplayMode: normalizeMapDisplayMode(
+      candidateState?.mapDisplayMode,
+      normalizeMapDisplayMode( fallback.mapDisplayMode, DEMO2_DEFAULT_MAP_DISPLAY_MODE ),
+    ),
     visibleFlowCount: isFiniteNumber( candidateState?.visibleFlowCount )
       ? Math.max( 0, Math.round( candidateState.visibleFlowCount ) )
       : ( isFiniteNumber( fallback.visibleFlowCount ) ? Math.max( 0, Math.round( fallback.visibleFlowCount ) ) : 0 ),

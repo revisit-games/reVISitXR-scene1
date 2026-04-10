@@ -17,7 +17,7 @@ Demo 2 follows the same scene-local structure as Demo 1:
 - `demo2LoggingConfig.js`
   Scene-specific logging knobs and stable semantic labels.
 - `demo2VisualConfig.js`
-  Globe, panel, button, and label styling.
+  Globe, flat map, panel, button, and label styling.
 
 Future demos should follow this scene-local pattern instead of pushing authored visualization logic into `main.js`.
 
@@ -104,6 +104,38 @@ Demo 2 also adds a scene-local floor handle for ground-plane translation:
 - dragging the handle updates the globe anchor in `X/Z` only while keeping `Y` fixed
 - replay restores that anchor semantically instead of reenacting drag motion
 
+## Map Display Modes
+
+Demo 2 now supports a scene-local `mapDisplayMode`:
+
+- `globe`
+  Default. Shows the 3D globe, globe nodes, globe flows, globe shell, and globe floor handle.
+- `flat`
+  Shows a rectangular equirectangular world map slightly above the floor with country boundary linework, flat nodes, and flat flows.
+- `both`
+  Shows the globe and flat map together.
+
+The optional query parameter is:
+
+```text
+index.html?scene=2&map=globe
+index.html?scene=2&map=flat
+index.html?scene=2&map=both
+```
+
+The globe and flat map are two views of the same data, not separate interaction systems. They share:
+
+- `focusedCountryId`
+- `selectedNodeId`
+- `selectedFlowId`
+- current node and flow hover state
+- year, threshold, direction, and label filters
+- semantic logging and replay state
+
+Selecting or hovering a node or flow in either view updates the same semantic target, so highlights mirror across both views when `mapDisplayMode` is `both`.
+
+Flat map customization lives in `demo2VisualConfig.flatMap`. Package users can tune the floor position, width, height, map lift, boundary colors, node radius, node hit-proxy radius, flow thickness, flow arc height, flow hit-proxy thickness, and hover/selected colors without editing scene logic.
+
 ## Interaction Geometry
 
 Demo 2 now separates visible geometry from interaction geometry:
@@ -114,6 +146,7 @@ Demo 2 now separates visible geometry from interaction geometry:
 - flow interaction uses separate invisible trimmed mid-arc proxies so route picking happens away from crowded node endpoints
 - the globe shell is reserved for blank-surface dragging
 - the floor handle remains a direct translation target
+- flat map nodes and flows use their own invisible hit proxies while sharing the same semantic target ids as the globe
 
 Most XR-safe interaction sizing now lives in `demo2/demo2VisualConfig.js`, including:
 
@@ -124,15 +157,20 @@ Most XR-safe interaction sizing now lives in `demo2/demo2VisualConfig.js`, inclu
 - `flowProxyMinRadius`
 - `xrFrontHitClusterDistance`
 - `xrShellAssistMaxContactDistance`
+- `flatMap.nodeHitProxyRadius`
+- `flatMap.flowProxyRadiusFactor`
+- `flatMap.flowProxyMinRadius`
 
 This keeps the paper-facing Demo 2 scene customizable without pushing scene-specific heuristics into `main.js`.
 
-## Static Globe Labels And Panel Details
+Hidden map targets are filtered scene-locally. Demo 2 marks raycastable map objects with `demo2MapSpace` (`globe` or `flat`), filters inactive spaces inside the Demo 2 resolver, and disables layer `0` for inactive map-space targets so hidden proxies cannot capture desktop or XR raycasts. Panel buttons are not map-space targets and remain interactive in every display mode.
 
-Demo 2 intentionally keeps only one in-scene text system on the globe:
+## Static Map Labels And Panel Details
+
+Demo 2 intentionally keeps only fixed in-scene map labels:
 
 - fixed country-name sprites are created from each node's `name`
-- `labelsVisible` controls whether those fixed labels are shown
+- `labelsVisible` controls whether fixed labels are shown on the visible globe and flat map views
 - hover, click, selection, replay, and route focus do not create or replace dynamic 3D tooltips
 - selected node and selected flow details belong to the desktop/XR panels
 
@@ -158,6 +196,7 @@ Demo 2 restores semantic geo state instead of replaying dense arc animation:
 - `selectedNodeId`
 - `selectedFlowId`
 - `labelsVisible`
+- `mapDisplayMode`
 - `visibleFlowCount`
 - `globeYawDeg`
 - `globeAnchorPosition`
