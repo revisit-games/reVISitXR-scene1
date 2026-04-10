@@ -16,6 +16,7 @@ import {
   DEMO2_DEFAULT_YEAR,
   DEMO2_DIRECTION_MODES,
   DEMO2_THRESHOLD_PRESETS,
+  normalizeDemo2GlobeAnchorPosition,
   normalizeDemo2PanelPosition,
   normalizeDemo2PanelQuaternion,
   normalizeDemo2SceneState,
@@ -269,14 +270,23 @@ export const demo2SceneDefinition = Object.freeze( {
     const nodeEntriesById = new Map();
     const flowHoverBySource = new Map();
     const nodeHoverBySource = new Map();
+    const defaultGlobeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
+      globe.anchorDefaultPosition || globe.rootPosition,
+    );
+    const handleLocalFloorY = globe.handleFloorY - defaultGlobeAnchorPosition[ 1 ];
     const lastLoggedPanelPosition = new THREE.Vector3();
     const lastLoggedPanelQuaternion = new THREE.Quaternion();
+    const lastLoggedGlobeAnchorPosition = new THREE.Vector3().fromArray( defaultGlobeAnchorPosition );
     const globeInteractionSphere = new THREE.Sphere( new THREE.Vector3(), globe.interactionRadius );
+    const globeHandleDragPlane = new THREE.Plane( new THREE.Vector3( 0, 1, 0 ), - globe.handleFloorY );
     const tempTooltipPosition = new THREE.Vector3();
+    const tempTooltipAnchor = new THREE.Vector3();
     const tempGlobeWorldCenter = new THREE.Vector3();
     const tempGlobeWorldHit = new THREE.Vector3();
     const tempGlobeLocalHit = new THREE.Vector3();
     const tempGlobeRay = new THREE.Ray();
+    const tempGlobeHandleHit = new THREE.Vector3();
+    const tempGlobeAnchorPosition = new THREE.Vector3();
     let hoverSequence = 0;
     let dataset = null;
     let loadStatus = 'loading';
@@ -289,20 +299,24 @@ export const demo2SceneDefinition = Object.freeze( {
     let currentFlowEntryById = new Map();
     let currentBoundaryLines = null;
     let activeGlobeDrag = null;
+    let activeGlobeMove = null;
     let lastLoggedGlobeYawDeg = currentSceneState.globeYawDeg;
     let lastGlobeYawLogAt = 0;
+    let lastGlobeAnchorLogAt = 0;
 
     root.add( globeRoot );
     root.add( xrPanelRoot );
-    globeRoot.position.fromArray( globe.rootPosition );
+    globeRoot.position.fromArray( defaultGlobeAnchorPosition );
     globeRoot.add( globeYawRoot );
+    const globeHandleRoot = new THREE.Group();
+    globeRoot.add( globeHandleRoot );
     globeYawRoot.add( globeBoundaryRoot );
     globeYawRoot.add( globeArcRoot );
     globeYawRoot.add( globeNodeRoot );
     globeYawRoot.add( globeLabelRoot );
 
     const defaultDesktopCameraPosition = new THREE.Vector3( 0, 1.46, 0.12 );
-    const defaultDesktopLookAt = new THREE.Vector3( 0, globe.rootPosition[ 1 ], globe.rootPosition[ 2 ] );
+    const defaultDesktopLookAt = new THREE.Vector3( 0, defaultGlobeAnchorPosition[ 1 ], defaultGlobeAnchorPosition[ 2 ] );
 
     function trackDisposable( collection, object3D, dispose ) {
 
@@ -537,6 +551,182 @@ export const demo2SceneDefinition = Object.freeze( {
     );
     globeInteractionShell.renderOrder = 1;
 
+    const handleLineHeight = Math.max( 0.05, Math.abs( handleLocalFloorY ) );
+    const globeHandleLine = createTrackedMesh(
+      staticObjects,
+      globeHandleRoot,
+      new THREE.CylinderGeometry( globe.handleLineRadius, globe.handleLineRadius, handleLineHeight, 18 ),
+      new THREE.MeshStandardMaterial( {
+        color: 0x88c9f3,
+        emissive: 0x133349,
+        transparent: true,
+        opacity: 0.8,
+        roughness: 0.38,
+        metalness: 0.16,
+      } ),
+    );
+    globeHandleLine.position.set( 0, handleLocalFloorY * 0.5, 0 );
+
+    const globeHandleRing = createTrackedMesh(
+      staticObjects,
+      globeHandleRoot,
+      new THREE.TorusGeometry( globe.handleRingRadius, globe.handleRingTubeRadius, 20, 64 ),
+      new THREE.MeshStandardMaterial( {
+        color: 0x7fc9ff,
+        emissive: 0x17364a,
+        transparent: true,
+        opacity: 0.82,
+        roughness: 0.34,
+        metalness: 0.18,
+      } ),
+    );
+    globeHandleRing.position.set( 0, handleLocalFloorY + globe.handleRingTubeRadius, 0 );
+    globeHandleRing.rotation.x = Math.PI * 0.5;
+
+    const globeHandleDisc = createTrackedMesh(
+      staticObjects,
+      globeHandleRoot,
+      new THREE.CylinderGeometry( globe.handleDiscRadius, globe.handleDiscRadius, 0.012, 48 ),
+      new THREE.MeshBasicMaterial( {
+        color: 0x2c4860,
+        transparent: true,
+        opacity: 0.26,
+        depthWrite: false,
+        toneMapped: false,
+      } ),
+    );
+    globeHandleDisc.position.set( 0, handleLocalFloorY + 0.006, 0 );
+    globeHandleDisc.renderOrder = 1;
+
+    const arrowDirections = [
+      { position: [ globe.handleArrowOffset, handleLocalFloorY + globe.handleArrowLift, 0 ], rotation: [ 0, 0, - Math.PI * 0.5 ] },
+      { position: [ - globe.handleArrowOffset, handleLocalFloorY + globe.handleArrowLift, 0 ], rotation: [ 0, 0, Math.PI * 0.5 ] },
+      { position: [ 0, handleLocalFloorY + globe.handleArrowLift, globe.handleArrowOffset ], rotation: [ Math.PI * 0.5, 0, 0 ] },
+      { position: [ 0, handleLocalFloorY + globe.handleArrowLift, - globe.handleArrowOffset ], rotation: [ - Math.PI * 0.5, 0, 0 ] },
+    ];
+    arrowDirections.forEach( ( arrowConfig ) => {
+
+      const arrow = createTrackedMesh(
+        staticObjects,
+        globeHandleRoot,
+        new THREE.ConeGeometry( 0.028, 0.05, 12 ),
+        new THREE.MeshStandardMaterial( {
+          color: 0xbfe7ff,
+          emissive: 0x1b4760,
+          transparent: true,
+          opacity: 0.86,
+          roughness: 0.26,
+          metalness: 0.12,
+        } ),
+      );
+      arrow.position.fromArray( arrowConfig.position );
+      arrow.rotation.set( arrowConfig.rotation[ 0 ], arrowConfig.rotation[ 1 ], arrowConfig.rotation[ 2 ] );
+
+    } );
+
+    const globeHandleInteraction = createInteractiveTrackedMesh(
+      staticObjects,
+      globeHandleRoot,
+      new THREE.CylinderGeometry( globe.handleInteractiveRadius, globe.handleInteractiveRadius, 0.14, 48 ),
+      new THREE.MeshBasicMaterial( {
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        toneMapped: false,
+      } ),
+      {
+        onSelectStart( payload ) {
+
+          if ( context.getInteractionPolicy?.()?.canInteract === false ) {
+
+            return;
+
+          }
+
+          const startPoint = resolveGlobeHandlePoint( payload.rayOrigin, payload.rayDirection );
+
+          if ( startPoint === null ) {
+
+            return;
+
+          }
+
+          activeGlobeMove = {
+            source: payload.source,
+            startAnchorPosition: globeRoot.position.clone(),
+            dragOffsetX: globeRoot.position.x - startPoint.x,
+            dragOffsetZ: globeRoot.position.z - startPoint.z,
+            hasMoved: false,
+          };
+          clearHoverState();
+
+        },
+        onSelectMove( payload ) {
+
+          if ( activeGlobeMove?.source !== payload.source ) {
+
+            return;
+
+          }
+
+          const nextPoint = resolveGlobeHandlePoint( payload.rayOrigin, payload.rayDirection );
+
+          if ( nextPoint === null ) {
+
+            return;
+
+          }
+
+          const nextAnchorPosition = normalizeDemo2GlobeAnchorPosition(
+            [
+              nextPoint.x + activeGlobeMove.dragOffsetX,
+              defaultGlobeAnchorPosition[ 1 ],
+              nextPoint.z + activeGlobeMove.dragOffsetZ,
+            ],
+            defaultGlobeAnchorPosition,
+          );
+
+          tempGlobeAnchorPosition.fromArray( nextAnchorPosition );
+
+          if ( tempGlobeAnchorPosition.distanceTo( globeRoot.position ) <= 0.005 ) {
+
+            return;
+
+          }
+
+          activeGlobeMove.hasMoved = true;
+          currentSceneState.globeAnchorPosition = nextAnchorPosition;
+          applyGlobeAnchorPosition();
+          recordGlobeAnchorIfNeeded( `${payload.source}-globe-handle-drag` );
+
+        },
+        onSelectEnd( payload ) {
+
+          if ( activeGlobeMove?.source !== payload.source ) {
+
+            return;
+
+          }
+
+          const shouldFlush = activeGlobeMove.hasMoved === true;
+          activeGlobeMove = null;
+
+          if ( shouldFlush ) {
+
+            recordGlobeAnchorIfNeeded( `${payload.source}-globe-handle-drag-end`, {
+              force: true,
+              flushImmediately: getSceneStateLoggingConfig().flushOnGlobeMoveEnd === true,
+            } );
+
+          }
+
+        },
+      },
+    );
+    globeHandleInteraction.position.set( 0, handleLocalFloorY + 0.07, 0 );
+    globeHandleInteraction.renderOrder = 1;
+
     const focusHalo = createTrackedMesh(
       staticObjects,
       globeNodeRoot,
@@ -693,6 +883,25 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function applyGlobeAnchorPosition() {
+
+      currentSceneState.globeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
+        currentSceneState.globeAnchorPosition,
+        defaultGlobeAnchorPosition,
+      );
+      globeRoot.position.fromArray( currentSceneState.globeAnchorPosition );
+
+    }
+
+    function rememberGlobeAnchorAsLogged( globeAnchorPosition, timestamp = performance.now() ) {
+
+      lastLoggedGlobeAnchorPosition.fromArray(
+        normalizeDemo2GlobeAnchorPosition( globeAnchorPosition, defaultGlobeAnchorPosition ),
+      );
+      lastGlobeAnchorLogAt = timestamp;
+
+    }
+
     function resolveGlobeDragAzimuth( rayOrigin, rayDirection ) {
 
       globeRoot.getWorldPosition( tempGlobeWorldCenter );
@@ -716,6 +925,21 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       return THREE.MathUtils.radToDeg( Math.atan2( tempGlobeLocalHit.x, tempGlobeLocalHit.z ) );
+
+    }
+
+    function resolveGlobeHandlePoint( rayOrigin, rayDirection ) {
+
+      tempGlobeRay.origin.copy( rayOrigin );
+      tempGlobeRay.direction.copy( rayDirection ).normalize();
+
+      if ( tempGlobeRay.intersectPlane( globeHandleDragPlane, tempGlobeHandleHit ) === null ) {
+
+        return null;
+
+      }
+
+      return tempGlobeHandleHit;
 
     }
 
@@ -750,6 +974,46 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( didLog ) {
 
         rememberGlobeYawAsLogged( currentSceneState.globeYawDeg, now );
+
+      }
+
+      return didLog;
+
+    }
+
+    function recordGlobeAnchorIfNeeded( source = 'scene-globe-handle-drag', {
+      force = false,
+      flushImmediately = false,
+    } = {} ) {
+
+      const loggingConfig = getSceneStateLoggingConfig();
+      tempGlobeAnchorPosition.fromArray(
+        normalizeDemo2GlobeAnchorPosition( currentSceneState.globeAnchorPosition, defaultGlobeAnchorPosition ),
+      );
+      const anchorChanged = tempGlobeAnchorPosition.distanceTo( lastLoggedGlobeAnchorPosition ) > Math.max(
+        0.001,
+        loggingConfig.positionEpsilon ?? 0.04,
+      );
+
+      if ( ! anchorChanged ) {
+
+        return false;
+
+      }
+
+      const now = performance.now();
+
+      if ( ! force && ( now - lastGlobeAnchorLogAt ) < Math.max( 0, loggingConfig.minIntervalMs ?? 0 ) ) {
+
+        return false;
+
+      }
+
+      const didLog = recordSceneChange( 'moveGlobe', source, { flushImmediately } );
+
+      if ( didLog ) {
+
+        rememberGlobeAnchorAsLogged( tempGlobeAnchorPosition.toArray(), now );
 
       }
 
@@ -875,7 +1139,29 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function getDefaultStatusText() {
 
-      const focusedNode = getFocusedNode();
+      if ( loadStatus === 'loading' ) {
+
+        return 'Loading local migration bundle...';
+
+      }
+
+      if ( loadStatus === 'error' ) {
+
+        return 'Local bundle missing.';
+
+      }
+
+      if ( currentSceneState.visibleFlowCount === 0 ) {
+
+        return 'No visible routes for this filter.';
+
+      }
+
+      return 'Select a route, then submit.';
+
+    }
+
+    function getPanelBodyText() {
 
       if ( loadStatus === 'loading' ) {
 
@@ -885,17 +1171,11 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( loadStatus === 'error' ) {
 
-        return loadError?.message || 'Demo 2 could not load its local migration bundle.';
+        return `${loadError?.message || 'Demo 2 could not load its local migration bundle.'}\nExpected: demo2Nodes.json, demo2Flows.csv,\nworld-atlas-countries-110m.json.`;
 
       }
 
-      if ( currentSceneState.visibleFlowCount === 0 ) {
-
-        return `${focusedNode?.name || 'Current focus'} has no visible routes for ${formatDirectionMode( currentSceneState.flowDirectionMode ).toLowerCase()} mode at ${formatThreshold( currentSceneState.minFlowThreshold )}.`;
-
-      }
-
-      return 'Select a route, then submit your answer.';
+      return 'Drag the globe to rotate or reposition.\nSelect a node, then choose a route.';
 
     }
 
@@ -1277,7 +1557,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function updateNodeVisuals() {
+    function updateNodeVisuals( tooltipState = null ) {
 
       if ( ! dataset ) {
 
@@ -1289,6 +1569,12 @@ export const demo2SceneDefinition = Object.freeze( {
       const focusedCountryId = currentSceneState.focusedCountryId;
       const selectedNodeId = currentSceneState.selectedNodeId;
       const hoveredNodeId = currentHoveredNodeId;
+      const labelsEnabled = currentSceneState.labelsVisible === true;
+      const isTooltipActive = labelsEnabled && tooltipState?.visible === true;
+      const suppressedNodeId = tooltipState?.suppressedNodeId || null;
+      const tooltipAnchor = tooltipState?.anchor || null;
+      const tooltipSuppressionRadius = globe.tooltipLabelSuppressionRadius ?? 0.22;
+      const tooltipSuppressedOpacity = globe.tooltipSuppressedOpacity ?? 0.08;
 
       dataset.nodeList.forEach( ( node ) => {
 
@@ -1314,8 +1600,26 @@ export const demo2SceneDefinition = Object.freeze( {
             ? globe.nodeHoverEmissive
             : globe.nodeEmissive,
         );
-        entry.label.sprite.visible = currentSceneState.labelsVisible === true;
-        entry.label.sprite.material.opacity = node.id === focusedCountryId || node.id === selectedNodeId ? 1 : 0.84;
+        let labelVisible = labelsEnabled;
+        let labelOpacity = node.id === focusedCountryId || node.id === selectedNodeId ? 1 : 0.84;
+
+        if ( labelVisible && isTooltipActive ) {
+
+          if ( suppressedNodeId === node.id ) {
+
+            labelVisible = false;
+
+          } else if ( tooltipAnchor && entry.label.sprite.position.distanceTo( tooltipAnchor ) <= tooltipSuppressionRadius ) {
+
+            labelOpacity = Math.min( labelOpacity, tooltipSuppressedOpacity );
+
+          }
+
+        }
+
+        entry.label.sprite.visible = labelVisible;
+        entry.label.sprite.material.opacity = labelOpacity;
+        entry.label.sprite.material.needsUpdate = true;
 
       } );
 
@@ -1497,57 +1801,54 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function updateHighlightsAndTooltip() {
 
-      updateNodeVisuals();
-      updateFlowVisuals();
-
       const hoveredFlowEntry = currentHoveredFlowId ? currentFlowEntryById.get( currentHoveredFlowId ) : null;
       const selectedFlowEntry = currentSceneState.selectedFlowId ? currentFlowEntryById.get( currentSceneState.selectedFlowId ) : null;
       const hoveredNodeEntry = currentHoveredNodeId ? nodeEntriesById.get( currentHoveredNodeId ) : null;
       const selectedNodeEntry = currentSceneState.selectedNodeId ? nodeEntriesById.get( currentSceneState.selectedNodeId ) : null;
+      const tooltipState = {
+        visible: false,
+        text: '',
+        anchor: tempTooltipAnchor,
+        suppressedNodeId: null,
+      };
 
       if ( hoveredFlowEntry ) {
 
-        tooltip.setText(
-          `${hoveredFlowEntry.flow.label}\n${hoveredFlowEntry.flow.year} | ${formatFlowValue( hoveredFlowEntry.flow.value )}`,
-        );
-        tempTooltipPosition.copy( hoveredFlowEntry.midpoint ).normalize().multiplyScalar( hoveredFlowEntry.midpoint.length() + globe.tooltipForwardOffset );
-        tooltip.sprite.position.copy( tempTooltipPosition );
-        tooltip.sprite.visible = true;
-        return;
+        tooltipState.visible = true;
+        tooltipState.text = `${hoveredFlowEntry.flow.label}\n${hoveredFlowEntry.flow.year} | ${formatFlowValue( hoveredFlowEntry.flow.value )}`;
+        tooltipState.anchor.copy( hoveredFlowEntry.midpoint ).normalize().multiplyScalar( hoveredFlowEntry.midpoint.length() + globe.tooltipForwardOffset );
 
-      }
-
-      if ( hoveredNodeEntry ) {
+      } else if ( hoveredNodeEntry ) {
 
         const stockValue = Number.parseFloat( hoveredNodeEntry.node.stockByYear?.[ String( currentSceneState.geoYear ) ] ) || 0;
-        tooltip.setText(
-          `${hoveredNodeEntry.node.name}\nImmigrant stock ${formatFlowValue( stockValue )} | ${hoveredNodeEntry.node.region}`,
-        );
-        tooltip.sprite.position.copy( hoveredNodeEntry.label.sprite.position );
-        tooltip.sprite.visible = true;
-        return;
+        tooltipState.visible = true;
+        tooltipState.text = `${hoveredNodeEntry.node.name}\nImmigrant stock ${formatFlowValue( stockValue )} | ${hoveredNodeEntry.node.region}`;
+        tooltipState.anchor.copy( hoveredNodeEntry.label.sprite.position );
+        tooltipState.suppressedNodeId = hoveredNodeEntry.node.id;
 
-      }
+      } else if ( selectedFlowEntry ) {
 
-      if ( selectedFlowEntry ) {
+        tooltipState.visible = true;
+        tooltipState.text = `${selectedFlowEntry.flow.label}\nSelected route | ${formatFlowValue( selectedFlowEntry.flow.value )}`;
+        tooltipState.anchor.copy( selectedFlowEntry.midpoint ).normalize().multiplyScalar( selectedFlowEntry.midpoint.length() + globe.tooltipForwardOffset );
 
-        tooltip.setText(
-          `${selectedFlowEntry.flow.label}\nSelected route | ${formatFlowValue( selectedFlowEntry.flow.value )}`,
-        );
-        tempTooltipPosition.copy( selectedFlowEntry.midpoint ).normalize().multiplyScalar( selectedFlowEntry.midpoint.length() + globe.tooltipForwardOffset );
-        tooltip.sprite.position.copy( tempTooltipPosition );
-        tooltip.sprite.visible = true;
-        return;
-
-      }
-
-      if ( selectedNodeEntry ) {
+      } else if ( selectedNodeEntry ) {
 
         const stockValue = Number.parseFloat( selectedNodeEntry.node.stockByYear?.[ String( currentSceneState.geoYear ) ] ) || 0;
-        tooltip.setText(
-          `${selectedNodeEntry.node.name}\nSelected focus | ${formatFlowValue( stockValue )} stock`,
-        );
-        tooltip.sprite.position.copy( selectedNodeEntry.label.sprite.position );
+        tooltipState.visible = true;
+        tooltipState.text = `${selectedNodeEntry.node.name}\nSelected focus | ${formatFlowValue( stockValue )} stock`;
+        tooltipState.anchor.copy( selectedNodeEntry.label.sprite.position );
+        tooltipState.suppressedNodeId = selectedNodeEntry.node.id;
+
+      }
+
+      updateNodeVisuals( tooltipState );
+      updateFlowVisuals();
+
+      if ( tooltipState.visible ) {
+
+        tooltip.setText( tooltipState.text );
+        tooltip.sprite.position.copy( tooltipState.anchor );
         tooltip.sprite.visible = true;
         return;
 
@@ -1594,12 +1895,17 @@ export const demo2SceneDefinition = Object.freeze( {
 
       currentSceneState.visibleFlowCount = visibleFlowIds.size;
       currentSceneState.globeYawDeg = normalizeAngleDegrees( currentSceneState.globeYawDeg );
+      currentSceneState.globeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
+        currentSceneState.globeAnchorPosition,
+        defaultGlobeAnchorPosition,
+      );
 
     }
 
     function syncDataDrivenScene() {
 
       normalizeCurrentSceneState();
+      applyGlobeAnchorPosition();
       applyGlobeYaw();
       ensureBoundaryLines();
 
@@ -1678,6 +1984,10 @@ export const demo2SceneDefinition = Object.freeze( {
         labelsVisible: currentSceneState.labelsVisible,
         visibleFlowCount: currentSceneState.visibleFlowCount,
         globeYawDeg: currentSceneState.globeYawDeg,
+        globeAnchorPosition: normalizeDemo2GlobeAnchorPosition(
+          currentSceneState.globeAnchorPosition,
+          defaultGlobeAnchorPosition,
+        ),
         taskAnswer: currentSceneState.taskAnswer,
         taskSubmitted: currentSceneState.taskSubmitted,
         panelPosition: normalizeDemo2PanelPosition( currentSceneState.panelPosition, null ),
@@ -1928,6 +2238,11 @@ export const demo2SceneDefinition = Object.freeze( {
     function resetView( source = 'scene-reset-view' ) {
 
       currentSceneState.globeYawDeg = DEMO2_DEFAULT_GLOBE_YAW_DEG;
+      currentSceneState.globeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
+        defaultGlobeAnchorPosition,
+        defaultGlobeAnchorPosition,
+      );
+      applyGlobeAnchorPosition();
       applyGlobeYaw();
       updateHighlightsAndTooltip();
       syncAllUi();
@@ -1939,6 +2254,7 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( didLog ) {
 
         rememberGlobeYawAsLogged( currentSceneState.globeYawDeg );
+        rememberGlobeAnchorAsLogged( currentSceneState.globeAnchorPosition );
 
       }
 
@@ -1986,7 +2302,7 @@ export const demo2SceneDefinition = Object.freeze( {
       node.setAttribute( 'style', desktopPanel.root );
       node.appendChild( createStyledElement( 'p', desktopPanel.eyebrow, 'reVISit-XR Demo 2' ) );
       node.appendChild( createStyledElement( 'h2', desktopPanel.title, 'Migration Globe Baseline' ) );
-      node.appendChild( createStyledElement( 'p', desktopPanel.body, 'A local Afghanistan-centered migration globe with direct globe dragging, semantic provenance, reactive answers, and replay hydration.' ) );
+      node.appendChild( createStyledElement( 'p', desktopPanel.body, 'A local Afghanistan-centered migration globe with direct globe dragging, floor-handle repositioning, semantic provenance, reactive answers, and replay hydration.' ) );
       node.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Task' ) );
       desktopRefs.taskValue = createStyledElement( 'p', desktopPanel.detail, 'Loading Demo 2 task...' );
       node.appendChild( desktopRefs.taskValue );
@@ -2127,7 +2443,7 @@ export const demo2SceneDefinition = Object.freeze( {
       const visibleRouteLabel = `${currentSceneState.visibleFlowCount} ${currentSceneState.visibleFlowCount === 1 ? 'route' : 'routes'}`;
 
       panelTitle.setText?.( 'Demo 2 Migration Globe' );
-      panelBodyText.setText( 'Drag the globe to rotate.\nSelect a node to refocus, then choose a route.' );
+      panelBodyText.setText( getPanelBodyText() );
       panelMetaText.setText(
         isReady
           ? `${currentSceneState.geoYear} | ${compactMode} | ${compactThreshold} | ${visibleRouteLabel}`
@@ -2135,15 +2451,15 @@ export const demo2SceneDefinition = Object.freeze( {
       );
       panelSelectionText.setText(
         selectedFlow
-          ? `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 16 )}\nRoute ${truncateLabel( selectedFlow.destinationName, 16 )}`
-          : `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 16 )}\nNo route yet`,
+          ? `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 14 )}\nRoute ${truncateLabel( selectedFlow.destinationName, 14 )}`
+          : `Focus ${truncateLabel( focusedNode?.name || 'Afghanistan', 14 )}\nNo route yet`,
       );
       panelFooterText.setText(
         loadStatus === 'error'
-          ? `${loadError?.message || 'Missing local Demo 2 files.'}\nExpected files:\ndemo2Nodes.json, demo2Flows.csv,\nand world-atlas-countries-110m.json`
+          ? 'Local bundle missing.'
           : (
             currentSceneState.taskSubmitted
-              ? `Submitted answer:\n${getSelectedFlowAnswerLabel() || currentSceneState.taskAnswer}`
+              ? `Submitted:\n${getSelectedFlowAnswerLabel() || currentSceneState.taskAnswer}`
               : getDefaultStatusText()
           ),
       );
@@ -2188,6 +2504,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         clearHoverState();
         activeGlobeDrag = null;
+        activeGlobeMove = null;
 
       }
 
@@ -2231,6 +2548,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       syncDataDrivenScene();
       rememberGlobeYawAsLogged( currentSceneState.globeYawDeg );
+      rememberGlobeAnchorAsLogged( currentSceneState.globeAnchorPosition );
       syncAllUi();
 
     }

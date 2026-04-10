@@ -54,6 +54,13 @@ Demo 2 keeps globe orientation semantic and replay-safe:
 
 The drag interaction intentionally stays yaw-only in v1. Demo 2 does not record globe pitch, roll, or free quaternion motion.
 
+Demo 2 also adds a scene-local floor handle for ground-plane translation:
+
+- a vertical line now drops from the globe to a floor ring/disc anchor
+- the visible ring/disc is paired with four non-interactive arrow affordances
+- dragging the handle updates the globe anchor in `X/Z` only while keeping `Y` fixed
+- replay restores that anchor semantically instead of reenacting drag motion
+
 ## Semantic Replay State
 
 Demo 2 restores semantic geo state instead of replaying dense arc animation:
@@ -69,6 +76,7 @@ Demo 2 restores semantic geo state instead of replaying dense arc animation:
 - `labelsVisible`
 - `visibleFlowCount`
 - `globeYawDeg`
+- `globeAnchorPosition`
 - `taskAnswer`
 - `taskSubmitted`
 - `panelPosition`

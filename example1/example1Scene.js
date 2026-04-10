@@ -973,23 +973,37 @@ export const example1SceneDefinition = Object.freeze( {
     function updateStaticLabelEmphasis() {
 
       const activeDatum = getActiveDatum();
-      const passiveOpacity = activeDatum ? 0.22 : 1;
-      const focusedOpacity = activeDatum ? 0.58 : 1;
+      const passiveOpacity = activeDatum ? ( chart.tooltipPassiveLabelOpacity ?? 0.2 ) : 1;
+      const suppressedOpacity = activeDatum ? ( chart.tooltipSuppressedOpacity ?? 0.06 ) : 1;
+      const tooltipSuppressionRadius = chart.tooltipLabelSuppressionRadius ?? 0.28;
+      const tooltipAnchor = activeDatum ? tooltipSprite.sprite.position : null;
 
       countryLabelSprites.forEach( ( sprite, country ) => {
 
+        const shouldSuppress = Boolean(
+          activeDatum && (
+            activeDatum.country === country ||
+            ( tooltipAnchor && sprite.position.distanceTo( tooltipAnchor ) <= tooltipSuppressionRadius )
+          ),
+        );
         setSpriteOpacity(
           sprite,
-          activeDatum && activeDatum.country === country ? focusedOpacity : passiveOpacity,
+          shouldSuppress ? suppressedOpacity : passiveOpacity,
         );
 
       } );
 
       sourceLabelSprites.forEach( ( sprite, source ) => {
 
+        const shouldSuppress = Boolean(
+          activeDatum && (
+            activeDatum.source === source ||
+            ( tooltipAnchor && sprite.position.distanceTo( tooltipAnchor ) <= tooltipSuppressionRadius )
+          ),
+        );
         setSpriteOpacity(
           sprite,
-          activeDatum && activeDatum.source === source ? focusedOpacity : passiveOpacity,
+          shouldSuppress ? suppressedOpacity : passiveOpacity,
         );
 
       } );
@@ -1039,7 +1053,11 @@ export const example1SceneDefinition = Object.freeze( {
 
     }
 
-    function updateTooltipAndHighlight() {
+    function legacyTooltipSpriteSetText() {}
+
+    function updateTooltipAndHighlightLegacyUnused() {
+
+      return;
 
       const activeDatum = getActiveDatum();
 
@@ -1061,12 +1079,50 @@ export const example1SceneDefinition = Object.freeze( {
         chart.barDepth + chart.highlightPaddingZ,
       );
 
-      tooltipSprite.setText(
+      legacyTooltipSpriteSetText(
         `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
       );
-      tooltipSprite.setText(
+      legacyTooltipSpriteSetText(
         `${activeDatum.country}\n${activeDatum.source}\n${selectedYear} · ${formatValue( activeDatum.value, dataset.unit )}`,
       );
+      tooltipSprite.sprite.visible = true;
+      tooltipSprite.sprite.position.set(
+        activeDatum.x - Math.sign( activeDatum.x || 1 ) * 0.14,
+        chart.barBaseY + currentHeight + 0.38,
+        activeDatum.z - Math.sign( activeDatum.z || 1 ) * 0.14,
+      );
+      updateStaticLabelEmphasis();
+
+    }
+
+    function updateTooltipAndHighlight() {
+
+      const activeDatum = getActiveDatum();
+
+      if ( ! activeDatum ) {
+
+        highlightMesh.visible = false;
+        tooltipSprite.sprite.visible = false;
+        updateStaticLabelEmphasis();
+        return;
+
+      }
+
+      const currentHeight = currentHeights[ activeDatum.instanceIndex ] ?? 0.01;
+      const tooltipValueText = [
+        activeDatum.country,
+        activeDatum.source,
+        `${selectedYear} \u8def ${formatValue( activeDatum.value, dataset.unit )}`,
+      ].join( '\n' );
+      highlightMesh.visible = true;
+      highlightMesh.position.set( activeDatum.x, chart.barBaseY + currentHeight * 0.5, activeDatum.z );
+      highlightMesh.scale.set(
+        chart.barWidth + chart.highlightPaddingX,
+        currentHeight + chart.highlightPaddingY,
+        chart.barDepth + chart.highlightPaddingZ,
+      );
+
+      tooltipSprite.setText( tooltipValueText );
       tooltipSprite.sprite.visible = true;
       tooltipSprite.sprite.position.set(
         activeDatum.x - Math.sign( activeDatum.x || 1 ) * 0.14,

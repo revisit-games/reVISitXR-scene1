@@ -46,6 +46,7 @@ export const demo2LoggingConfig = Object.freeze( {
     flushOnResetFilters: true,
     flushOnTaskSubmit: true,
     flushOnGlobeDragEnd: true,
+    flushOnGlobeMoveEnd: true,
     flushOnPanelDragEnd: true,
   } ),
   demo2: Object.freeze( {
@@ -58,6 +59,7 @@ export const demo2LoggingConfig = Object.freeze( {
       focusCountry: 'Focus Demo 2 Country',
       selection: 'Select Demo 2 Flow',
       rotateGlobe: 'Rotate Demo 2 Globe',
+      moveGlobe: 'Move Demo 2 Globe',
       resetView: 'Reset Demo 2 View',
       resetFilters: 'Reset Demo 2 Filters',
       taskSubmit: 'Submit Demo 2 Task',

@@ -53,6 +53,9 @@ export const example1VisualConfig = Object.freeze( {
     highlightPaddingX: 0.05,
     highlightPaddingY: 0.07,
     highlightPaddingZ: 0.05,
+    tooltipLabelSuppressionRadius: 0.28,
+    tooltipSuppressedOpacity: 0.06,
+    tooltipPassiveLabelOpacity: 0.2,
   } ),
   xrPanel: Object.freeze( {
     width: 0.98,

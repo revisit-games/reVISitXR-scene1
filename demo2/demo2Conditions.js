@@ -12,6 +12,7 @@ export const DEMO2_DEFAULT_THRESHOLD = 50000;
 export const DEMO2_DEFAULT_TASK_ID = 'afg-strongest-outbound';
 export const DEMO2_DEFAULT_FOCUSED_COUNTRY_ID = 'AFG';
 export const DEMO2_DEFAULT_GLOBE_YAW_DEG = - 35;
+export const DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION = Object.freeze( [ 0, 1.28, - 2.45 ] );
 export const DEMO2_GLOBE_YAW_STEP_DEG = 30;
 
 function isFiniteNumber( value ) {
@@ -128,6 +129,35 @@ export function normalizeDemo2PanelQuaternion( candidateValue, fallbackValue = n
 
 }
 
+export function normalizeDemo2GlobeAnchorPosition(
+  candidateValue,
+  fallbackValue = DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION,
+) {
+
+  const fallbackPosition = Array.isArray( fallbackValue ) &&
+    fallbackValue.length === 3 &&
+    fallbackValue.every( isFiniteNumber )
+    ? fallbackValue
+    : DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION;
+
+  if ( Array.isArray( candidateValue ) && candidateValue.length === 3 && candidateValue.every( isFiniteNumber ) ) {
+
+    return [
+      candidateValue[ 0 ],
+      DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION[ 1 ],
+      candidateValue[ 2 ],
+    ];
+
+  }
+
+  return [
+    fallbackPosition[ 0 ],
+    DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION[ 1 ],
+    fallbackPosition[ 2 ],
+  ];
+
+}
+
 export function parseDemo2Conditions( search = window.location.search, {
   supportedYears = null,
   defaultYear = DEMO2_DEFAULT_YEAR,
@@ -154,6 +184,7 @@ export function parseDemo2Conditions( search = window.location.search, {
     labelsVisible: searchParams.get( 'labels' ) !== '0',
     visibleFlowCount: 0,
     globeYawDeg: normalizeAngleDegrees( parsedYaw, DEMO2_DEFAULT_GLOBE_YAW_DEG ),
+    globeAnchorPosition: normalizeDemo2GlobeAnchorPosition( null, DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION ),
     taskAnswer: null,
     taskSubmitted: false,
     panelPosition: null,
@@ -205,6 +236,10 @@ export function normalizeDemo2SceneState( candidateState, fallbackState = null, 
       ? Math.max( 0, Math.round( candidateState.visibleFlowCount ) )
       : ( isFiniteNumber( fallback.visibleFlowCount ) ? Math.max( 0, Math.round( fallback.visibleFlowCount ) ) : 0 ),
     globeYawDeg: normalizeAngleDegrees( candidateState?.globeYawDeg, normalizeAngleDegrees( fallback.globeYawDeg, DEMO2_DEFAULT_GLOBE_YAW_DEG ) ),
+    globeAnchorPosition: normalizeDemo2GlobeAnchorPosition(
+      candidateState?.globeAnchorPosition,
+      normalizeDemo2GlobeAnchorPosition( fallback.globeAnchorPosition, DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION ),
+    ),
     taskAnswer: typeof candidateState?.taskAnswer === 'string' && candidateState.taskAnswer.trim().length > 0
       ? candidateState.taskAnswer.trim()
       : ( typeof fallback.taskAnswer === 'string' && fallback.taskAnswer.trim().length > 0 ? fallback.taskAnswer.trim() : null ),
