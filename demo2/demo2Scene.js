@@ -518,40 +518,6 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function compareDemo2NodeCandidates( candidateA, candidateB ) {
-
-      const missA = isFiniteNumber( candidateA?.rayMissDistance ) ? candidateA.rayMissDistance : Number.POSITIVE_INFINITY;
-      const missB = isFiniteNumber( candidateB?.rayMissDistance ) ? candidateB.rayMissDistance : Number.POSITIVE_INFINITY;
-
-      if ( Math.abs( missA - missB ) > 1e-6 ) {
-
-        return missA - missB;
-
-      }
-
-      const distanceA = isFiniteNumber( candidateA?.distance ) ? candidateA.distance : Number.POSITIVE_INFINITY;
-      const distanceB = isFiniteNumber( candidateB?.distance ) ? candidateB.distance : Number.POSITIVE_INFINITY;
-
-      return distanceA - distanceB;
-
-    }
-
-    function findBestDemo2NodeCandidate( candidates ) {
-
-      const nodeCandidates = candidates
-        .filter( ( candidate ) => candidate.role === demo2RaycastRoles.NODE );
-
-      if ( nodeCandidates.length === 0 ) {
-
-        return null;
-
-      }
-
-      nodeCandidates.sort( compareDemo2NodeCandidates );
-      return nodeCandidates[ 0 ] || null;
-
-    }
-
     function formatResolverCandidateSummary( candidate ) {
 
       if ( ! candidate ) {
@@ -569,11 +535,43 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function buildDemo2ResolverResult( {
+      resolvedHit = null,
+      firstCandidate = null,
+      candidateRecords = [],
+      clusterRecords = [],
+      overrideReason = 'preserve-first-hit',
+    } = {} ) {
+
+      const resolvedCandidate = candidateRecords.find( ( candidate ) => candidate.hit === resolvedHit )
+        || clusterRecords.find( ( candidate ) => candidate.hit === resolvedHit )
+        || null;
+      const didOverride = Boolean(
+        firstCandidate?.hit
+        && resolvedCandidate?.hit
+        && firstCandidate.hit !== resolvedCandidate.hit
+      );
+
+      return {
+        resolvedHit,
+        resolvedCandidate,
+        firstCandidate,
+        candidateRecords,
+        clusterRecords,
+        didOverride,
+        overrideReason,
+      };
+
+    }
+
     function updateDemo2ResolverDebugState( resolverContext, {
       firstCandidate = null,
+      resolvedHit = null,
       resolvedCandidate = null,
       candidateRecords = [],
       clusterRecords = [],
+      didOverride = false,
+      overrideReason = 'preserve-first-hit',
     } = {} ) {
 
       if ( ! debugRayEnabled ) {
@@ -591,6 +589,11 @@ export const demo2SceneDefinition = Object.freeze( {
         resolvedHitSummary: formatResolverCandidateSummary( resolvedCandidate ),
         candidateSummaries: candidateRecords.slice( 0, limit ).map( formatResolverCandidateSummary ),
         clusterSummaries: clusterRecords.slice( 0, limit ).map( formatResolverCandidateSummary ),
+        didOverride,
+        overrideReason,
+        overrideFromSummary: didOverride ? formatResolverCandidateSummary( firstCandidate ) : null,
+        overrideToSummary: didOverride ? formatResolverCandidateSummary( resolvedCandidate ) : null,
+        resolvedHitObject: resolvedHit?.object ?? null,
       };
 
     }
@@ -601,12 +604,13 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( ! firstHit ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: null,
           firstCandidate: null,
           candidateRecords: [],
           clusterRecords: [],
-        };
+          overrideReason: 'no-hit',
+        } );
 
       }
 
@@ -620,12 +624,13 @@ export const demo2SceneDefinition = Object.freeze( {
         && firstRole !== demo2RaycastRoles.GLOBE_SHELL
       ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: firstHit,
           firstCandidate,
           candidateRecords,
           clusterRecords: [ firstCandidate ],
-        };
+          overrideReason: 'preserve-non-geo',
+        } );
 
       }
 
@@ -635,12 +640,13 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( nearestNodeHit ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: nearestNodeHit,
           firstCandidate,
           candidateRecords,
           clusterRecords,
-        };
+          overrideReason: firstCandidate?.hit === nearestNodeHit ? 'preserve-first-node' : 'desktop-front-cluster-node',
+        } );
 
       }
 
@@ -648,21 +654,23 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( nearestFlowHit ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: nearestFlowHit,
           firstCandidate,
           candidateRecords,
           clusterRecords,
-        };
+          overrideReason: firstCandidate?.hit === nearestFlowHit ? 'preserve-first-flow' : 'desktop-front-cluster-flow',
+        } );
 
       }
 
-      return {
+      return buildDemo2ResolverResult( {
         resolvedHit: firstHit,
         firstCandidate,
         candidateRecords,
         clusterRecords,
-      };
+        overrideReason: firstRole === demo2RaycastRoles.GLOBE_SHELL ? 'desktop-shell-blank-surface' : 'preserve-first-hit',
+      } );
 
     }
 
@@ -672,12 +680,13 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( ! firstHit ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: null,
           firstCandidate: null,
           candidateRecords: [],
           clusterRecords: [],
-        };
+          overrideReason: 'no-hit',
+        } );
 
       }
 
@@ -687,12 +696,13 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( firstRole === demo2RaycastRoles.GLOBE_HANDLE ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: firstHit,
           firstCandidate,
           candidateRecords,
           clusterRecords: [ firstCandidate ],
-        };
+          overrideReason: 'preserve-handle',
+        } );
 
       }
 
@@ -702,12 +712,13 @@ export const demo2SceneDefinition = Object.freeze( {
         && firstRole !== demo2RaycastRoles.GLOBE_SHELL
       ) {
 
-        return {
+        return buildDemo2ResolverResult( {
           resolvedHit: firstHit,
           firstCandidate,
           candidateRecords,
           clusterRecords: [ firstCandidate ],
-        };
+          overrideReason: 'preserve-non-geo',
+        } );
 
       }
 
@@ -716,58 +727,51 @@ export const demo2SceneDefinition = Object.freeze( {
         globe.xrFrontHitClusterDistance || globe.frontHitClusterDistance,
       );
       const clusterRecords = clusterHits.map( ( hit ) => buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) );
-      const bestNodeCandidate = findBestDemo2NodeCandidate( clusterRecords );
-      const nearestFlowCandidate = clusterRecords.find( ( candidate ) => candidate.role === demo2RaycastRoles.FLOW ) || null;
-      const qualifiesForNodeAssist = Boolean(
-        bestNodeCandidate
-        && isFiniteNumber( bestNodeCandidate.rayMissDistance )
-        && bestNodeCandidate.rayMissDistance <= globe.xrNodeAimAssistRadius
-        && ( bestNodeCandidate.distance - firstHit.distance ) <= globe.xrNodeAssistDistanceSlack
-      );
+      const firstNonShellCandidate = clusterRecords.find( ( candidate ) => candidate.role !== demo2RaycastRoles.GLOBE_SHELL ) || null;
 
-      if ( firstRole === demo2RaycastRoles.NODE && bestNodeCandidate?.hit ) {
+      if ( firstRole === demo2RaycastRoles.NODE ) {
 
-        return {
-          resolvedHit: bestNodeCandidate.hit,
+        return buildDemo2ResolverResult( {
+          resolvedHit: firstHit,
           firstCandidate,
           candidateRecords,
           clusterRecords,
-        };
+          overrideReason: 'preserve-first-node',
+        } );
 
       }
 
-      if (
-        ( firstRole === demo2RaycastRoles.FLOW || firstRole === demo2RaycastRoles.GLOBE_SHELL )
-        && qualifiesForNodeAssist
-        && bestNodeCandidate?.hit
-      ) {
+      if ( firstRole === demo2RaycastRoles.FLOW ) {
 
-        return {
-          resolvedHit: bestNodeCandidate.hit,
+        return buildDemo2ResolverResult( {
+          resolvedHit: firstHit,
           firstCandidate,
           candidateRecords,
           clusterRecords,
-        };
+          overrideReason: 'preserve-first-flow',
+        } );
 
       }
 
-      if ( nearestFlowCandidate?.hit ) {
+      if ( firstNonShellCandidate?.hit ) {
 
-        return {
-          resolvedHit: nearestFlowCandidate.hit,
+        return buildDemo2ResolverResult( {
+          resolvedHit: firstNonShellCandidate.hit,
           firstCandidate,
           candidateRecords,
           clusterRecords,
-        };
+          overrideReason: 'shell-assist-first-non-shell',
+        } );
 
       }
 
-      return {
+      return buildDemo2ResolverResult( {
         resolvedHit: firstHit,
         firstCandidate,
         candidateRecords,
         clusterRecords,
-      };
+        overrideReason: 'shell-blank-surface',
+      } );
 
     }
 
@@ -1865,11 +1869,19 @@ export const demo2SceneDefinition = Object.freeze( {
       const clusterSummary = hasLiveSceneDebug && lastResolverDebug?.clusterSummaries?.length
         ? lastResolverDebug.clusterSummaries.join( ' | ' )
         : 'none';
+      const overrideSummary = ! hasLiveSceneDebug
+        ? 'override none'
+        : (
+          lastResolverDebug?.didOverride
+            ? `override yes: ${lastResolverDebug.overrideFromSummary || 'none'} -> ${lastResolverDebug.overrideToSummary || 'none'} | ${lastResolverDebug.overrideReason || 'unknown'}`
+            : `override no | ${lastResolverDebug?.overrideReason || 'preserve-first-hit'}`
+        );
 
       return [
         `Debug ${headerBits.join( ' | ' )}`,
         `raw ${hasLiveSceneDebug ? ( lastResolverDebug?.rawFirstHitSummary || formatDebugHitSummary( debugState?.rawFirstSceneHit ) ) : 'none'}`,
         `resolved ${hasLiveSceneDebug ? ( lastResolverDebug?.resolvedHitSummary || formatDebugHitSummary( debugState?.resolvedSceneHit ) ) : 'none'}`,
+        overrideSummary,
         `top ${candidateSummary}`,
         `cluster ${clusterSummary}`,
         `hover N:${currentHoveredNodeId || '-'} F:${currentHoveredFlowId || '-'}`,
