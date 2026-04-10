@@ -404,6 +404,43 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function collectDemo2FrontHitCluster( sceneIntersections ) {
+
+      const firstHit = sceneIntersections?.[ 0 ] ?? null;
+
+      if ( ! firstHit ) {
+
+        return [];
+
+      }
+
+      const maxDistanceDelta = Math.max( 0, globe.frontHitClusterDistance || 0 );
+      const cluster = [ firstHit ];
+
+      for ( let index = 1; index < sceneIntersections.length; index += 1 ) {
+
+        const hit = sceneIntersections[ index ];
+
+        if ( ( hit.distance - firstHit.distance ) > maxDistanceDelta ) {
+
+          break;
+
+        }
+
+        cluster.push( hit );
+
+      }
+
+      return cluster;
+
+    }
+
+    function findNearestDemo2HitByRole( hits, role ) {
+
+      return hits.find( ( hit ) => resolveDemo2RaycastRole( hit ) === role ) || null;
+
+    }
+
     function resolveDemo2RaycastIntersection( sceneIntersections ) {
 
       const firstHit = sceneIntersections?.[ 0 ] ?? null;
@@ -416,31 +453,30 @@ export const demo2SceneDefinition = Object.freeze( {
 
       const firstRole = resolveDemo2RaycastRole( firstHit );
 
-      if ( firstRole !== demo2RaycastRoles.GLOBE_SHELL ) {
+      if (
+        firstRole !== demo2RaycastRoles.NODE
+        && firstRole !== demo2RaycastRoles.FLOW
+        && firstRole !== demo2RaycastRoles.GLOBE_SHELL
+      ) {
 
         return firstHit;
 
       }
 
-      const shellOverrideDistance = Math.max( 0, globe.shellHitOverrideDistance || 0 );
+      const frontCluster = collectDemo2FrontHitCluster( sceneIntersections );
+      const nearestNodeHit = findNearestDemo2HitByRole( frontCluster, demo2RaycastRoles.NODE );
 
-      for ( let index = 1; index < sceneIntersections.length; index += 1 ) {
+      if ( nearestNodeHit ) {
 
-        const hit = sceneIntersections[ index ];
+        return nearestNodeHit;
 
-        if ( ( hit.distance - firstHit.distance ) > shellOverrideDistance ) {
+      }
 
-          break;
+      const nearestFlowHit = findNearestDemo2HitByRole( frontCluster, demo2RaycastRoles.FLOW );
 
-        }
+      if ( nearestFlowHit ) {
 
-        const role = resolveDemo2RaycastRole( hit );
-
-        if ( role === demo2RaycastRoles.NODE || role === demo2RaycastRoles.FLOW ) {
-
-          return hit;
-
-        }
+        return nearestFlowHit;
 
       }
 
@@ -1893,6 +1929,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         entry.currentRadius = globe.nodeBaseRadius * radiusScale;
         entry.mesh.scale.setScalar( radiusScale );
+        entry.hitProxy.scale.setScalar( radiusScale );
         entry.mesh.material.color.setHex( resolveNodeColorHex( node ) );
         entry.mesh.material.emissive.setHex(
           node.id === hoveredNodeId
@@ -2219,7 +2256,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
           const surfacePosition = latLonToVector3( node.lat, node.lon, globe.radius + globe.nodeLift );
           const labelPosition = surfacePosition.clone().normalize().multiplyScalar( globe.radius + globe.nodeLift + globe.labelLift );
-          const mesh = createInteractiveTrackedMesh(
+          const mesh = createTrackedMesh(
             staticObjects,
             globeNodeRoot,
             new THREE.SphereGeometry( globe.nodeBaseRadius, 18, 18 ),
@@ -2228,6 +2265,19 @@ export const demo2SceneDefinition = Object.freeze( {
               emissive: globe.nodeEmissive,
               roughness: 0.38,
               metalness: 0.06,
+            } ),
+          );
+          mesh.position.copy( surfacePosition );
+          const hitProxy = createInteractiveTrackedMesh(
+            staticObjects,
+            globeNodeRoot,
+            new THREE.SphereGeometry( globe.nodeHitProxyRadius, 18, 18 ),
+            new THREE.MeshBasicMaterial( {
+              color: 0xffffff,
+              transparent: true,
+              opacity: 0,
+              depthWrite: false,
+              toneMapped: false,
             } ),
             {
               onHoverChange( payload ) {
@@ -2251,8 +2301,8 @@ export const demo2SceneDefinition = Object.freeze( {
               },
             },
           );
-          setDemo2RaycastRole( mesh, demo2RaycastRoles.NODE );
-          mesh.position.copy( surfacePosition );
+          setDemo2RaycastRole( hitProxy, demo2RaycastRoles.NODE );
+          hitProxy.position.copy( surfacePosition );
           const label = createTrackedTextSprite(
             staticObjects,
             globeLabelRoot,
@@ -2262,6 +2312,7 @@ export const demo2SceneDefinition = Object.freeze( {
           nodeEntriesById.set( node.id, {
             node,
             mesh,
+            hitProxy,
             label,
             currentRadius: globe.nodeBaseRadius,
           } );
