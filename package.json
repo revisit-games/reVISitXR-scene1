@@ -2,7 +2,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "demo2:build-data": "node demo2/scripts/buildDemo2Dataset.mjs"
   },
   "dependencies": {
     "@trrack/core": "^1.4.0",

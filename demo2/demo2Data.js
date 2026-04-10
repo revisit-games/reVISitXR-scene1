@@ -212,6 +212,7 @@ export async function loadDemo2Dataset() {
 
     const supportedYears = [ ...new Set( flowList.map( ( flow ) => flow.year ) ) ].sort( ( valueA, valueB ) => valueA - valueB );
     const flowListByYear = new Map();
+    const flowById = new Map( flowList.map( ( flow ) => [ flow.flowId, flow ] ) );
 
     supportedYears.forEach( ( year ) => {
 
@@ -240,6 +241,7 @@ export async function loadDemo2Dataset() {
       nodeList: Object.freeze( nodeList ),
       nodeById,
       flowList: Object.freeze( flowList ),
+      flowById,
       flowListByYear,
       supportedYears: Object.freeze( supportedYears ),
       stockDomainByYear,

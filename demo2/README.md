@@ -25,7 +25,7 @@ Future demos should follow this scene-local pattern instead of pushing authored 
 
 Demo 2 uses only local files that ship with Repo A:
 
-- curated runtime files:
+- generated runtime files:
   - `demo2/data/demo2Nodes.json`
   - `demo2/data/demo2Flows.csv`
   - `demo2/data/geo/world-atlas-countries-110m.json`
@@ -33,13 +33,56 @@ Demo 2 uses only local files that ship with Repo A:
   - `demo2/data/raw/owid-migration-flows-export.csv`
   - `demo2/data/raw/owid-migrant-stock-total.csv`
   - `demo2/data/raw/owid-migrant-stock-total.metadata.json`
+- scene-local generation inputs:
+  - `demo2/config/demo2DatasetSelectionConfig.mjs`
+  - `demo2/config/demo2CountryMetadata.mjs`
+  - `demo2/scripts/buildDemo2Dataset.mjs`
 
-The current curated baseline is intentionally Afghanistan-centered because the provided OWID flow export is an Afghanistan outbound migration table rather than a full global OD matrix. The runtime data contract still stays generalized:
+The current generated baseline is intentionally Afghanistan-centered because the provided OWID flow export is an Afghanistan outbound migration table rather than a full global OD matrix. The runtime data contract still stays generalized:
 
 - nodes: `id`, `name`, `lat`, `lon`, `region`, `stockByYear`
 - flows: `flowId`, `year`, `originId`, `destinationId`, `value`
 
 That keeps Demo 2 extensible for broader OD datasets later without redesigning the scene architecture.
+
+## Rebuild Workflow
+
+Demo 2 runtime data should be regenerated from raw files rather than edited by hand:
+
+```bash
+npm run demo2:build-data
+```
+
+The generator:
+
+- reads the two OWID raw source files
+- filters to 3-letter country rows
+- keeps only the configured `AFG -> destination` outbound routes
+- keeps only the configured years
+- joins in scene-local country metadata because the OWID exports do not include globe coordinates
+- rewrites `demo2/data/demo2Nodes.json` and `demo2/data/demo2Flows.csv`
+
+Default selection lives in `demo2/config/demo2DatasetSelectionConfig.mjs`:
+
+- `originId`
+- `supportedYears`
+- `requiredDestinationIds`
+- `preferredDestinationIds`
+- `maxDestinationCount`
+- `minAngularSeparationDeg`
+
+The default XR-safe destination set is:
+
+- `IRN`
+- `PAK`
+- `IND`
+- `DEU`
+- `GBR`
+- `USA`
+- `CAN`
+- `AUS`
+
+Country metadata used to place nodes on the globe lives in `demo2/config/demo2CountryMetadata.mjs`.
 
 The local globe boundary asset is derived from `world-atlas` `countries-110m.json`, which in turn is built from Natural Earth public-domain data. Demo 2 loads that file through `demo2Data.js` and renders scene-local country outline linework without any runtime network fetch.
 
@@ -60,6 +103,29 @@ Demo 2 also adds a scene-local floor handle for ground-plane translation:
 - the visible ring/disc is paired with four non-interactive arrow affordances
 - dragging the handle updates the globe anchor in `X/Z` only while keeping `Y` fixed
 - replay restores that anchor semantically instead of reenacting drag motion
+
+## Interaction Geometry
+
+Demo 2 now separates visible geometry from interaction geometry:
+
+- visible country nodes remain small spheres
+- node interaction uses larger invisible hit proxies
+- visible flow arcs remain full globe-spanning tubes
+- flow interaction uses separate invisible trimmed mid-arc proxies so route picking happens away from crowded node endpoints
+- the globe shell is reserved for blank-surface dragging
+- the floor handle remains a direct translation target
+
+Most XR-safe interaction sizing now lives in `demo2/demo2VisualConfig.js`, including:
+
+- `nodeHitProxyRadius`
+- `flowProxyTrimStart`
+- `flowProxyTrimEnd`
+- `flowProxyRadiusFactor`
+- `flowProxyMinRadius`
+- `xrFrontHitClusterDistance`
+- `xrShellAssistMaxContactDistance`
+
+This keeps the paper-facing Demo 2 scene customizable without pushing scene-specific heuristics into `main.js`.
 
 ## Semantic Replay State
 
