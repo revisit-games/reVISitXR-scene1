@@ -6,6 +6,7 @@ export const demo2VisualConfig = Object.freeze( {
     rootPosition: DEMO2_DEFAULT_GLOBE_ANCHOR_POSITION,
     radius: 0.62,
     interactionRadius: 0.635,
+    shellHitOverrideDistance: 0.02,
     handleFloorY: 0.035,
     handleLineRadius: 0.01,
     handleRingRadius: 0.17,

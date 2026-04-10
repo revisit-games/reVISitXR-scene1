@@ -277,7 +277,6 @@ export const demo2SceneDefinition = Object.freeze( {
       GLOBE_SHELL: 'globe-shell',
       GLOBE_HANDLE: 'globe-handle',
     } );
-    const demo2GlobeRaycastRoles = new Set( Object.values( demo2RaycastRoles ) );
     const defaultGlobeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
       globe.anchorDefaultPosition || globe.rootPosition,
     );
@@ -416,26 +415,36 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       const firstRole = resolveDemo2RaycastRole( firstHit );
-      const shouldResolveGlobeTargetPriority =
-        firstRole === demo2RaycastRoles.NODE
-        || firstRole === demo2RaycastRoles.FLOW
-        || firstRole === demo2RaycastRoles.GLOBE_SHELL;
 
-      if ( ! shouldResolveGlobeTargetPriority ) {
+      if ( firstRole !== demo2RaycastRoles.GLOBE_SHELL ) {
 
         return firstHit;
 
       }
 
-      return sceneIntersections.find( ( hit ) => resolveDemo2RaycastRole( hit ) === demo2RaycastRoles.NODE )
-        || sceneIntersections.find( ( hit ) => resolveDemo2RaycastRole( hit ) === demo2RaycastRoles.FLOW )
-        || sceneIntersections.find( ( hit ) => {
+      const shellOverrideDistance = Math.max( 0, globe.shellHitOverrideDistance || 0 );
 
-          const role = resolveDemo2RaycastRole( hit );
-          return demo2GlobeRaycastRoles.has( role ) && role !== demo2RaycastRoles.GLOBE_SHELL;
+      for ( let index = 1; index < sceneIntersections.length; index += 1 ) {
 
-        } )
-        || firstHit;
+        const hit = sceneIntersections[ index ];
+
+        if ( ( hit.distance - firstHit.distance ) > shellOverrideDistance ) {
+
+          break;
+
+        }
+
+        const role = resolveDemo2RaycastRole( hit );
+
+        if ( role === demo2RaycastRoles.NODE || role === demo2RaycastRoles.FLOW ) {
+
+          return hit;
+
+        }
+
+      }
+
+      return firstHit;
 
     }
 
