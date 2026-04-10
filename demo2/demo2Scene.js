@@ -311,8 +311,8 @@ export const demo2SceneDefinition = Object.freeze( {
     let currentLocalTargetRecord = null;
     let currentLocalTargetSource = null;
     let currentTooltipTargetRecord = null;
-    let activeTooltipSourceLabel = 'semantic';
-    let activeTooltipOwnership = 'semantic';
+    let activeTooltipSourceLabel = 'semantic-baseline';
+    let activeTooltipOwnership = 'semantic-baseline';
     let activeTooltipFallbackReason = null;
     let selectedNodeSource = null;
     let selectedFlowSource = null;
@@ -1956,7 +1956,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function setLocalTargetRecordForSource( source, targetRecord, {
       sequence = null,
-      sourceMode = 'direct',
+      ownerType = 'hover-event',
     } = {} ) {
 
       const normalizedSource = resolveSelectionSource( source );
@@ -1977,11 +1977,11 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( previousEntry?.targetId === targetRecord.targetId ) {
 
-        if ( previousEntry.sourceMode !== sourceMode ) {
+        if ( previousEntry.ownerType !== ownerType ) {
 
           localTargetBySource.set( normalizedSource, {
             ...previousEntry,
-            sourceMode,
+            ownerType,
           } );
 
         }
@@ -1996,7 +1996,7 @@ export const demo2SceneDefinition = Object.freeze( {
         kind: targetRecord.kind,
         id: targetRecord.id,
         sequence: Number.isInteger( sequence ) ? sequence : nextInteractionSequence(),
-        sourceMode,
+        ownerType,
       } );
 
       return true;
@@ -2047,6 +2047,138 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function resolveLocalTooltipOwnership( localEntry ) {
+
+      return localEntry?.ownerType === 'sceneSelection'
+        ? 'local-selection'
+        : 'local-hover';
+
+    }
+
+    function resolveSemanticTooltipTargetState( {
+      isImmersive = false,
+      isReplaySemantic = false,
+    } = {} ) {
+
+      if ( isReplaySemantic ) {
+
+        if ( currentSceneState.selectedFlowId ) {
+
+          return {
+            targetRecord: targetRecordsById.get( buildDemo2TargetId( 'flow', currentSceneState.selectedFlowId ) ) || null,
+            ownership: 'replay-semantic',
+            sourceLabel: 'replay-scene',
+            fallbackReason: `selectedFlowId=${currentSceneState.selectedFlowId}`,
+          };
+
+        }
+
+        if ( currentSceneState.selectedNodeId ) {
+
+          return {
+            targetRecord: targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.selectedNodeId ) ) || null,
+            ownership: 'replay-semantic',
+            sourceLabel: 'replay-scene',
+            fallbackReason: `selectedNodeId=${currentSceneState.selectedNodeId}`,
+          };
+
+        }
+
+        if ( currentSceneState.focusedCountryId ) {
+
+          return {
+            targetRecord: targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.focusedCountryId ) ) || null,
+            ownership: 'replay-semantic',
+            sourceLabel: 'replay-scene',
+            fallbackReason: `focusedCountryId=${currentSceneState.focusedCountryId}`,
+          };
+
+        }
+
+        return {
+          targetRecord: null,
+          ownership: 'replay-semantic',
+          sourceLabel: 'replay-scene',
+          fallbackReason: 'none',
+        };
+
+      }
+
+      if ( isImmersive ) {
+
+        if ( currentSceneState.selectedNodeId ) {
+
+          return {
+            targetRecord: targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.selectedNodeId ) ) || null,
+            ownership: 'semantic-baseline',
+            sourceLabel: 'semantic-baseline',
+            fallbackReason: `selectedNodeId=${currentSceneState.selectedNodeId}`,
+          };
+
+        }
+
+        if ( currentSceneState.focusedCountryId ) {
+
+          return {
+            targetRecord: targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.focusedCountryId ) ) || null,
+            ownership: 'semantic-baseline',
+            sourceLabel: 'semantic-baseline',
+            fallbackReason: `focusedCountryId=${currentSceneState.focusedCountryId}`,
+          };
+
+        }
+
+        return {
+          targetRecord: null,
+          ownership: 'semantic-baseline',
+          sourceLabel: 'semantic-baseline',
+          fallbackReason: 'none',
+        };
+
+      }
+
+      if ( currentSceneState.selectedFlowId ) {
+
+        return {
+          targetRecord: targetRecordsById.get( buildDemo2TargetId( 'flow', currentSceneState.selectedFlowId ) ) || null,
+          ownership: 'semantic-baseline',
+          sourceLabel: 'semantic-baseline',
+          fallbackReason: `selectedFlowId=${currentSceneState.selectedFlowId}`,
+        };
+
+      }
+
+      if ( currentSceneState.selectedNodeId ) {
+
+        return {
+          targetRecord: targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.selectedNodeId ) ) || null,
+          ownership: 'semantic-baseline',
+          sourceLabel: 'semantic-baseline',
+          fallbackReason: `selectedNodeId=${currentSceneState.selectedNodeId}`,
+        };
+
+      }
+
+      if ( currentSceneState.focusedCountryId ) {
+
+        return {
+          targetRecord: targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.focusedCountryId ) ) || null,
+          ownership: 'semantic-baseline',
+          sourceLabel: 'semantic-baseline',
+          fallbackReason: `focusedCountryId=${currentSceneState.focusedCountryId}`,
+        };
+
+      }
+
+      return {
+        targetRecord: null,
+        ownership: 'semantic-baseline',
+        sourceLabel: 'semantic-baseline',
+        fallbackReason: 'none',
+      };
+
+    }
+
     function resolveHoverState() {
 
       const presentationMode = context.getPresentationMode?.();
@@ -2057,7 +2189,7 @@ export const demo2SceneDefinition = Object.freeze( {
         : INTERACTORS.DESKTOP_POINTER;
       const activeLocalEntry = activeSource ? localTargetBySource.get( activeSource ) : null;
 
-      currentLocalTargetSource = activeSource || null;
+      currentLocalTargetSource = activeLocalEntry ? activeSource : null;
       currentLocalTargetRecord = activeLocalEntry?.targetId
         ? ( targetRecordsById.get( activeLocalEntry.targetId ) || null )
         : null;
@@ -2067,37 +2199,23 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( currentLocalTargetRecord ) {
 
         currentTooltipTargetRecord = currentLocalTargetRecord;
-        activeTooltipOwnership = 'local';
-        activeTooltipSourceLabel = currentLocalTargetSource || 'local';
+        activeTooltipOwnership = resolveLocalTooltipOwnership( activeLocalEntry );
+        activeTooltipSourceLabel = activeTooltipOwnership === 'local-selection'
+          ? `${currentLocalTargetSource || 'local'}:selection`
+          : `${currentLocalTargetSource || 'local'}:hover`;
         activeTooltipFallbackReason = null;
         return;
 
       }
 
-      if ( currentSceneState.selectedFlowId ) {
-
-        currentTooltipTargetRecord = targetRecordsById.get( buildDemo2TargetId( 'flow', currentSceneState.selectedFlowId ) ) || null;
-        activeTooltipFallbackReason = `selectedFlowId=${currentSceneState.selectedFlowId}`;
-
-      } else if ( currentSceneState.selectedNodeId ) {
-
-        currentTooltipTargetRecord = targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.selectedNodeId ) ) || null;
-        activeTooltipFallbackReason = `selectedNodeId=${currentSceneState.selectedNodeId}`;
-
-      } else if ( currentSceneState.focusedCountryId ) {
-
-        currentTooltipTargetRecord = targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.focusedCountryId ) ) || null;
-        activeTooltipFallbackReason = `focusedCountryId=${currentSceneState.focusedCountryId}`;
-
-      } else {
-
-        currentTooltipTargetRecord = null;
-        activeTooltipFallbackReason = 'none';
-
-      }
-
-      activeTooltipOwnership = xrReplayHoverLockActive ? 'replay' : 'semantic';
-      activeTooltipSourceLabel = xrReplayHoverLockActive ? 'replay-scene' : 'semantic-scene';
+      const semanticTooltipState = resolveSemanticTooltipTargetState( {
+        isImmersive,
+        isReplaySemantic: xrReplayHoverLockActive,
+      } );
+      currentTooltipTargetRecord = semanticTooltipState.targetRecord;
+      activeTooltipOwnership = semanticTooltipState.ownership;
+      activeTooltipSourceLabel = semanticTooltipState.sourceLabel;
+      activeTooltipFallbackReason = semanticTooltipState.fallbackReason;
 
     }
 
@@ -2136,7 +2254,7 @@ export const demo2SceneDefinition = Object.freeze( {
         if ( targetRecord?.targetId ) {
 
           setLocalTargetRecordForSource( normalizedSource, targetRecord, {
-            sourceMode: 'hover-event',
+            ownerType: 'hover-event',
           } );
 
         }
@@ -2249,7 +2367,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         const didSourceChange = nextTargetRecord
           ? setLocalTargetRecordForSource( source, nextTargetRecord, {
-            sourceMode: nextSourceMode,
+            ownerType: nextSourceMode,
           } )
           : clearHoverEntriesForSource( source );
 
@@ -2321,7 +2439,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         }
 
-        return `${source}:${entry.targetId}#${entry.sequence ?? '-'}(${entry.sourceMode || 'direct'})`;
+        return `${source}:${entry.targetId}#${entry.sequence ?? '-'}(${entry.ownerType || 'hover-event'})`;
 
       } );
 
@@ -3222,14 +3340,14 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( currentTooltipTargetRecord?.buildTooltipText && currentTooltipTargetRecord?.getAnchor ) {
 
-        const isSemanticTooltip = currentLocalTargetRecord === null;
+        const isSelectedTooltip = activeTooltipOwnership !== 'local-hover';
         tooltipState.visible = true;
         tooltipState.text = currentTooltipTargetRecord.buildTooltipText( {
-          selected: isSemanticTooltip,
+          selected: isSelectedTooltip,
           sceneState: currentSceneState,
         } );
         currentTooltipTargetRecord.getAnchor( tooltipState.anchor, {
-          selected: isSemanticTooltip,
+          selected: isSelectedTooltip,
           sceneState: currentSceneState,
         } );
         tooltipState.suppressedNodeId = currentTooltipTargetRecord.kind === 'node'
