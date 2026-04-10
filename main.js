@@ -161,6 +161,7 @@ const desktopState = {
   dragOffset: new THREE.Vector3(),
   lastPointer: new THREE.Vector2(),
 };
+const sceneInteractionDebugStateBySource = new Map();
 
 const hoverColor = 0x163244;
 const grabbedColor = 0x235f7d;
@@ -516,6 +517,100 @@ function sameSceneRaycastEntry( entryA, entryB ) {
 
 }
 
+function cloneSceneInteractionDebugHit( hit ) {
+
+  if ( ! hit ) {
+
+    return null;
+
+  }
+
+  return {
+    object: hit.object ?? null,
+    instanceId: Number.isInteger( hit.instanceId ) ? hit.instanceId : null,
+    distance: typeof hit.distance === 'number' ? hit.distance : null,
+  };
+
+}
+
+function cloneSceneInteractionDebugEntry( entry ) {
+
+  if ( ! entry ) {
+
+    return null;
+
+  }
+
+  return {
+    object: entry.object ?? null,
+    hit: cloneSceneInteractionDebugHit( entry.hit ),
+  };
+
+}
+
+function setSceneInteractionDebugState( source, {
+  phase = null,
+  pointerType = null,
+  rawFirstSceneHit = null,
+  resolvedSceneHit = null,
+} = {} ) {
+
+  if ( typeof source !== 'string' || source.trim().length === 0 ) {
+
+    return;
+
+  }
+
+  sceneInteractionDebugStateBySource.set( source, {
+    phase,
+    pointerType,
+    rawFirstSceneHit: cloneSceneInteractionDebugHit( rawFirstSceneHit ),
+    resolvedSceneHit: cloneSceneInteractionDebugHit( resolvedSceneHit ),
+  } );
+
+}
+
+function getControllerByInteractorId( interactor ) {
+
+  if ( interactor === INTERACTORS.CONTROLLER_0 ) {
+
+    return controllers[ 0 ] ?? null;
+
+  }
+
+  if ( interactor === INTERACTORS.CONTROLLER_1 ) {
+
+    return controllers[ 1 ] ?? null;
+
+  }
+
+  return null;
+
+}
+
+function getSceneInteractionDebugState( source ) {
+
+  const baseState = sceneInteractionDebugStateBySource.get( source ) || null;
+  const controller = getControllerByInteractorId( source );
+  const hoveredSceneEntry = source === INTERACTORS.DESKTOP_POINTER
+    ? desktopState.hoveredSceneEntry
+    : ( controller?.userData?.hoveredSceneEntry ?? null );
+  const sceneSelection = source === INTERACTORS.DESKTOP_POINTER
+    ? desktopState.sceneSelection
+    : ( controller?.userData?.sceneSelection ?? null );
+
+  return {
+    source,
+    phase: baseState?.phase ?? null,
+    pointerType: baseState?.pointerType ?? null,
+    rawFirstSceneHit: baseState?.rawFirstSceneHit ?? null,
+    resolvedSceneHit: baseState?.resolvedSceneHit ?? null,
+    hoveredSceneEntry: cloneSceneInteractionDebugEntry( hoveredSceneEntry ),
+    sceneSelection: cloneSceneInteractionDebugEntry( sceneSelection ),
+  };
+
+}
+
 function buildSceneInteractionPayload( {
   source,
   hit = null,
@@ -622,6 +717,25 @@ function clearControllerSceneHover( controller ) {
 
 }
 
+function invalidateSceneHoverForSource( source ) {
+
+  if ( source === INTERACTORS.DESKTOP_POINTER ) {
+
+    desktopState.hoveredSceneEntry = null;
+    return;
+
+  }
+
+  const controller = getControllerByInteractorId( source );
+
+  if ( controller ) {
+
+    controller.userData.hoveredSceneEntry = null;
+
+  }
+
+}
+
 function getActiveTemplateConfig() {
 
   return activeSceneDefinition?.templateConfig || {
@@ -696,6 +810,8 @@ function createSceneRuntimeContext() {
     getPresentationMode: () => currentMode,
     getInteractionPolicy: () => studyLogger?.getInteractionPolicy?.() ?? null,
     getLoggingConfig: () => studyLogger?.getActiveLoggingConfig?.() ?? getActiveSceneLoggingConfig(),
+    invalidateSceneHoverForSource,
+    getSceneInteractionDebugState,
     recordSceneStateChange: ( payload ) => studyLogger?.recordSceneStateChange?.( payload ) ?? false,
   };
 
@@ -715,6 +831,7 @@ function activateSceneDefinition( nextSceneDefinition ) {
 
   }
 
+  sceneInteractionDebugStateBySource.clear();
   sceneRaycastTargets.clear();
   sceneContentRoot.clear();
   activeSceneDefinition = nextSceneDefinition;
@@ -1573,6 +1690,13 @@ function resolveSceneRaycastCandidate( intersections, resolverContext ) {
 
   if ( ! firstHit ) {
 
+    setSceneInteractionDebugState( resolverContext?.source, {
+      phase: resolverContext?.phase ?? null,
+      pointerType: resolverContext?.pointerType ?? null,
+      rawFirstSceneHit: null,
+      resolvedSceneHit: null,
+    } );
+
     return {
       hit: null,
       sceneEntry: null,
@@ -1583,6 +1707,13 @@ function resolveSceneRaycastCandidate( intersections, resolverContext ) {
   const firstSceneEntry = getRaycastTargetEntryFromObject( firstHit.object );
 
   if ( ! firstSceneEntry?.object ) {
+
+    setSceneInteractionDebugState( resolverContext?.source, {
+      phase: resolverContext?.phase ?? null,
+      pointerType: resolverContext?.pointerType ?? null,
+      rawFirstSceneHit: null,
+      resolvedSceneHit: null,
+    } );
 
     return {
       hit: firstHit,
@@ -1628,6 +1759,13 @@ function resolveSceneRaycastCandidate( intersections, resolverContext ) {
     }
 
   }
+
+  setSceneInteractionDebugState( resolverContext?.source, {
+    phase: resolverContext?.phase ?? null,
+    pointerType: resolverContext?.pointerType ?? null,
+    rawFirstSceneHit: firstHit,
+    resolvedSceneHit: resolvedCandidate.hit ?? firstHit,
+  } );
 
   return resolvedCandidate;
 
@@ -1824,7 +1962,10 @@ function onPointerDown( event ) {
   if ( sceneEntry?.object ) {
 
     desktopState.mode = 'scene-target';
-    desktopState.sceneSelection = sceneEntry;
+    desktopState.sceneSelection = {
+      ...sceneEntry,
+      hit,
+    };
     desktopState.selected = null;
     desktopState.hovered = null;
     renderer.domElement.setPointerCapture( event.pointerId );
@@ -2351,6 +2492,7 @@ function updateControllerState( controller ) {
 
 function applyReplayInteractionState( replayState ) {
 
+  sceneInteractionDebugStateBySource.clear();
   desktopState.hovered = null;
   updateDesktopSceneHover( null );
   desktopState.selected = null;

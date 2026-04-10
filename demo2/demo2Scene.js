@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mesh as buildTopojsonMesh } from 'topojson-client';
-import { PRESENTATION_MODES } from '../logging/xrLoggingSchema.js';
+import { INTERACTORS, PRESENTATION_MODES } from '../logging/xrLoggingSchema.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
@@ -249,6 +249,7 @@ export const demo2SceneDefinition = Object.freeze( {
   createScene( context ) {
 
     const { globe, xrPanel, desktopPanel, palettes, labelStyles } = demo2VisualConfig;
+    const debugRayEnabled = new URLSearchParams( window.location.search ).get( 'debugRay' ) === '1';
     const defaultSceneState = parseDemo2Conditions( window.location.search, {
       defaultYear: DEMO2_DEFAULT_YEAR,
       defaultTaskId: DEMO2_DEFAULT_TASK_ID,
@@ -270,7 +271,6 @@ export const demo2SceneDefinition = Object.freeze( {
     const nodeEntriesById = new Map();
     const flowHoverBySource = new Map();
     const nodeHoverBySource = new Map();
-    const selectionHoverBarrierBySource = new Map();
     const demo2RaycastRoles = Object.freeze( {
       NODE: 'node',
       FLOW: 'flow',
@@ -329,6 +329,11 @@ export const demo2SceneDefinition = Object.freeze( {
 
     const defaultDesktopCameraPosition = new THREE.Vector3( 0, 1.46, 0.12 );
     const defaultDesktopLookAt = new THREE.Vector3( 0, defaultGlobeAnchorPosition[ 1 ], defaultGlobeAnchorPosition[ 2 ] );
+    const interactiveSources = [
+      INTERACTORS.CONTROLLER_0,
+      INTERACTORS.CONTROLLER_1,
+      INTERACTORS.DESKTOP_POINTER,
+    ];
 
     function trackDisposable( collection, object3D, dispose ) {
 
@@ -372,11 +377,14 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function setDemo2RaycastRole( object3D, role ) {
+    function setDemo2RaycastRole( object3D, role, targetId = null ) {
 
       if ( object3D ) {
 
         object3D.userData.demo2RaycastRole = role;
+        object3D.userData.demo2RaycastId = typeof targetId === 'string' && targetId.trim().length > 0
+          ? targetId.trim()
+          : null;
 
       }
 
@@ -393,6 +401,26 @@ export const demo2SceneDefinition = Object.freeze( {
         if ( typeof currentObject.userData?.demo2RaycastRole === 'string' ) {
 
           return currentObject.userData.demo2RaycastRole;
+
+        }
+
+        currentObject = currentObject.parent;
+
+      }
+
+      return null;
+
+    }
+
+    function resolveDemo2RaycastTargetId( object3D ) {
+
+      let currentObject = object3D;
+
+      while ( currentObject ) {
+
+        if ( typeof currentObject.userData?.demo2RaycastId === 'string' && currentObject.userData.demo2RaycastId.length > 0 ) {
+
+          return currentObject.userData.demo2RaycastId;
 
         }
 
@@ -613,7 +641,10 @@ export const demo2SceneDefinition = Object.freeze( {
             startAzimuthDeg,
             hasMoved: false,
           };
-          clearHoverState();
+          clearHoverState( {
+            source: payload.source,
+            invalidateSharedHover: true,
+          } );
 
         },
         onSelectMove( payload ) {
@@ -673,7 +704,7 @@ export const demo2SceneDefinition = Object.freeze( {
         },
       },
     );
-    setDemo2RaycastRole( globeInteractionShell, demo2RaycastRoles.GLOBE_SHELL );
+    setDemo2RaycastRole( globeInteractionShell, demo2RaycastRoles.GLOBE_SHELL, demo2RaycastRoles.GLOBE_SHELL );
     globeInteractionShell.renderOrder = 1;
 
     const handleLineHeight = Math.max( 0.05, Math.abs( handleLocalFloorY ) );
@@ -784,7 +815,10 @@ export const demo2SceneDefinition = Object.freeze( {
             dragOffsetZ: globeRoot.position.z - startPoint.z,
             hasMoved: false,
           };
-          clearHoverState();
+          clearHoverState( {
+            source: payload.source,
+            invalidateSharedHover: true,
+          } );
 
         },
         onSelectMove( payload ) {
@@ -849,7 +883,7 @@ export const demo2SceneDefinition = Object.freeze( {
         },
       },
     );
-    setDemo2RaycastRole( globeHandleInteraction, demo2RaycastRoles.GLOBE_HANDLE );
+    setDemo2RaycastRole( globeHandleInteraction, demo2RaycastRoles.GLOBE_HANDLE, demo2RaycastRoles.GLOBE_HANDLE );
     globeHandleInteraction.position.set( 0, handleLocalFloorY + 0.07, 0 );
     globeHandleInteraction.renderOrder = 1;
 
@@ -1219,7 +1253,6 @@ export const demo2SceneDefinition = Object.freeze( {
 
       clearNodeSelectionOwnership();
       clearFlowSelectionOwnership();
-      selectionHoverBarrierBySource.clear();
 
     }
 
@@ -1283,7 +1316,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function clearSelectionHoverBarrierForSource( source ) {
+    function invalidateSceneHoverCacheForSource( source ) {
 
       const normalizedSource = resolveSelectionSource( source );
 
@@ -1293,44 +1326,18 @@ export const demo2SceneDefinition = Object.freeze( {
 
       }
 
-      return selectionHoverBarrierBySource.delete( normalizedSource );
+      context.invalidateSceneHoverForSource?.( normalizedSource );
+      return true;
 
     }
 
-    function getSelectionHoverBarrierForSource( source ) {
+    function invalidateAllSceneHoverCaches() {
 
-      const normalizedSource = resolveSelectionSource( source );
+      interactiveSources.forEach( ( source ) => {
 
-      if ( ! normalizedSource ) {
+        context.invalidateSceneHoverForSource?.( source );
 
-        return null;
-
-      }
-
-      return selectionHoverBarrierBySource.get( normalizedSource ) || null;
-
-    }
-
-    function armSelectionHoverBarrier( source, kind, id, selectionSequence ) {
-
-      selectionHoverBarrierBySource.clear();
-
-      const normalizedSource = resolveSelectionSource( source );
-
-      if ( ! normalizedSource || ! id || selectionSequence < 0 ) {
-
-        return null;
-
-      }
-
-      const barrier = {
-        source: normalizedSource,
-        kind,
-        id,
-        selectionSequence,
-      };
-      selectionHoverBarrierBySource.set( normalizedSource, barrier );
-      return barrier;
+      } );
 
     }
 
@@ -1411,26 +1418,6 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( isHovered ) {
 
-        const activeBarrier = getSelectionHoverBarrierForSource( normalizedSource );
-
-        if ( activeBarrier ) {
-
-          const confirmsSelection = activeBarrier.kind === kind && activeBarrier.id === id;
-
-          if ( confirmsSelection ) {
-
-            clearSelectionHoverBarrierForSource( normalizedSource );
-
-          } else {
-
-            resolveHoverState();
-            updateHighlightsAndTooltip();
-            return;
-
-          }
-
-        }
-
         const sequence = nextInteractionSequence();
         map.set( normalizedSource, {
           id,
@@ -1440,7 +1427,6 @@ export const demo2SceneDefinition = Object.freeze( {
 
       } else {
 
-        clearSelectionHoverBarrierForSource( normalizedSource );
         const entry = map.get( normalizedSource );
 
         if ( entry?.id === id || ! id ) {
@@ -1456,13 +1442,140 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function clearHoverState() {
+    function clearHoverState( {
+      source = null,
+      invalidateSharedHover = false,
+      invalidateAllSharedHover = false,
+    } = {} ) {
 
       nodeHoverBySource.clear();
       flowHoverBySource.clear();
-      selectionHoverBarrierBySource.clear();
+
+      if ( invalidateAllSharedHover ) {
+
+        invalidateAllSceneHoverCaches();
+
+      } else if ( invalidateSharedHover ) {
+
+        invalidateSceneHoverCacheForSource( source );
+
+      }
+
       resolveHoverState();
       updateHighlightsAndTooltip();
+
+    }
+
+    function formatDebugDistance( distance ) {
+
+      return isFiniteNumber( distance ) ? distance.toFixed( 3 ) : '--';
+
+    }
+
+    function formatDebugHitSummary( hitLike ) {
+
+      const hit = hitLike?.hit || hitLike;
+
+      if ( ! hit?.object ) {
+
+        return 'none';
+
+      }
+
+      const role = resolveDemo2RaycastRole( hit ) || 'other';
+      const targetId = resolveDemo2RaycastTargetId( hit.object );
+      const targetLabel = targetId ? `${role}:${targetId}` : role;
+      return `${targetLabel}@${formatDebugDistance( hit.distance )}`;
+
+    }
+
+    function formatDebugCacheSummary( source ) {
+
+      const debugState = context.getSceneInteractionDebugState?.( source ) || null;
+      const hoveredLabel = formatDebugHitSummary( debugState?.hoveredSceneEntry );
+      const selectionLabel = formatDebugHitSummary( debugState?.sceneSelection );
+      return `${source} h:${hoveredLabel} s:${selectionLabel}`;
+
+    }
+
+    function resolvePrimaryDebugSource() {
+
+      if ( currentHoveredEntry?.source ) {
+
+        return currentHoveredEntry.source;
+
+      }
+
+      if ( selectedFlowSource ) {
+
+        return selectedFlowSource;
+
+      }
+
+      if ( selectedNodeSource ) {
+
+        return selectedNodeSource;
+
+      }
+
+      if ( activeGlobeDrag?.source ) {
+
+        return activeGlobeDrag.source;
+
+      }
+
+      if ( activeGlobeMove?.source ) {
+
+        return activeGlobeMove.source;
+
+      }
+
+      const activeControllerSource = interactiveSources.find( ( source ) => {
+
+        const debugState = context.getSceneInteractionDebugState?.( source ) || null;
+        return Boolean(
+          debugState?.hoveredSceneEntry
+          || debugState?.sceneSelection
+          || debugState?.rawFirstSceneHit
+          || debugState?.resolvedSceneHit,
+        );
+
+      } );
+
+      if ( activeControllerSource ) {
+
+        return activeControllerSource;
+
+      }
+
+      return context.getPresentationMode?.() === PRESENTATION_MODES.DESKTOP
+        ? INTERACTORS.DESKTOP_POINTER
+        : INTERACTORS.CONTROLLER_0;
+
+    }
+
+    function getDebugPanelText() {
+
+      if ( ! debugRayEnabled ) {
+
+        return '';
+
+      }
+
+      const debugSource = resolvePrimaryDebugSource();
+      const debugState = context.getSceneInteractionDebugState?.( debugSource ) || null;
+
+      return [
+        `Debug ${debugSource || 'none'}`,
+        `raw ${formatDebugHitSummary( debugState?.rawFirstSceneHit )}`,
+        `resolved ${formatDebugHitSummary( debugState?.resolvedSceneHit )}`,
+        `hover N:${currentHoveredNodeId || '-'} F:${currentHoveredFlowId || '-'}`,
+        `selected N:${currentSceneState.selectedNodeId || '-'} F:${currentSceneState.selectedFlowId || '-'}`,
+        `owners N:${selectedNodeSource || '-'} F:${selectedFlowSource || '-'}`,
+        'barrier removed',
+        `cache ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_0 )}`,
+        `cache ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_1 )}`,
+      ].join( '\n' );
 
     }
 
@@ -1692,6 +1805,14 @@ export const demo2SceneDefinition = Object.freeze( {
       { ...labelStyles.panelStatus, text: 'Loading local migration bundle...' },
       new THREE.Vector3( 0, xrPanel.footerY, xrPanel.contentZ ),
     );
+    const panelDebugText = debugRayEnabled
+      ? createTrackedTextPlane(
+        staticObjects,
+        xrPanelRoot,
+        { ...labelStyles.panelDebug, text: 'Debug waiting for scene hits...' },
+        new THREE.Vector3( 0, xrPanel.debugY, xrPanel.contentZ ),
+      )
+      : null;
 
     function updateXrPanelVisualState() {
 
@@ -2100,7 +2221,7 @@ export const demo2SceneDefinition = Object.freeze( {
             },
           },
         );
-        setDemo2RaycastRole( mesh, demo2RaycastRoles.FLOW );
+        setDemo2RaycastRole( mesh, demo2RaycastRoles.FLOW, flow.flowId );
         mesh.renderOrder = 4;
         const midpoint = curve.getPoint( 0.5 );
         const entry = {
@@ -2218,7 +2339,6 @@ export const demo2SceneDefinition = Object.freeze( {
 
         currentSceneState.selectedNodeId = null;
         clearNodeSelectionOwnership();
-        selectionHoverBarrierBySource.clear();
 
       }
 
@@ -2230,7 +2350,6 @@ export const demo2SceneDefinition = Object.freeze( {
         currentSceneState.taskAnswer = null;
         currentSceneState.taskSubmitted = false;
         clearFlowSelectionOwnership();
-        selectionHoverBarrierBySource.clear();
 
       }
 
@@ -2301,7 +2420,7 @@ export const demo2SceneDefinition = Object.freeze( {
               },
             },
           );
-          setDemo2RaycastRole( hitProxy, demo2RaycastRoles.NODE );
+          setDemo2RaycastRole( hitProxy, demo2RaycastRoles.NODE, node.id );
           hitProxy.position.copy( surfacePosition );
           const label = createTrackedTextSprite(
             staticObjects,
@@ -2394,7 +2513,7 @@ export const demo2SceneDefinition = Object.freeze( {
       selectedNodeSelectionSequence = selectionSequence;
       clearFlowSelectionOwnership();
       clearHoverEntriesForSource( selectionSource );
-      armSelectionHoverBarrier( selectionSource, 'node', countryId, selectionSequence );
+      invalidateSceneHoverCacheForSource( selectionSource );
       resolveHoverState();
       syncDataDrivenScene();
       syncAllUi();
@@ -2431,7 +2550,7 @@ export const demo2SceneDefinition = Object.freeze( {
       selectedFlowSource = selectionSource;
       selectedFlowSelectionSequence = selectionSequence;
       clearHoverEntriesForSource( selectionSource );
-      armSelectionHoverBarrier( selectionSource, 'flow', nextFlow.flowId, selectionSequence );
+      invalidateSceneHoverCacheForSource( selectionSource );
       resolveHoverState();
       updateHighlightsAndTooltip();
       syncAllUi();
@@ -2470,7 +2589,6 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       clearFlowSelectionOwnership();
-      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2524,7 +2642,6 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       clearFlowSelectionOwnership();
-      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2571,7 +2688,6 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       clearFlowSelectionOwnership();
-      selectionHoverBarrierBySource.clear();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2650,7 +2766,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
       resetSelectionOwnershipTracking();
-      selectionHoverBarrierBySource.clear();
+      clearHoverState( { invalidateAllSharedHover: true } );
       syncDataDrivenScene();
       syncAllUi();
       recordSceneChange( 'resetFilters', source, {
@@ -2744,6 +2860,14 @@ export const demo2SceneDefinition = Object.freeze( {
       desktopRefs.submitButton.addEventListener( 'click', () => submitTask( 'desktop-submit-button' ) );
       node.appendChild( desktopRefs.submitButton );
 
+      if ( debugRayEnabled ) {
+
+        node.appendChild( createStyledElement( 'p', desktopPanel.sectionLabel, 'Debug' ) );
+        desktopRefs.debugValue = createStyledElement( 'p', desktopPanel.debug, 'Debug waiting for scene hits...' );
+        node.appendChild( desktopRefs.debugValue );
+
+      }
+
       context.setDesktopPanelNode( node );
 
     }
@@ -2808,6 +2932,12 @@ export const demo2SceneDefinition = Object.freeze( {
       desktopRefs.submitButton.textContent = selectedFlow ? 'Submit Current Route' : 'Pick Route First';
       desktopRefs.submitButton.setAttribute( 'style', getButtonStyle( desktopPanel, controlsEnabled && Boolean( selectedFlow ) ) );
 
+      if ( desktopRefs.debugValue ) {
+
+        desktopRefs.debugValue.textContent = getDebugPanelText();
+
+      }
+
     }
 
     function syncXrPanel() {
@@ -2843,6 +2973,7 @@ export const demo2SceneDefinition = Object.freeze( {
               : getDefaultStatusText()
           ),
       );
+      panelDebugText?.setText( getDebugPanelText() );
 
       xrButtons.get( 'year-prev' ).disabled = ! controlsEnabled;
       xrButtons.get( 'year-prev' ).label = buildButtonLabel( 'Year', '-' );
@@ -2867,10 +2998,31 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function syncDebugUi() {
+
+      if ( ! debugRayEnabled ) {
+
+        return;
+
+      }
+
+      const debugText = getDebugPanelText();
+
+      if ( desktopRefs.debugValue ) {
+
+        desktopRefs.debugValue.textContent = debugText;
+
+      }
+
+      panelDebugText?.setText( debugText );
+
+    }
+
     function syncAllUi() {
 
       syncDesktopPanel();
       syncXrPanel();
+      syncDebugUi();
 
     }
 
@@ -2882,7 +3034,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( source === 'replay-scene' ) {
 
-        clearHoverState();
+        clearHoverState( { invalidateAllSharedHover: true } );
         resetSelectionOwnershipTracking();
         activeGlobeDrag = null;
         activeGlobeMove = null;
@@ -3015,7 +3167,7 @@ export const demo2SceneDefinition = Object.freeze( {
       },
       dispose() {
 
-        clearHoverState();
+        clearHoverState( { invalidateAllSharedHover: true } );
         resetSelectionOwnershipTracking();
         clearVisibleFlowMeshes();
         clearTrackedCollection( uiSurfaces );
@@ -3027,6 +3179,12 @@ export const demo2SceneDefinition = Object.freeze( {
       update( deltaSeconds ) {
 
         panelShell.updateRuntimePlacement( { deltaSeconds } );
+
+        if ( debugRayEnabled ) {
+
+          syncDebugUi();
+
+        }
 
       },
       getSceneStateForReplay() {
@@ -3075,7 +3233,7 @@ export const demo2SceneDefinition = Object.freeze( {
       onPresentationModeChange( presentationMode ) {
 
         xrPanelRoot.visible = presentationMode !== PRESENTATION_MODES.DESKTOP;
-        clearHoverState();
+        clearHoverState( { invalidateAllSharedHover: true } );
         resetSelectionOwnershipTracking();
         xrButtons.forEach( ( button ) => button.hoverSources.clear() );
 
