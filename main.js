@@ -1552,6 +1552,87 @@ function getXRIntersections( controller ) {
 
 }
 
+function buildSceneRaycastResolverContext( {
+  phase,
+  source,
+  pointerType,
+} ) {
+
+  return {
+    phase,
+    source,
+    pointerType,
+    presentationMode: currentMode,
+  };
+
+}
+
+function resolveSceneRaycastCandidate( intersections, resolverContext ) {
+
+  const firstHit = intersections[ 0 ] ?? null;
+
+  if ( ! firstHit ) {
+
+    return {
+      hit: null,
+      sceneEntry: null,
+    };
+
+  }
+
+  const firstSceneEntry = getRaycastTargetEntryFromObject( firstHit.object );
+
+  if ( ! firstSceneEntry?.object ) {
+
+    return {
+      hit: firstHit,
+      sceneEntry: null,
+    };
+
+  }
+
+  const sceneCandidates = [ {
+    hit: firstHit,
+    sceneEntry: firstSceneEntry,
+  } ];
+
+  for ( let index = 1; index < intersections.length; index += 1 ) {
+
+    const hit = intersections[ index ];
+    const sceneEntry = getRaycastTargetEntryFromObject( hit.object );
+
+    if ( sceneEntry?.object ) {
+
+      sceneCandidates.push( {
+        hit,
+        sceneEntry,
+      } );
+
+    }
+
+  }
+
+  let resolvedCandidate = sceneCandidates[ 0 ];
+  const resolveRaycastIntersection = activeSceneController?.resolveRaycastIntersection;
+
+  if ( typeof resolveRaycastIntersection === 'function' ) {
+
+    const sceneIntersections = sceneCandidates.map( ( candidate ) => candidate.hit );
+    const resolvedHit = resolveRaycastIntersection( sceneIntersections, resolverContext );
+
+    if ( sceneIntersections.includes( resolvedHit ) ) {
+
+      const resolvedIndex = sceneIntersections.indexOf( resolvedHit );
+      resolvedCandidate = sceneCandidates[ resolvedIndex ];
+
+    }
+
+  }
+
+  return resolvedCandidate;
+
+}
+
 function panDesktopCamera( deltaX, deltaY ) {
 
   const panScale = mousePanFactor * Math.max( camera.position.distanceTo( cube.position ), 1.5 );
@@ -1657,11 +1738,16 @@ function updateDesktopHover() {
   }
 
   const intersections = getDesktopIntersections();
-  const nextHit = intersections[ 0 ] ?? null;
-  const nextSceneEntry = nextHit ? {
-    ...getRaycastTargetEntryFromObject( nextHit.object ),
-    hit: nextHit,
-  } : null;
+  const nextCandidate = resolveSceneRaycastCandidate(
+    intersections,
+    buildSceneRaycastResolverContext( {
+      phase: 'hover',
+      source: INTERACTORS.DESKTOP_POINTER,
+      pointerType: 'desktop',
+    } ),
+  );
+  const nextHit = nextCandidate.hit;
+  const nextSceneEntry = nextCandidate.sceneEntry;
 
   updateDesktopSceneHover( nextSceneEntry?.object ? nextSceneEntry : null );
 
@@ -1724,11 +1810,16 @@ function onPointerDown( event ) {
   }
 
   const intersections = getDesktopIntersections();
-  const hit = intersections[ 0 ] ?? null;
-  const sceneEntry = hit ? {
-    ...getRaycastTargetEntryFromObject( hit.object ),
-    hit,
-  } : null;
+  const resolvedCandidate = resolveSceneRaycastCandidate(
+    intersections,
+    buildSceneRaycastResolverContext( {
+      phase: 'select',
+      source: INTERACTORS.DESKTOP_POINTER,
+      pointerType: 'desktop',
+    } ),
+  );
+  const hit = resolvedCandidate.hit;
+  const sceneEntry = resolvedCandidate.sceneEntry;
 
   if ( sceneEntry?.object ) {
 
@@ -1815,9 +1906,17 @@ function onPointerMove( event ) {
   if ( desktopState.mode === 'scene-target' && desktopState.sceneSelection ) {
 
     const intersections = getDesktopIntersections();
+    const resolvedCandidate = resolveSceneRaycastCandidate(
+      intersections,
+      buildSceneRaycastResolverContext( {
+        phase: 'select',
+        source: INTERACTORS.DESKTOP_POINTER,
+        pointerType: 'desktop',
+      } ),
+    );
     desktopState.sceneSelection.handlers?.onSelectMove?.( buildSceneInteractionPayload( {
       source: INTERACTORS.DESKTOP_POINTER,
-      hit: intersections[ 0 ] ?? null,
+      hit: resolvedCandidate.hit,
     } ) );
     return;
 
@@ -1874,9 +1973,17 @@ function onPointerUp( event ) {
   if ( sceneSelection ) {
 
     const intersections = getDesktopIntersections();
+    const resolvedCandidate = resolveSceneRaycastCandidate(
+      intersections,
+      buildSceneRaycastResolverContext( {
+        phase: 'select',
+        source: INTERACTORS.DESKTOP_POINTER,
+        pointerType: 'desktop',
+      } ),
+    );
     sceneSelection.handlers?.onSelectEnd?.( buildSceneInteractionPayload( {
       source: INTERACTORS.DESKTOP_POINTER,
-      hit: intersections[ 0 ] ?? null,
+      hit: resolvedCandidate.hit,
     } ) );
 
   }
@@ -2081,18 +2188,26 @@ function onSelectStart( event ) {
   }
 
   const intersections = getXRIntersections( controller );
+  const resolvedCandidate = resolveSceneRaycastCandidate(
+    intersections,
+    buildSceneRaycastResolverContext( {
+      phase: 'select',
+      source: getControllerInteractorId( controller ),
+      pointerType: 'xr',
+    } ),
+  );
 
-  if ( intersections.length === 0 ) {
+  if ( ! resolvedCandidate.hit ) {
 
     activeSceneController?.handleBackgroundSelect?.( { source: getControllerInteractorId( controller ) } );
     return;
 
   }
 
-  const hit = intersections[ 0 ];
-  const sceneEntry = getRaycastTargetEntryFromObject( hit.object );
+  const hit = resolvedCandidate.hit;
+  const sceneEntry = resolvedCandidate.sceneEntry;
 
-  if ( sceneEntry ) {
+  if ( sceneEntry?.object ) {
 
     controller.userData.sceneSelection = {
       ...sceneEntry,
@@ -2181,11 +2296,16 @@ function updateControllerState( controller ) {
   }
 
   const intersections = getXRIntersections( controller );
-  const hit = intersections[ 0 ];
-  const sceneEntry = hit ? {
-    ...getRaycastTargetEntryFromObject( hit.object ),
-    hit,
-  } : null;
+  const resolvedCandidate = resolveSceneRaycastCandidate(
+    intersections,
+    buildSceneRaycastResolverContext( {
+      phase: 'hover',
+      source: getControllerInteractorId( controller ),
+      pointerType: 'xr',
+    } ),
+  );
+  const hit = resolvedCandidate.hit;
+  const sceneEntry = resolvedCandidate.sceneEntry;
 
   updateControllerSceneHover( controller, sceneEntry?.object ? sceneEntry : null );
 

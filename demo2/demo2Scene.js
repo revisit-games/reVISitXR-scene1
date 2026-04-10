@@ -271,6 +271,13 @@ export const demo2SceneDefinition = Object.freeze( {
     const flowHoverBySource = new Map();
     const nodeHoverBySource = new Map();
     const selectionHoverBarrierBySource = new Map();
+    const demo2RaycastRoles = Object.freeze( {
+      NODE: 'node',
+      FLOW: 'flow',
+      GLOBE_SHELL: 'globe-shell',
+      GLOBE_HANDLE: 'globe-handle',
+    } );
+    const demo2GlobeRaycastRoles = new Set( Object.values( demo2RaycastRoles ) );
     const defaultGlobeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
       globe.anchorDefaultPosition || globe.rootPosition,
     );
@@ -363,6 +370,72 @@ export const demo2SceneDefinition = Object.freeze( {
 
       };
       return mesh;
+
+    }
+
+    function setDemo2RaycastRole( object3D, role ) {
+
+      if ( object3D ) {
+
+        object3D.userData.demo2RaycastRole = role;
+
+      }
+
+      return object3D;
+
+    }
+
+    function resolveDemo2RaycastRole( hit ) {
+
+      let currentObject = hit?.object || null;
+
+      while ( currentObject ) {
+
+        if ( typeof currentObject.userData?.demo2RaycastRole === 'string' ) {
+
+          return currentObject.userData.demo2RaycastRole;
+
+        }
+
+        currentObject = currentObject.parent;
+
+      }
+
+      return null;
+
+    }
+
+    function resolveDemo2RaycastIntersection( sceneIntersections ) {
+
+      const firstHit = sceneIntersections?.[ 0 ] ?? null;
+
+      if ( ! firstHit ) {
+
+        return null;
+
+      }
+
+      const firstRole = resolveDemo2RaycastRole( firstHit );
+      const shouldResolveGlobeTargetPriority =
+        firstRole === demo2RaycastRoles.NODE
+        || firstRole === demo2RaycastRoles.FLOW
+        || firstRole === demo2RaycastRoles.GLOBE_SHELL;
+
+      if ( ! shouldResolveGlobeTargetPriority ) {
+
+        return firstHit;
+
+      }
+
+      return sceneIntersections.find( ( hit ) => resolveDemo2RaycastRole( hit ) === demo2RaycastRoles.NODE )
+        || sceneIntersections.find( ( hit ) => resolveDemo2RaycastRole( hit ) === demo2RaycastRoles.FLOW )
+        || sceneIntersections.find( ( hit ) => {
+
+          const role = resolveDemo2RaycastRole( hit );
+          return demo2GlobeRaycastRoles.has( role ) && role !== demo2RaycastRoles.GLOBE_SHELL;
+
+        } )
+        || firstHit;
 
     }
 
@@ -555,6 +628,7 @@ export const demo2SceneDefinition = Object.freeze( {
         },
       },
     );
+    setDemo2RaycastRole( globeInteractionShell, demo2RaycastRoles.GLOBE_SHELL );
     globeInteractionShell.renderOrder = 1;
 
     const handleLineHeight = Math.max( 0.05, Math.abs( handleLocalFloorY ) );
@@ -730,6 +804,7 @@ export const demo2SceneDefinition = Object.freeze( {
         },
       },
     );
+    setDemo2RaycastRole( globeHandleInteraction, demo2RaycastRoles.GLOBE_HANDLE );
     globeHandleInteraction.position.set( 0, handleLocalFloorY + 0.07, 0 );
     globeHandleInteraction.renderOrder = 1;
 
@@ -1979,6 +2054,7 @@ export const demo2SceneDefinition = Object.freeze( {
             },
           },
         );
+        setDemo2RaycastRole( mesh, demo2RaycastRoles.FLOW );
         mesh.renderOrder = 4;
         const midpoint = curve.getPoint( 0.5 );
         const entry = {
@@ -2166,6 +2242,7 @@ export const demo2SceneDefinition = Object.freeze( {
               },
             },
           );
+          setDemo2RaycastRole( mesh, demo2RaycastRoles.NODE );
           mesh.position.copy( surfacePosition );
           const label = createTrackedTextSprite(
             staticObjects,
@@ -2928,6 +3005,11 @@ export const demo2SceneDefinition = Object.freeze( {
           body: 'Use the desktop panel to filter an immersive migration globe baseline built for study embedding and semantic replay.',
           note: 'VR and desktop are the primary paper-facing modes for Demo 2.',
         };
+
+      },
+      resolveRaycastIntersection( sceneIntersections ) {
+
+        return resolveDemo2RaycastIntersection( sceneIntersections );
 
       },
       onPresentationModeChange( presentationMode ) {
