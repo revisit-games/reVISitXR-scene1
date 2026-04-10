@@ -1680,6 +1680,8 @@ function buildSceneRaycastResolverContext( {
     source,
     pointerType,
     presentationMode: currentMode,
+    rayOrigin: raycaster.ray.origin.clone(),
+    rayDirection: raycaster.ray.direction.clone(),
   };
 
 }

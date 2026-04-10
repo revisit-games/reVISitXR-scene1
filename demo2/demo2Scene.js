@@ -294,6 +294,8 @@ export const demo2SceneDefinition = Object.freeze( {
     const tempGlobeRay = new THREE.Ray();
     const tempGlobeHandleHit = new THREE.Vector3();
     const tempGlobeAnchorPosition = new THREE.Vector3();
+    const tempResolverRay = new THREE.Ray();
+    const tempResolverNodeWorldCenter = new THREE.Vector3();
     let interactionSequence = 0;
     let dataset = null;
     let loadStatus = 'loading';
@@ -315,6 +317,7 @@ export const demo2SceneDefinition = Object.freeze( {
     let lastLoggedGlobeYawDeg = currentSceneState.globeYawDeg;
     let lastGlobeYawLogAt = 0;
     let lastGlobeAnchorLogAt = 0;
+    let lastResolverDebug = null;
 
     root.add( globeRoot );
     root.add( xrPanelRoot );
@@ -432,7 +435,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function collectDemo2FrontHitCluster( sceneIntersections ) {
+    function collectDemo2FrontHitCluster( sceneIntersections, maxDistanceDelta = globe.frontHitClusterDistance ) {
 
       const firstHit = sceneIntersections?.[ 0 ] ?? null;
 
@@ -442,14 +445,14 @@ export const demo2SceneDefinition = Object.freeze( {
 
       }
 
-      const maxDistanceDelta = Math.max( 0, globe.frontHitClusterDistance || 0 );
+      const maxDistanceBand = Math.max( 0, maxDistanceDelta || 0 );
       const cluster = [ firstHit ];
 
       for ( let index = 1; index < sceneIntersections.length; index += 1 ) {
 
         const hit = sceneIntersections[ index ];
 
-        if ( ( hit.distance - firstHit.distance ) > maxDistanceDelta ) {
+        if ( ( hit.distance - firstHit.distance ) > maxDistanceBand ) {
 
           break;
 
@@ -469,17 +472,147 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function resolveDemo2RaycastIntersection( sceneIntersections ) {
+    function resolveDemo2NodeRayMissDistance( nodeId, resolverContext ) {
 
-      const firstHit = sceneIntersections?.[ 0 ] ?? null;
-
-      if ( ! firstHit ) {
+      if ( ! nodeId || ! resolverContext?.rayOrigin || ! resolverContext?.rayDirection ) {
 
         return null;
 
       }
 
-      const firstRole = resolveDemo2RaycastRole( firstHit );
+      const nodeEntry = nodeEntriesById.get( nodeId );
+
+      if ( ! nodeEntry?.hitProxy ) {
+
+        return null;
+
+      }
+
+      nodeEntry.hitProxy.getWorldPosition( tempResolverNodeWorldCenter );
+      tempResolverRay.origin.copy( resolverContext.rayOrigin );
+      tempResolverRay.direction.copy( resolverContext.rayDirection ).normalize();
+      return Math.sqrt( tempResolverRay.distanceSqToPoint( tempResolverNodeWorldCenter ) );
+
+    }
+
+    function buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) {
+
+      const role = resolveDemo2RaycastRole( hit ) || 'other';
+      const id = resolveDemo2RaycastTargetId( hit.object );
+      const distance = typeof hit?.distance === 'number' ? hit.distance : null;
+      const distanceFromFirst = isFiniteNumber( distance ) && isFiniteNumber( firstHit?.distance )
+        ? distance - firstHit.distance
+        : null;
+      const rayMissDistance = role === demo2RaycastRoles.NODE
+        ? resolveDemo2NodeRayMissDistance( id, resolverContext )
+        : null;
+
+      return {
+        hit,
+        role,
+        id,
+        distance,
+        distanceFromFirst,
+        rayMissDistance,
+      };
+
+    }
+
+    function compareDemo2NodeCandidates( candidateA, candidateB ) {
+
+      const missA = isFiniteNumber( candidateA?.rayMissDistance ) ? candidateA.rayMissDistance : Number.POSITIVE_INFINITY;
+      const missB = isFiniteNumber( candidateB?.rayMissDistance ) ? candidateB.rayMissDistance : Number.POSITIVE_INFINITY;
+
+      if ( Math.abs( missA - missB ) > 1e-6 ) {
+
+        return missA - missB;
+
+      }
+
+      const distanceA = isFiniteNumber( candidateA?.distance ) ? candidateA.distance : Number.POSITIVE_INFINITY;
+      const distanceB = isFiniteNumber( candidateB?.distance ) ? candidateB.distance : Number.POSITIVE_INFINITY;
+
+      return distanceA - distanceB;
+
+    }
+
+    function findBestDemo2NodeCandidate( candidates ) {
+
+      const nodeCandidates = candidates
+        .filter( ( candidate ) => candidate.role === demo2RaycastRoles.NODE );
+
+      if ( nodeCandidates.length === 0 ) {
+
+        return null;
+
+      }
+
+      nodeCandidates.sort( compareDemo2NodeCandidates );
+      return nodeCandidates[ 0 ] || null;
+
+    }
+
+    function formatResolverCandidateSummary( candidate ) {
+
+      if ( ! candidate ) {
+
+        return 'none';
+
+      }
+
+      const targetLabel = candidate.id ? `${candidate.role}:${candidate.id}` : candidate.role;
+      const distanceLabel = formatDebugDistance( candidate.distance );
+      const missLabel = isFiniteNumber( candidate.rayMissDistance )
+        ? ` miss=${formatDebugDistance( candidate.rayMissDistance )}`
+        : '';
+      return `${targetLabel}@${distanceLabel}${missLabel}`;
+
+    }
+
+    function updateDemo2ResolverDebugState( resolverContext, {
+      firstCandidate = null,
+      resolvedCandidate = null,
+      candidateRecords = [],
+      clusterRecords = [],
+    } = {} ) {
+
+      if ( ! debugRayEnabled ) {
+
+        return;
+
+      }
+
+      const limit = Math.max( 1, globe.debugCandidateLimit || 5 );
+      lastResolverDebug = {
+        source: resolverContext?.source || null,
+        pointerType: resolverContext?.pointerType || null,
+        phase: resolverContext?.phase || null,
+        rawFirstHitSummary: formatResolverCandidateSummary( firstCandidate ),
+        resolvedHitSummary: formatResolverCandidateSummary( resolvedCandidate ),
+        candidateSummaries: candidateRecords.slice( 0, limit ).map( formatResolverCandidateSummary ),
+        clusterSummaries: clusterRecords.slice( 0, limit ).map( formatResolverCandidateSummary ),
+      };
+
+    }
+
+    function resolveDemo2DesktopRaycastIntersection( sceneIntersections, resolverContext ) {
+
+      const firstHit = sceneIntersections?.[ 0 ] ?? null;
+
+      if ( ! firstHit ) {
+
+        return {
+          resolvedHit: null,
+          firstCandidate: null,
+          candidateRecords: [],
+          clusterRecords: [],
+        };
+
+      }
+
+      const candidateRecords = sceneIntersections.map( ( hit ) => buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) );
+      const firstCandidate = candidateRecords[ 0 ] || null;
+      const firstRole = firstCandidate?.role || null;
 
       if (
         firstRole !== demo2RaycastRoles.NODE
@@ -487,28 +620,165 @@ export const demo2SceneDefinition = Object.freeze( {
         && firstRole !== demo2RaycastRoles.GLOBE_SHELL
       ) {
 
-        return firstHit;
+        return {
+          resolvedHit: firstHit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords: [ firstCandidate ],
+        };
 
       }
 
-      const frontCluster = collectDemo2FrontHitCluster( sceneIntersections );
-      const nearestNodeHit = findNearestDemo2HitByRole( frontCluster, demo2RaycastRoles.NODE );
+      const clusterHits = collectDemo2FrontHitCluster( sceneIntersections, globe.frontHitClusterDistance );
+      const clusterRecords = clusterHits.map( ( hit ) => buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) );
+      const nearestNodeHit = findNearestDemo2HitByRole( clusterHits, demo2RaycastRoles.NODE );
 
       if ( nearestNodeHit ) {
 
-        return nearestNodeHit;
+        return {
+          resolvedHit: nearestNodeHit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords,
+        };
 
       }
 
-      const nearestFlowHit = findNearestDemo2HitByRole( frontCluster, demo2RaycastRoles.FLOW );
+      const nearestFlowHit = findNearestDemo2HitByRole( clusterHits, demo2RaycastRoles.FLOW );
 
       if ( nearestFlowHit ) {
 
-        return nearestFlowHit;
+        return {
+          resolvedHit: nearestFlowHit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords,
+        };
 
       }
 
-      return firstHit;
+      return {
+        resolvedHit: firstHit,
+        firstCandidate,
+        candidateRecords,
+        clusterRecords,
+      };
+
+    }
+
+    function resolveDemo2XrRaycastIntersection( sceneIntersections, resolverContext ) {
+
+      const firstHit = sceneIntersections?.[ 0 ] ?? null;
+
+      if ( ! firstHit ) {
+
+        return {
+          resolvedHit: null,
+          firstCandidate: null,
+          candidateRecords: [],
+          clusterRecords: [],
+        };
+
+      }
+
+      const candidateRecords = sceneIntersections.map( ( hit ) => buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) );
+      const firstCandidate = candidateRecords[ 0 ] || null;
+      const firstRole = firstCandidate?.role || null;
+
+      if ( firstRole === demo2RaycastRoles.GLOBE_HANDLE ) {
+
+        return {
+          resolvedHit: firstHit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords: [ firstCandidate ],
+        };
+
+      }
+
+      if (
+        firstRole !== demo2RaycastRoles.NODE
+        && firstRole !== demo2RaycastRoles.FLOW
+        && firstRole !== demo2RaycastRoles.GLOBE_SHELL
+      ) {
+
+        return {
+          resolvedHit: firstHit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords: [ firstCandidate ],
+        };
+
+      }
+
+      const clusterHits = collectDemo2FrontHitCluster(
+        sceneIntersections,
+        globe.xrFrontHitClusterDistance || globe.frontHitClusterDistance,
+      );
+      const clusterRecords = clusterHits.map( ( hit ) => buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) );
+      const bestNodeCandidate = findBestDemo2NodeCandidate( clusterRecords );
+      const nearestFlowCandidate = clusterRecords.find( ( candidate ) => candidate.role === demo2RaycastRoles.FLOW ) || null;
+      const qualifiesForNodeAssist = Boolean(
+        bestNodeCandidate
+        && isFiniteNumber( bestNodeCandidate.rayMissDistance )
+        && bestNodeCandidate.rayMissDistance <= globe.xrNodeAimAssistRadius
+        && ( bestNodeCandidate.distance - firstHit.distance ) <= globe.xrNodeAssistDistanceSlack
+      );
+
+      if ( firstRole === demo2RaycastRoles.NODE && bestNodeCandidate?.hit ) {
+
+        return {
+          resolvedHit: bestNodeCandidate.hit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords,
+        };
+
+      }
+
+      if (
+        ( firstRole === demo2RaycastRoles.FLOW || firstRole === demo2RaycastRoles.GLOBE_SHELL )
+        && qualifiesForNodeAssist
+        && bestNodeCandidate?.hit
+      ) {
+
+        return {
+          resolvedHit: bestNodeCandidate.hit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords,
+        };
+
+      }
+
+      if ( nearestFlowCandidate?.hit ) {
+
+        return {
+          resolvedHit: nearestFlowCandidate.hit,
+          firstCandidate,
+          candidateRecords,
+          clusterRecords,
+        };
+
+      }
+
+      return {
+        resolvedHit: firstHit,
+        firstCandidate,
+        candidateRecords,
+        clusterRecords,
+      };
+
+    }
+
+    function resolveDemo2RaycastIntersection( sceneIntersections, resolverContext = null ) {
+
+      const resolution = resolverContext?.pointerType === 'xr'
+        ? resolveDemo2XrRaycastIntersection( sceneIntersections, resolverContext )
+        : resolveDemo2DesktopRaycastIntersection( sceneIntersections, resolverContext );
+
+      updateDemo2ResolverDebugState( resolverContext, resolution );
+      return resolution.resolvedHit ?? null;
 
     }
 
@@ -1500,6 +1770,25 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function resolvePrimaryDebugSource() {
 
+      const liveResolverSource = interactiveSources.find( ( source ) => {
+
+        const debugState = context.getSceneInteractionDebugState?.( source ) || null;
+        return Boolean( debugState?.rawFirstSceneHit || debugState?.resolvedSceneHit );
+
+      } );
+
+      if ( liveResolverSource ) {
+
+        return liveResolverSource;
+
+      }
+
+      if ( lastResolverDebug?.source ) {
+
+        return lastResolverDebug.source;
+
+      }
+
       if ( currentHoveredEntry?.source ) {
 
         return currentHoveredEntry.source;
@@ -1564,11 +1853,25 @@ export const demo2SceneDefinition = Object.freeze( {
 
       const debugSource = resolvePrimaryDebugSource();
       const debugState = context.getSceneInteractionDebugState?.( debugSource ) || null;
+      const hasLiveSceneDebug = Boolean( debugState?.rawFirstSceneHit || debugState?.resolvedSceneHit );
+      const headerBits = [
+        debugSource || 'none',
+        lastResolverDebug?.pointerType || debugState?.pointerType || '-',
+        lastResolverDebug?.phase || debugState?.phase || '-',
+      ];
+      const candidateSummary = hasLiveSceneDebug && lastResolverDebug?.candidateSummaries?.length
+        ? lastResolverDebug.candidateSummaries.join( ' | ' )
+        : 'none';
+      const clusterSummary = hasLiveSceneDebug && lastResolverDebug?.clusterSummaries?.length
+        ? lastResolverDebug.clusterSummaries.join( ' | ' )
+        : 'none';
 
       return [
-        `Debug ${debugSource || 'none'}`,
-        `raw ${formatDebugHitSummary( debugState?.rawFirstSceneHit )}`,
-        `resolved ${formatDebugHitSummary( debugState?.resolvedSceneHit )}`,
+        `Debug ${headerBits.join( ' | ' )}`,
+        `raw ${hasLiveSceneDebug ? ( lastResolverDebug?.rawFirstHitSummary || formatDebugHitSummary( debugState?.rawFirstSceneHit ) ) : 'none'}`,
+        `resolved ${hasLiveSceneDebug ? ( lastResolverDebug?.resolvedHitSummary || formatDebugHitSummary( debugState?.resolvedSceneHit ) ) : 'none'}`,
+        `top ${candidateSummary}`,
+        `cluster ${clusterSummary}`,
         `hover N:${currentHoveredNodeId || '-'} F:${currentHoveredFlowId || '-'}`,
         `selected N:${currentSceneState.selectedNodeId || '-'} F:${currentSceneState.selectedFlowId || '-'}`,
         `owners N:${selectedNodeSource || '-'} F:${selectedFlowSource || '-'}`,
@@ -3225,9 +3528,9 @@ export const demo2SceneDefinition = Object.freeze( {
         };
 
       },
-      resolveRaycastIntersection( sceneIntersections ) {
+      resolveRaycastIntersection( sceneIntersections, resolverContext ) {
 
-        return resolveDemo2RaycastIntersection( sceneIntersections );
+        return resolveDemo2RaycastIntersection( sceneIntersections, resolverContext );
 
       },
       onPresentationModeChange( presentationMode ) {
