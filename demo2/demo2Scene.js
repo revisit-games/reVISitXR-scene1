@@ -1103,19 +1103,14 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function resolveSelectionSource( source ) {
 
-      if ( typeof source !== 'string' || source.length === 0 ) {
+      if ( typeof source !== 'string' ) {
 
         return null;
 
       }
 
-      if ( nodeHoverBySource.has( source ) || flowHoverBySource.has( source ) ) {
-
-        return source;
-
-      }
-
-      return null;
+      const normalizedSource = source.trim();
+      return normalizedSource.length > 0 ? normalizedSource : null;
 
     }
 
@@ -1140,15 +1135,11 @@ export const demo2SceneDefinition = Object.freeze( {
 
         }
 
-        const isSelectedMatch = activeSelection
-          && candidate.kind === activeSelection.kind
-          && candidate.id === activeSelection.id;
         const isSelectionBlockingHover = activeSelection
-          && (
-            activeSelection.source !== null
-            && activeSelection.sequence >= 0
-          )
-          && ! isSelectedMatch;
+          && activeSelection.source !== null
+          && activeSelection.sequence >= 0;
+        // Once live selection ownership is known, only a newer hover from that
+        // same source can temporarily override the selected tooltip.
         const isEligible = ! isSelectionBlockingHover
           || (
             candidate.source === activeSelection.source
