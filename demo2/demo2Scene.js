@@ -296,7 +296,11 @@ export const demo2SceneDefinition = Object.freeze( {
     const tempGlobeAnchorPosition = new THREE.Vector3();
     const tempResolverRay = new THREE.Ray();
     const tempResolverNodeWorldCenter = new THREE.Vector3();
+    const tempResolverShellContactPoint = new THREE.Vector3();
+    const tempResolverCandidateWorldPoint = new THREE.Vector3();
     let interactionSequence = 0;
+    let xrSourceActivitySequence = 0;
+    const xrSourceActivityBySource = new Map();
     let dataset = null;
     let loadStatus = 'loading';
     let loadError = null;
@@ -317,6 +321,8 @@ export const demo2SceneDefinition = Object.freeze( {
     let lastLoggedGlobeYawDeg = currentSceneState.globeYawDeg;
     let lastGlobeYawLogAt = 0;
     let lastGlobeAnchorLogAt = 0;
+    let dominantXrTooltipSource = null;
+    let xrReplayHoverLockActive = false;
     let lastResolverDebug = null;
 
     root.add( globeRoot );
@@ -336,6 +342,10 @@ export const demo2SceneDefinition = Object.freeze( {
       INTERACTORS.CONTROLLER_0,
       INTERACTORS.CONTROLLER_1,
       INTERACTORS.DESKTOP_POINTER,
+    ];
+    const xrControllerSources = [
+      INTERACTORS.CONTROLLER_0,
+      INTERACTORS.CONTROLLER_1,
     ];
 
     function trackDisposable( collection, object3D, dispose ) {
@@ -495,6 +505,44 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function resolveDemo2ShellContactDistance( hit, firstHit ) {
+
+      if ( ! hit?.object || ! firstHit?.point ) {
+
+        return null;
+
+      }
+
+      const role = resolveDemo2RaycastRole( hit );
+      tempResolverShellContactPoint.copy( firstHit.point );
+
+      if ( role === demo2RaycastRoles.NODE ) {
+
+        const nodeId = resolveDemo2RaycastTargetId( hit.object );
+        const nodeEntry = nodeEntriesById.get( nodeId );
+
+        if ( ! nodeEntry?.hitProxy ) {
+
+          return null;
+
+        }
+
+        nodeEntry.hitProxy.getWorldPosition( tempResolverCandidateWorldPoint );
+        return tempResolverCandidateWorldPoint.distanceTo( tempResolverShellContactPoint );
+
+      }
+
+      if ( role === demo2RaycastRoles.FLOW && hit.point ) {
+
+        tempResolverCandidateWorldPoint.copy( hit.point );
+        return tempResolverCandidateWorldPoint.distanceTo( tempResolverShellContactPoint );
+
+      }
+
+      return null;
+
+    }
+
     function buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) {
 
       const role = resolveDemo2RaycastRole( hit ) || 'other';
@@ -506,6 +554,9 @@ export const demo2SceneDefinition = Object.freeze( {
       const rayMissDistance = role === demo2RaycastRoles.NODE
         ? resolveDemo2NodeRayMissDistance( id, resolverContext )
         : null;
+      const shellContactDistance = resolveDemo2RaycastRole( firstHit ) === demo2RaycastRoles.GLOBE_SHELL
+        ? resolveDemo2ShellContactDistance( hit, firstHit )
+        : null;
 
       return {
         hit,
@@ -514,6 +565,7 @@ export const demo2SceneDefinition = Object.freeze( {
         distance,
         distanceFromFirst,
         rayMissDistance,
+        shellContactDistance,
       };
 
     }
@@ -531,7 +583,10 @@ export const demo2SceneDefinition = Object.freeze( {
       const missLabel = isFiniteNumber( candidate.rayMissDistance )
         ? ` miss=${formatDebugDistance( candidate.rayMissDistance )}`
         : '';
-      return `${targetLabel}@${distanceLabel}${missLabel}`;
+      const contactLabel = isFiniteNumber( candidate.shellContactDistance )
+        ? ` contact=${formatDebugDistance( candidate.shellContactDistance )}`
+        : '';
+      return `${targetLabel}@${distanceLabel}${missLabel}${contactLabel}`;
 
     }
 
@@ -541,6 +596,7 @@ export const demo2SceneDefinition = Object.freeze( {
       candidateRecords = [],
       clusterRecords = [],
       overrideReason = 'preserve-first-hit',
+      shellAssistSummary = null,
     } = {} ) {
 
       const resolvedCandidate = candidateRecords.find( ( candidate ) => candidate.hit === resolvedHit )
@@ -560,6 +616,7 @@ export const demo2SceneDefinition = Object.freeze( {
         clusterRecords,
         didOverride,
         overrideReason,
+        shellAssistSummary,
       };
 
     }
@@ -572,6 +629,7 @@ export const demo2SceneDefinition = Object.freeze( {
       clusterRecords = [],
       didOverride = false,
       overrideReason = 'preserve-first-hit',
+      shellAssistSummary = null,
     } = {} ) {
 
       if ( ! debugRayEnabled ) {
@@ -594,6 +652,7 @@ export const demo2SceneDefinition = Object.freeze( {
         overrideFromSummary: didOverride ? formatResolverCandidateSummary( firstCandidate ) : null,
         overrideToSummary: didOverride ? formatResolverCandidateSummary( resolvedCandidate ) : null,
         resolvedHitObject: resolvedHit?.object ?? null,
+        shellAssistSummary,
       };
 
     }
@@ -727,7 +786,6 @@ export const demo2SceneDefinition = Object.freeze( {
         globe.xrFrontHitClusterDistance || globe.frontHitClusterDistance,
       );
       const clusterRecords = clusterHits.map( ( hit ) => buildDemo2ResolverCandidate( hit, firstHit, resolverContext ) );
-      const firstNonShellCandidate = clusterRecords.find( ( candidate ) => candidate.role !== demo2RaycastRoles.GLOBE_SHELL ) || null;
 
       if ( firstRole === demo2RaycastRoles.NODE ) {
 
@@ -753,14 +811,60 @@ export const demo2SceneDefinition = Object.freeze( {
 
       }
 
-      if ( firstNonShellCandidate?.hit ) {
+      const shellAssistCandidates = clusterRecords.filter( ( candidate ) => (
+        candidate.role === demo2RaycastRoles.NODE
+        || candidate.role === demo2RaycastRoles.FLOW
+      ) );
+      const bestShellAssistCandidate = shellAssistCandidates.reduce( ( bestCandidate, candidate ) => {
+
+        if ( ! isFiniteNumber( candidate.shellContactDistance ) ) {
+
+          return bestCandidate;
+
+        }
+
+        if ( ! bestCandidate ) {
+
+          return candidate;
+
+        }
+
+        if ( candidate.shellContactDistance < bestCandidate.shellContactDistance ) {
+
+          return candidate;
+
+        }
+
+        if (
+          candidate.shellContactDistance === bestCandidate.shellContactDistance
+          && ( candidate.distance ?? Infinity ) < ( bestCandidate.distance ?? Infinity )
+        ) {
+
+          return candidate;
+
+        }
+
+        return bestCandidate;
+
+      }, null );
+      const maxShellAssistContactDistance = Math.max( 0, globe.xrShellAssistMaxContactDistance ?? Infinity );
+      const shellAssistSummary = bestShellAssistCandidate
+        ? `best ${formatResolverCandidateSummary( bestShellAssistCandidate )} <= ${formatDebugDistance( maxShellAssistContactDistance )}`
+        : `best none <= ${formatDebugDistance( maxShellAssistContactDistance )}`;
+
+      if (
+        bestShellAssistCandidate?.hit
+        && isFiniteNumber( bestShellAssistCandidate.shellContactDistance )
+        && bestShellAssistCandidate.shellContactDistance <= maxShellAssistContactDistance
+      ) {
 
         return buildDemo2ResolverResult( {
-          resolvedHit: firstNonShellCandidate.hit,
+          resolvedHit: bestShellAssistCandidate.hit,
           firstCandidate,
           candidateRecords,
           clusterRecords,
-          overrideReason: 'shell-assist-first-non-shell',
+          overrideReason: 'shell-assist-contact-proximity',
+          shellAssistSummary,
         } );
 
       }
@@ -771,6 +875,7 @@ export const demo2SceneDefinition = Object.freeze( {
         candidateRecords,
         clusterRecords,
         overrideReason: 'shell-blank-surface',
+        shellAssistSummary,
       } );
 
     }
@@ -900,6 +1005,8 @@ export const demo2SceneDefinition = Object.freeze( {
             return;
 
           }
+
+          beginLocalXrInteraction( payload.source );
 
           const startAzimuthDeg = resolveGlobeDragAzimuth( payload.rayOrigin, payload.rayDirection );
 
@@ -1073,6 +1180,8 @@ export const demo2SceneDefinition = Object.freeze( {
             return;
 
           }
+
+          beginLocalXrInteraction( payload.source );
 
           const startPoint = resolveGlobeHandlePoint( payload.rayOrigin, payload.rayDirection );
 
@@ -1509,6 +1618,151 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function isXrControllerSource( source ) {
+
+      return xrControllerSources.includes( source );
+
+    }
+
+    function nextXrSourceActivitySequence() {
+
+      xrSourceActivitySequence += 1;
+      return xrSourceActivitySequence;
+
+    }
+
+    function markDominantXrTooltipSource( source ) {
+
+      if ( ! isXrControllerSource( source ) ) {
+
+        return false;
+
+      }
+
+      dominantXrTooltipSource = source;
+      xrSourceActivityBySource.set( source, nextXrSourceActivitySequence() );
+      return true;
+
+    }
+
+    function hasXrButtonHoverForSource( source ) {
+
+      for ( const button of xrButtons.values() ) {
+
+        if ( button.hoverSources.has( source ) ) {
+
+          return true;
+
+        }
+
+      }
+
+      return false;
+
+    }
+
+    function hasLiveXrSourcePresence( source ) {
+
+      if ( ! isXrControllerSource( source ) ) {
+
+        return false;
+
+      }
+
+      return Boolean(
+        nodeHoverBySource.has( source )
+        || flowHoverBySource.has( source )
+        || hasXrButtonHoverForSource( source )
+        || activeGlobeDrag?.source === source
+        || activeGlobeMove?.source === source
+        || selectedNodeSource === source
+        || selectedFlowSource === source
+      );
+
+    }
+
+    function resolveMostRecentActiveXrSource() {
+
+      let nextSource = null;
+      let nextSequence = - 1;
+
+      xrControllerSources.forEach( ( source ) => {
+
+        if ( ! hasLiveXrSourcePresence( source ) ) {
+
+          return;
+
+        }
+
+        const hoverSequence = Math.max(
+          nodeHoverBySource.get( source )?.sequence ?? - 1,
+          flowHoverBySource.get( source )?.sequence ?? - 1,
+        );
+
+        const selectionSequence = Math.max(
+          selectedNodeSource === source ? selectedNodeSelectionSequence : - 1,
+          selectedFlowSource === source ? selectedFlowSelectionSequence : - 1,
+        );
+
+        const sequence = Math.max(
+          hoverSequence,
+          selectionSequence,
+          xrSourceActivityBySource.get( source ) ?? - 1,
+        );
+
+        if ( sequence <= nextSequence ) {
+
+          return;
+
+        }
+
+        nextSequence = sequence;
+        nextSource = source;
+
+      } );
+
+      return nextSource;
+
+    }
+
+    function syncDominantXrTooltipSource() {
+
+      if ( dominantXrTooltipSource && hasLiveXrSourcePresence( dominantXrTooltipSource ) ) {
+
+        return dominantXrTooltipSource;
+
+      }
+
+      dominantXrTooltipSource = resolveMostRecentActiveXrSource();
+      return dominantXrTooltipSource;
+
+    }
+
+    function setXrReplayHoverLockActive( isLocked ) {
+
+      xrReplayHoverLockActive = Boolean( isLocked );
+
+      if ( xrReplayHoverLockActive ) {
+
+        dominantXrTooltipSource = null;
+
+      }
+
+    }
+
+    function beginLocalXrInteraction( source ) {
+
+      if ( ! isXrControllerSource( source ) ) {
+
+        return false;
+
+      }
+
+      setXrReplayHoverLockActive( false );
+      return markDominantXrTooltipSource( source );
+
+    }
+
     function clearNodeSelectionOwnership() {
 
       selectedNodeSource = null;
@@ -1543,7 +1797,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function resolveLatestHoverEntry( map, kind, activeSelection = null ) {
+    function resolveLatestHoverEntry( map, kind, activeSelection = null, sourceFilter = null ) {
 
       let nextEntry = null;
       let nextSequence = - 1;
@@ -1559,6 +1813,12 @@ export const demo2SceneDefinition = Object.freeze( {
         };
 
         if ( ! candidate.id ) {
+
+          return;
+
+        }
+
+        if ( typeof sourceFilter === 'function' && sourceFilter( candidate.source ) !== true ) {
 
           return;
 
@@ -1662,8 +1922,31 @@ export const demo2SceneDefinition = Object.freeze( {
     function resolveHoverState() {
 
       const activeSelection = getActiveSelectionOwnership();
-      const hoveredNodeEntry = resolveLatestHoverEntry( nodeHoverBySource, 'node', activeSelection );
-      const hoveredFlowEntry = resolveLatestHoverEntry( flowHoverBySource, 'flow', activeSelection );
+      const presentationMode = context.getPresentationMode?.();
+      const isImmersive = presentationMode === PRESENTATION_MODES.IMMERSIVE_VR
+        || presentationMode === PRESENTATION_MODES.IMMERSIVE_AR;
+      const effectiveDominantXrSource = isImmersive ? syncDominantXrTooltipSource() : null;
+      const sourceFilter = isImmersive
+        ? ( source ) => {
+
+          if ( ! isXrControllerSource( source ) ) {
+
+            return true;
+
+          }
+
+          if ( xrReplayHoverLockActive ) {
+
+            return false;
+
+          }
+
+          return source === effectiveDominantXrSource;
+
+        }
+        : null;
+      const hoveredNodeEntry = resolveLatestHoverEntry( nodeHoverBySource, 'node', activeSelection, sourceFilter );
+      const hoveredFlowEntry = resolveLatestHoverEntry( flowHoverBySource, 'flow', activeSelection, sourceFilter );
 
       currentHoveredEntry = hoveredNodeEntry;
 
@@ -1690,7 +1973,37 @@ export const demo2SceneDefinition = Object.freeze( {
 
       }
 
+      if ( xrReplayHoverLockActive && isXrControllerSource( normalizedSource ) ) {
+
+        if ( ! isHovered ) {
+
+          const entry = map.get( normalizedSource );
+
+          if ( entry?.id === id || ! id ) {
+
+            map.delete( normalizedSource );
+
+          }
+
+        } else {
+
+          map.delete( normalizedSource );
+
+        }
+
+        resolveHoverState();
+        updateHighlightsAndTooltip();
+        return;
+
+      }
+
       if ( isHovered ) {
+
+        if ( isXrControllerSource( normalizedSource ) ) {
+
+          markDominantXrTooltipSource( normalizedSource );
+
+        }
 
         const sequence = nextInteractionSequence();
         map.set( normalizedSource, {
@@ -1735,6 +2048,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       }
 
+      syncDominantXrTooltipSource();
       resolveHoverState();
       updateHighlightsAndTooltip();
 
@@ -1772,7 +2086,33 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function formatDebugHoverMapSummary( map ) {
+
+      const parts = interactiveSources.map( ( source ) => {
+
+        const entry = map.get( source );
+
+        if ( ! entry?.id ) {
+
+          return `${source}:-`;
+
+        }
+
+        return `${source}:${entry.id}#${entry.sequence ?? '-'}`;
+
+      } );
+
+      return parts.join( ' | ' );
+
+    }
+
     function resolvePrimaryDebugSource() {
+
+      if ( dominantXrTooltipSource ) {
+
+        return dominantXrTooltipSource;
+
+      }
 
       const liveResolverSource = interactiveSources.find( ( source ) => {
 
@@ -1876,6 +2216,7 @@ export const demo2SceneDefinition = Object.freeze( {
             ? `override yes: ${lastResolverDebug.overrideFromSummary || 'none'} -> ${lastResolverDebug.overrideToSummary || 'none'} | ${lastResolverDebug.overrideReason || 'unknown'}`
             : `override no | ${lastResolverDebug?.overrideReason || 'preserve-first-hit'}`
         );
+      const interactionPolicy = context.getInteractionPolicy?.() || null;
 
       return [
         `Debug ${headerBits.join( ' | ' )}`,
@@ -1884,9 +2225,14 @@ export const demo2SceneDefinition = Object.freeze( {
         overrideSummary,
         `top ${candidateSummary}`,
         `cluster ${clusterSummary}`,
+        `shell ${lastResolverDebug?.shellAssistSummary || 'inactive'}`,
         `hover N:${currentHoveredNodeId || '-'} F:${currentHoveredFlowId || '-'}`,
         `selected N:${currentSceneState.selectedNodeId || '-'} F:${currentSceneState.selectedFlowId || '-'}`,
         `owners N:${selectedNodeSource || '-'} F:${selectedFlowSource || '-'}`,
+        `hoverMapN ${formatDebugHoverMapSummary( nodeHoverBySource )}`,
+        `hoverMapF ${formatDebugHoverMapSummary( flowHoverBySource )}`,
+        `xr dominant:${dominantXrTooltipSource || '-'} lock:${xrReplayHoverLockActive ? 'on' : 'off'}`,
+        `replay recv:${interactionPolicy?.hasReceivedReplayState === true ? 'on' : 'off'} apply:${interactionPolicy?.isApplyingReplayState === true ? 'on' : 'off'}`,
         'barrier removed',
         `cache ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_0 )}`,
         `cache ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_1 )}`,
@@ -2212,11 +2558,13 @@ export const demo2SceneDefinition = Object.freeze( {
 
             if ( payload.isHovered ) {
 
+              markDominantXrTooltipSource( payload.source );
               button.hoverSources.add( payload.source );
 
             } else {
 
               button.hoverSources.delete( payload.source );
+              syncDominantXrTooltipSource();
 
             }
 
@@ -2231,6 +2579,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
             }
 
+            beginLocalXrInteraction( payload.source );
             onPress?.( payload.source );
 
           },
@@ -2528,6 +2877,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
               }
 
+              beginLocalXrInteraction( payload.source );
               setSelectedFlowId( flow.flowId, {
                 source: payload.source,
                 shouldLog: true,
@@ -2727,6 +3077,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
                 }
 
+                beginLocalXrInteraction( payload.source );
                 focusCountry( node.id, {
                   source: payload.source,
                   shouldLog: true,
@@ -3349,10 +3700,15 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( source === 'replay-scene' ) {
 
+        setXrReplayHoverLockActive( true );
         clearHoverState( { invalidateAllSharedHover: true } );
         resetSelectionOwnershipTracking();
         activeGlobeDrag = null;
         activeGlobeMove = null;
+
+      } else if ( context.getInteractionPolicy?.()?.hasReceivedReplayState !== true ) {
+
+        setXrReplayHoverLockActive( false );
 
       }
 
@@ -3484,6 +3840,9 @@ export const demo2SceneDefinition = Object.freeze( {
 
         clearHoverState( { invalidateAllSharedHover: true } );
         resetSelectionOwnershipTracking();
+        dominantXrTooltipSource = null;
+        xrSourceActivityBySource.clear();
+        setXrReplayHoverLockActive( false );
         clearVisibleFlowMeshes();
         clearTrackedCollection( uiSurfaces );
         clearTrackedCollection( staticObjects );
@@ -3550,6 +3909,8 @@ export const demo2SceneDefinition = Object.freeze( {
         xrPanelRoot.visible = presentationMode !== PRESENTATION_MODES.DESKTOP;
         clearHoverState( { invalidateAllSharedHover: true } );
         resetSelectionOwnershipTracking();
+        dominantXrTooltipSource = null;
+        xrSourceActivityBySource.clear();
         xrButtons.forEach( ( button ) => button.hoverSources.clear() );
 
         if ( presentationMode !== PRESENTATION_MODES.DESKTOP ) {

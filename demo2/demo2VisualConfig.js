@@ -8,6 +8,7 @@ export const demo2VisualConfig = Object.freeze( {
     interactionRadius: 0.635,
     frontHitClusterDistance: 0.04,
     xrFrontHitClusterDistance: 0.06,
+    xrShellAssistMaxContactDistance: 0.11,
     xrNodeAimAssistRadius: 0.045,
     xrNodeAssistDistanceSlack: 0.035,
     debugCandidateLimit: 5,
