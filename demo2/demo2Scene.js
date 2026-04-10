@@ -287,13 +287,18 @@ export const demo2SceneDefinition = Object.freeze( {
     const tempGlobeRay = new THREE.Ray();
     const tempGlobeHandleHit = new THREE.Vector3();
     const tempGlobeAnchorPosition = new THREE.Vector3();
-    let hoverSequence = 0;
+    let interactionSequence = 0;
     let dataset = null;
     let loadStatus = 'loading';
     let loadError = null;
     let currentSceneState = { ...defaultSceneState };
+    let currentHoveredEntry = null;
     let currentHoveredNodeId = null;
     let currentHoveredFlowId = null;
+    let selectedNodeSource = null;
+    let selectedFlowSource = null;
+    let selectedNodeSelectionSequence = - 1;
+    let selectedFlowSelectionSequence = - 1;
     let currentVisibleFlows = [];
     let currentVisibleFlowEntries = [];
     let currentFlowEntryById = new Map();
@@ -1068,30 +1073,161 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
-    function resolveHoverId( map ) {
+    function nextInteractionSequence() {
 
-      let nextId = null;
+      interactionSequence += 1;
+      return interactionSequence;
+
+    }
+
+    function clearNodeSelectionOwnership() {
+
+      selectedNodeSource = null;
+      selectedNodeSelectionSequence = - 1;
+
+    }
+
+    function clearFlowSelectionOwnership() {
+
+      selectedFlowSource = null;
+      selectedFlowSelectionSequence = - 1;
+
+    }
+
+    function resetSelectionOwnershipTracking() {
+
+      clearNodeSelectionOwnership();
+      clearFlowSelectionOwnership();
+
+    }
+
+    function resolveSelectionSource( source ) {
+
+      if ( typeof source !== 'string' || source.length === 0 ) {
+
+        return null;
+
+      }
+
+      if ( nodeHoverBySource.has( source ) || flowHoverBySource.has( source ) ) {
+
+        return source;
+
+      }
+
+      return null;
+
+    }
+
+    function resolveLatestHoverEntry( map, kind, activeSelection = null ) {
+
+      let nextEntry = null;
       let nextSequence = - 1;
 
-      map.forEach( ( entry ) => {
+      map.forEach( ( entry, source ) => {
 
-        if ( entry.sequence > nextSequence ) {
+        const nextSource = entry?.source || source;
+        const candidate = {
+          id: entry?.id || null,
+          kind,
+          source: nextSource,
+          sequence: entry?.sequence ?? - 1,
+        };
 
-          nextSequence = entry.sequence;
-          nextId = entry.id;
+        if ( ! candidate.id ) {
+
+          return;
 
         }
 
+        const isSelectedMatch = activeSelection
+          && candidate.kind === activeSelection.kind
+          && candidate.id === activeSelection.id;
+        const isSelectionBlockingHover = activeSelection
+          && (
+            activeSelection.source !== null
+            && activeSelection.sequence >= 0
+          )
+          && ! isSelectedMatch;
+        const isEligible = ! isSelectionBlockingHover
+          || (
+            candidate.source === activeSelection.source
+            && candidate.sequence > activeSelection.sequence
+          );
+
+        if ( ! isEligible || candidate.sequence <= nextSequence ) {
+
+          return;
+
+        }
+
+        nextSequence = candidate.sequence;
+        nextEntry = candidate;
+
       } );
 
-      return nextId;
+      return nextEntry;
+
+    }
+
+    function getActiveSelectionOwnership() {
+
+      if ( currentSceneState.selectedFlowId ) {
+
+        return {
+          kind: 'flow',
+          id: currentSceneState.selectedFlowId,
+          source: selectedFlowSource,
+          sequence: selectedFlowSelectionSequence,
+        };
+
+      }
+
+      if ( currentSceneState.selectedNodeId ) {
+
+        return {
+          kind: 'node',
+          id: currentSceneState.selectedNodeId,
+          source: selectedNodeSource,
+          sequence: selectedNodeSelectionSequence,
+        };
+
+      }
+
+      return null;
+
+    }
+
+    function clearHoverEntriesForSource( source ) {
+
+      if ( typeof source !== 'string' || source.length === 0 ) {
+
+        return false;
+
+      }
+
+      const deletedNodeHover = nodeHoverBySource.delete( source );
+      const deletedFlowHover = flowHoverBySource.delete( source );
+      return deletedNodeHover || deletedFlowHover;
 
     }
 
     function resolveHoverState() {
 
-      currentHoveredNodeId = resolveHoverId( nodeHoverBySource );
-      currentHoveredFlowId = resolveHoverId( flowHoverBySource );
+      const activeSelection = getActiveSelectionOwnership();
+      const hoveredNodeEntry = resolveLatestHoverEntry( nodeHoverBySource, 'node', activeSelection );
+      const hoveredFlowEntry = resolveLatestHoverEntry( flowHoverBySource, 'flow', activeSelection );
+
+      currentHoveredEntry = hoveredNodeEntry;
+
+      if ( hoveredFlowEntry && ( ! currentHoveredEntry || hoveredFlowEntry.sequence > currentHoveredEntry.sequence ) ) {
+
+        currentHoveredEntry = hoveredFlowEntry;
+
+      }
+
+      currentHoveredNodeId = currentHoveredEntry?.kind === 'node' ? currentHoveredEntry.id : null;
+      currentHoveredFlowId = currentHoveredEntry?.kind === 'flow' ? currentHoveredEntry.id : null;
 
     }
 
@@ -1099,10 +1235,11 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( isHovered ) {
 
-        hoverSequence += 1;
+        const sequence = nextInteractionSequence();
         map.set( source, {
           id,
-          sequence: hoverSequence,
+          source,
+          sequence,
         } );
 
       } else {
@@ -1880,6 +2017,7 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( dataset && currentSceneState.selectedNodeId && ! dataset.nodeById.has( currentSceneState.selectedNodeId ) ) {
 
         currentSceneState.selectedNodeId = null;
+        clearNodeSelectionOwnership();
 
       }
 
@@ -1890,6 +2028,7 @@ export const demo2SceneDefinition = Object.freeze( {
         currentSceneState.selectedFlowId = null;
         currentSceneState.taskAnswer = null;
         currentSceneState.taskSubmitted = false;
+        clearFlowSelectionOwnership();
 
       }
 
@@ -2026,12 +2165,19 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       const changed = currentSceneState.focusedCountryId !== countryId || currentSceneState.selectedNodeId !== countryId;
+      const selectionSource = resolveSelectionSource( source );
+      const selectionSequence = nextInteractionSequence();
 
       currentSceneState.focusedCountryId = countryId;
       currentSceneState.selectedNodeId = countryId;
       currentSceneState.selectedFlowId = null;
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
+      selectedNodeSource = selectionSource;
+      selectedNodeSelectionSequence = selectionSequence;
+      clearFlowSelectionOwnership();
+      clearHoverEntriesForSource( source );
+      resolveHoverState();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2051,20 +2197,27 @@ export const demo2SceneDefinition = Object.freeze( {
     } = {} ) {
 
       const nextFlow = currentVisibleFlows.find( ( flow ) => flow.flowId === flowId ) || null;
+      const changed = currentSceneState.selectedFlowId !== nextFlow?.flowId;
 
-      if ( ! nextFlow || currentSceneState.selectedFlowId === nextFlow.flowId ) {
+      if ( ! nextFlow ) {
 
         return;
 
       }
 
+      const selectionSource = resolveSelectionSource( source );
+      const selectionSequence = nextInteractionSequence();
       currentSceneState.selectedFlowId = nextFlow.flowId;
       currentSceneState.taskAnswer = nextFlow.flowId;
       currentSceneState.taskSubmitted = false;
+      selectedFlowSource = selectionSource;
+      selectedFlowSelectionSequence = selectionSequence;
+      clearHoverEntriesForSource( source );
+      resolveHoverState();
       updateHighlightsAndTooltip();
       syncAllUi();
 
-      if ( shouldLog ) {
+      if ( changed && shouldLog ) {
 
         recordSceneChange( 'selection', source, {
           flushImmediately: getSceneStateLoggingConfig().flushOnSelectionChange === true,
@@ -2097,6 +2250,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.selectedFlowId = null;
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
+      clearFlowSelectionOwnership();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2149,6 +2303,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.selectedFlowId = null;
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
+      clearFlowSelectionOwnership();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2194,6 +2349,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.selectedFlowId = null;
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
+      clearFlowSelectionOwnership();
       syncDataDrivenScene();
       syncAllUi();
 
@@ -2271,6 +2427,7 @@ export const demo2SceneDefinition = Object.freeze( {
       currentSceneState.labelsVisible = true;
       currentSceneState.taskAnswer = null;
       currentSceneState.taskSubmitted = false;
+      resetSelectionOwnershipTracking();
       syncDataDrivenScene();
       syncAllUi();
       recordSceneChange( 'resetFilters', source, {
@@ -2503,6 +2660,7 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( source === 'replay-scene' ) {
 
         clearHoverState();
+        resetSelectionOwnershipTracking();
         activeGlobeDrag = null;
         activeGlobeMove = null;
 
@@ -2635,6 +2793,7 @@ export const demo2SceneDefinition = Object.freeze( {
       dispose() {
 
         clearHoverState();
+        resetSelectionOwnershipTracking();
         clearVisibleFlowMeshes();
         clearTrackedCollection( uiSurfaces );
         clearTrackedCollection( staticObjects );
@@ -2689,6 +2848,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         xrPanelRoot.visible = presentationMode !== PRESENTATION_MODES.DESKTOP;
         clearHoverState();
+        resetSelectionOwnershipTracking();
         xrButtons.forEach( ( button ) => button.hoverSources.clear() );
 
         if ( presentationMode !== PRESENTATION_MODES.DESKTOP ) {
