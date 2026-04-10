@@ -127,6 +127,24 @@ Most XR-safe interaction sizing now lives in `demo2/demo2VisualConfig.js`, inclu
 
 This keeps the paper-facing Demo 2 scene customizable without pushing scene-specific heuristics into `main.js`.
 
+## Static Globe Labels And Panel Details
+
+Demo 2 intentionally keeps only one in-scene text system on the globe:
+
+- fixed country-name sprites are created from each node's `name`
+- `labelsVisible` controls whether those fixed labels are shown
+- hover, click, selection, replay, and route focus do not create or replace dynamic 3D tooltips
+- selected node and selected flow details belong to the desktop/XR panels
+
+The static-label policy is scene-local and lives in `demo2/demo2VisualConfig.js`:
+
+- `interaction.tooltipMode` defaults to `'static-labels-only'`
+- `interaction.flowSelectionAnnotationMode` defaults to `'none'`
+- fixed country-label card styling lives under `labelStyles.nodeLabel`
+- selected-node label tint, selected-label opacity, and selected-node halo strength live under `interaction.selectedLabelAccentColor`, `interaction.selectedLabelAccentStrength`, `interaction.selectedLabelOpacity`, and `interaction.selectedNodeHaloOpacity`
+
+Panel summary text is owned by `syncDesktopPanel()` and `syncXrPanel()` in `demo2/demo2Scene.js`. Those functions are the authoritative place for selected node, selected route, route year/value/destination, and task submission status.
+
 ## Semantic Replay State
 
 Demo 2 restores semantic geo state instead of replaying dense arc animation:
