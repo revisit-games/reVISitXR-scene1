@@ -313,6 +313,7 @@ export const demo2SceneDefinition = Object.freeze( {
     let currentTooltipTargetRecord = null;
     let activeTooltipSourceLabel = 'semantic';
     let activeTooltipOwnership = 'semantic';
+    let activeTooltipFallbackReason = null;
     let selectedNodeSource = null;
     let selectedFlowSource = null;
     let selectedNodeSelectionSequence = - 1;
@@ -1941,13 +1942,118 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function resolveGeoTargetRecordFromSceneEntry( sceneEntry ) {
+
+      const targetRecord = resolveDemo2TargetRecordFromObject(
+        sceneEntry?.object || sceneEntry?.hit?.object || null,
+      );
+
+      return targetRecord?.kind === 'node' || targetRecord?.kind === 'flow'
+        ? targetRecord
+        : null;
+
+    }
+
+    function setLocalTargetRecordForSource( source, targetRecord, {
+      sequence = null,
+      sourceMode = 'direct',
+    } = {} ) {
+
+      const normalizedSource = resolveSelectionSource( source );
+
+      if ( ! normalizedSource ) {
+
+        return false;
+
+      }
+
+      if ( ! targetRecord?.targetId ) {
+
+        return localTargetBySource.delete( normalizedSource );
+
+      }
+
+      const previousEntry = localTargetBySource.get( normalizedSource ) || null;
+
+      if ( previousEntry?.targetId === targetRecord.targetId ) {
+
+        if ( previousEntry.sourceMode !== sourceMode ) {
+
+          localTargetBySource.set( normalizedSource, {
+            ...previousEntry,
+            sourceMode,
+          } );
+
+        }
+
+        return false;
+
+      }
+
+      localTargetBySource.set( normalizedSource, {
+        source: normalizedSource,
+        targetId: targetRecord.targetId,
+        kind: targetRecord.kind,
+        id: targetRecord.id,
+        sequence: Number.isInteger( sequence ) ? sequence : nextInteractionSequence(),
+        sourceMode,
+      } );
+
+      return true;
+
+    }
+
+    function resolveMostRecentLocalXrSource() {
+
+      let nextSource = null;
+      let nextSequence = - 1;
+
+      xrControllerSources.forEach( ( source ) => {
+
+        const sequence = localTargetBySource.get( source )?.sequence ?? - 1;
+
+        if ( sequence <= nextSequence ) {
+
+          return;
+
+        }
+
+        nextSequence = sequence;
+        nextSource = source;
+
+      } );
+
+      return nextSource;
+
+    }
+
+    function resolveActiveXrTooltipSource() {
+
+      if ( xrReplayHoverLockActive ) {
+
+        return null;
+
+      }
+
+      const dominantSource = syncDominantXrTooltipSource();
+
+      if ( dominantSource && localTargetBySource.has( dominantSource ) ) {
+
+        return dominantSource;
+
+      }
+
+      return resolveMostRecentLocalXrSource() || dominantSource || null;
+
+    }
+
     function resolveHoverState() {
 
       const presentationMode = context.getPresentationMode?.();
       const isImmersive = presentationMode === PRESENTATION_MODES.IMMERSIVE_VR
         || presentationMode === PRESENTATION_MODES.IMMERSIVE_AR;
       const activeSource = isImmersive
-        ? ( xrReplayHoverLockActive ? null : syncDominantXrTooltipSource() )
+        ? resolveActiveXrTooltipSource()
         : INTERACTORS.DESKTOP_POINTER;
       const activeLocalEntry = activeSource ? localTargetBySource.get( activeSource ) : null;
 
@@ -1963,6 +2069,7 @@ export const demo2SceneDefinition = Object.freeze( {
         currentTooltipTargetRecord = currentLocalTargetRecord;
         activeTooltipOwnership = 'local';
         activeTooltipSourceLabel = currentLocalTargetSource || 'local';
+        activeTooltipFallbackReason = null;
         return;
 
       }
@@ -1970,18 +2077,22 @@ export const demo2SceneDefinition = Object.freeze( {
       if ( currentSceneState.selectedFlowId ) {
 
         currentTooltipTargetRecord = targetRecordsById.get( buildDemo2TargetId( 'flow', currentSceneState.selectedFlowId ) ) || null;
+        activeTooltipFallbackReason = `selectedFlowId=${currentSceneState.selectedFlowId}`;
 
       } else if ( currentSceneState.selectedNodeId ) {
 
         currentTooltipTargetRecord = targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.selectedNodeId ) ) || null;
+        activeTooltipFallbackReason = `selectedNodeId=${currentSceneState.selectedNodeId}`;
 
       } else if ( currentSceneState.focusedCountryId ) {
 
         currentTooltipTargetRecord = targetRecordsById.get( buildDemo2TargetId( 'node', currentSceneState.focusedCountryId ) ) || null;
+        activeTooltipFallbackReason = `focusedCountryId=${currentSceneState.focusedCountryId}`;
 
       } else {
 
         currentTooltipTargetRecord = null;
+        activeTooltipFallbackReason = 'none';
 
       }
 
@@ -2004,7 +2115,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
       if ( xrReplayHoverLockActive && isXrControllerSource( normalizedSource ) ) {
 
-        localTargetBySource.delete( normalizedSource );
+        clearHoverEntriesForSource( normalizedSource );
 
         resolveHoverState();
         updateHighlightsAndTooltip();
@@ -2024,12 +2135,8 @@ export const demo2SceneDefinition = Object.freeze( {
 
         if ( targetRecord?.targetId ) {
 
-          localTargetBySource.set( normalizedSource, {
-            source: normalizedSource,
-            targetId: targetRecord.targetId,
-            kind: targetRecord.kind,
-            id: targetRecord.id,
-            sequence: nextInteractionSequence(),
+          setLocalTargetRecordForSource( normalizedSource, targetRecord, {
+            sourceMode: 'hover-event',
           } );
 
         }
@@ -2041,7 +2148,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         if ( entry?.targetId === targetId || ! id ) {
 
-          localTargetBySource.delete( normalizedSource );
+          clearHoverEntriesForSource( normalizedSource );
 
         }
 
@@ -2108,6 +2215,68 @@ export const demo2SceneDefinition = Object.freeze( {
 
     }
 
+    function syncXrLocalTargetsFromInteractorState() {
+
+      const presentationMode = context.getPresentationMode?.();
+      const isImmersive = presentationMode === PRESENTATION_MODES.IMMERSIVE_VR
+        || presentationMode === PRESENTATION_MODES.IMMERSIVE_AR;
+
+      if ( ! isImmersive ) {
+
+        return false;
+
+      }
+
+      let didChange = false;
+      const previousDominantSource = dominantXrTooltipSource;
+
+      xrControllerSources.forEach( ( source ) => {
+
+        if ( xrReplayHoverLockActive ) {
+
+          didChange = clearHoverEntriesForSource( source ) || didChange;
+          return;
+
+        }
+
+        const interactorState = context.getSceneInteractorState?.( source ) || null;
+        const selectionTargetRecord = resolveGeoTargetRecordFromSceneEntry( interactorState?.sceneSelection );
+        const hoveredTargetRecord = resolveGeoTargetRecordFromSceneEntry( interactorState?.hoveredSceneEntry );
+        const nextTargetRecord = selectionTargetRecord || hoveredTargetRecord || null;
+        const nextSourceMode = selectionTargetRecord
+          ? 'sceneSelection'
+          : ( hoveredTargetRecord ? 'hoveredSceneEntry' : null );
+
+        const didSourceChange = nextTargetRecord
+          ? setLocalTargetRecordForSource( source, nextTargetRecord, {
+            sourceMode: nextSourceMode,
+          } )
+          : clearHoverEntriesForSource( source );
+
+        if ( didSourceChange && nextTargetRecord ) {
+
+          markDominantXrTooltipSource( source );
+
+        }
+
+        didChange = didSourceChange || didChange;
+
+      } );
+
+      const nextDominantSource = syncDominantXrTooltipSource();
+
+      if ( ! didChange && previousDominantSource === nextDominantSource ) {
+
+        return false;
+
+      }
+
+      resolveHoverState();
+      updateHighlightsAndTooltip();
+      return true;
+
+    }
+
     function formatDebugDistance( distance ) {
 
       return isFiniteNumber( distance ) ? distance.toFixed( 3 ) : '--';
@@ -2133,9 +2302,9 @@ export const demo2SceneDefinition = Object.freeze( {
 
     function formatDebugCacheSummary( source ) {
 
-      const debugState = context.getSceneInteractionDebugState?.( source ) || null;
-      const hoveredLabel = formatDebugHitSummary( debugState?.hoveredSceneEntry );
-      const selectionLabel = formatDebugHitSummary( debugState?.sceneSelection );
+      const interactorState = context.getSceneInteractorState?.( source ) || null;
+      const hoveredLabel = formatDebugHitSummary( interactorState?.hoveredSceneEntry );
+      const selectionLabel = formatDebugHitSummary( interactorState?.sceneSelection );
       return `${source} h:${hoveredLabel} s:${selectionLabel}`;
 
     }
@@ -2152,7 +2321,7 @@ export const demo2SceneDefinition = Object.freeze( {
 
         }
 
-        return `${source}:${entry.targetId}#${entry.sequence ?? '-'}`;
+        return `${source}:${entry.targetId}#${entry.sequence ?? '-'}(${entry.sourceMode || 'direct'})`;
 
       } );
 
@@ -2295,12 +2464,13 @@ export const demo2SceneDefinition = Object.freeze( {
         `hover N:${currentHoveredNodeId || '-'} F:${currentHoveredFlowId || '-'}`,
         `selected N:${currentSceneState.selectedNodeId || '-'} F:${currentSceneState.selectedFlowId || '-'}`,
         `tooltip ${activeTooltipOwnership}:${activeTooltipSourceLabel} -> ${formatDebugTargetRecordSummary( currentTooltipTargetRecord )}`,
+        `fallback ${activeTooltipFallbackReason || 'none'}`,
         `local ${formatDebugLocalTargetSummary()}`,
         `xr dominant:${dominantXrTooltipSource || '-'} lock:${xrReplayHoverLockActive ? 'on' : 'off'}`,
         `replay recv:${interactionPolicy?.hasReceivedReplayState === true ? 'on' : 'off'} apply:${interactionPolicy?.isApplyingReplayState === true ? 'on' : 'off'}`,
         `selection owners N:${selectedNodeSource || '-'} F:${selectedFlowSource || '-'}`,
-        `cache ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_0 )}`,
-        `cache ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_1 )}`,
+        `live ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_0 )}`,
+        `live ${formatDebugCacheSummary( INTERACTORS.CONTROLLER_1 )}`,
       ].join( '\n' );
 
     }
@@ -3977,6 +4147,7 @@ export const demo2SceneDefinition = Object.freeze( {
       update( deltaSeconds ) {
 
         panelShell.updateRuntimePlacement( { deltaSeconds } );
+        syncXrLocalTargetsFromInteractorState();
 
         if ( debugRayEnabled ) {
 

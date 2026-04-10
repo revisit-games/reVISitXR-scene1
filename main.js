@@ -611,6 +611,26 @@ function getSceneInteractionDebugState( source ) {
 
 }
 
+function getSceneInteractorState( source ) {
+
+  const controller = getControllerByInteractorId( source );
+  const hoveredSceneEntry = source === INTERACTORS.DESKTOP_POINTER
+    ? desktopState.hoveredSceneEntry
+    : ( controller?.userData?.hoveredSceneEntry ?? null );
+  const sceneSelection = source === INTERACTORS.DESKTOP_POINTER
+    ? desktopState.sceneSelection
+    : ( controller?.userData?.sceneSelection ?? null );
+
+  return {
+    source,
+    interactor: source === INTERACTORS.DESKTOP_POINTER ? INTERACTORS.DESKTOP_POINTER : ( controller ? getControllerInteractorId( controller ) : source ),
+    pointerType: source === INTERACTORS.DESKTOP_POINTER ? 'desktop' : 'xr',
+    hoveredSceneEntry,
+    sceneSelection,
+  };
+
+}
+
 function buildSceneInteractionPayload( {
   source,
   hit = null,
@@ -811,6 +831,7 @@ function createSceneRuntimeContext() {
     getInteractionPolicy: () => studyLogger?.getInteractionPolicy?.() ?? null,
     getLoggingConfig: () => studyLogger?.getActiveLoggingConfig?.() ?? getActiveSceneLoggingConfig(),
     invalidateSceneHoverForSource,
+    getSceneInteractorState,
     getSceneInteractionDebugState,
     recordSceneStateChange: ( payload ) => studyLogger?.recordSceneStateChange?.( payload ) ?? false,
   };
