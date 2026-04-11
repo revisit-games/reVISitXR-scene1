@@ -102,6 +102,7 @@ Demo 2 consumes the shared `scenes/core/xyMoveHandle.js` helper for floor transl
 - a vertical line now drops from the globe to a floor ring/disc anchor
 - the visible ring/disc is paired with four non-interactive arrow affordances
 - dragging the user-facing XY move bar updates the globe anchor in Three.js world `X/Z` only while keeping `Y` fixed
+- the shared helper's optional yaw rotation arrows are disabled here, because globe yaw is already handled by direct globe dragging
 - replay restores that anchor semantically instead of reenacting drag motion
 
 The visual tuning lives in `demo2VisualConfig.globe.xyMoveHandle`. Existing flat `globe.handle*` fields are still used as fallbacks for package compatibility. The helper owns the line, ring, disc, arrows, and invisible hit cylinder, while Demo 2 still owns the `GLOBE_HANDLE` raycast role, `moveGlobe` provenance label, replay hydration, and `flushOnGlobeMoveEnd` behavior.

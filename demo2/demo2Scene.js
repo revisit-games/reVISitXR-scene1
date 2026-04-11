@@ -64,6 +64,7 @@ function resolveDemo2GlobeMoveHandleConfig( globe = {} ) {
     interactiveRadius: pickNumber( nested.interactiveRadius, pickNumber( globe.handleInteractiveRadius, 0.2 ) ),
     interactiveHeight: pickNumber( nested.interactiveHeight, 0.14 ),
     minMoveDistance: pickNumber( nested.minMoveDistance, 0.005 ),
+    allowedRotate: false,
     lineColor: pickColor( nested.lineColor, 0x88c9f3 ),
     lineEmissive: pickColor( nested.lineEmissive, 0x133349 ),
     lineOpacity: pickNumber( nested.lineOpacity, 0.8 ),

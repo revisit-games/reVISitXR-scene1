@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 const WORLD_UP = new THREE.Vector3( 0, 1, 0 );
+const DEFAULT_QUATERNION = new THREE.Quaternion();
 
 function numberOr( value, fallback ) {
 
@@ -33,6 +34,35 @@ function vector3FromValue( value, fallback = new THREE.Vector3() ) {
   }
 
   return fallback.clone();
+
+}
+
+function quaternionFromValue( value, fallback = DEFAULT_QUATERNION ) {
+
+  if ( value?.isQuaternion ) {
+
+    return value.clone();
+
+  }
+
+  if ( Array.isArray( value ) && value.length === 4 ) {
+
+    return new THREE.Quaternion(
+      numberOr( value[ 0 ], fallback.x ),
+      numberOr( value[ 1 ], fallback.y ),
+      numberOr( value[ 2 ], fallback.z ),
+      numberOr( value[ 3 ], fallback.w ),
+    );
+
+  }
+
+  return fallback.clone();
+
+}
+
+function normalizeAngleRadians( angle ) {
+
+  return Math.atan2( Math.sin( angle ), Math.cos( angle ) );
 
 }
 
@@ -112,22 +142,51 @@ export function createXYMoveHandle( context, {
   hitColor = 0xffffff,
   hitOpacity = 0,
   renderOrder = 1,
+  getAnchorWorldPosition = null,
+  targetObject = null,
+  anchorLocalPosition = null,
+  attachmentLocalPosition = null,
+  allowedRotate = false,
+  rotateRingRadius = 0.25,
+  rotateRingTubeRadius = 0.01,
+  rotateArrowRadius = 0.024,
+  rotateArrowLength = 0.052,
+  rotateArrowColor = 0x8df7a4,
+  rotateArrowEmissive = 0x1d5a34,
+  rotateArrowOpacity = 0.88,
+  rotateInteractiveRadius = 0.255,
+  rotateInteractiveTubeRadius = 0.034,
+  minRotateAngleDeg = 1.25,
   getTargetPosition = () => new THREE.Vector3(),
   setTargetPosition = () => {},
+  getTargetQuaternion = () => DEFAULT_QUATERNION,
+  setTargetQuaternion = () => {},
   onDragStart = null,
   onDragMove = null,
   onDragEnd = null,
+  onRotateStart = null,
+  onRotateMove = null,
+  onRotateEnd = null,
   decorateHitMesh = null,
 } = {} ) {
 
   const root = new THREE.Group();
+  const canRotate = allowedRotate === true;
   const dragPlane = new THREE.Plane( WORLD_UP, - numberOr( floorY, 0 ) );
   const dragRay = new THREE.Ray();
   const dragHit = new THREE.Vector3();
   const tempTargetPosition = new THREE.Vector3();
+  const tempAnchorPosition = new THREE.Vector3();
+  const tempAnchorLocalPosition = new THREE.Vector3();
+  const tempTargetQuaternion = new THREE.Quaternion();
+  const tempYawQuaternion = new THREE.Quaternion();
+  const tempNextQuaternion = new THREE.Quaternion();
   const tempParentQuaternion = new THREE.Quaternion();
   const tempParentLocal = new THREE.Vector3();
+  const rotationVisuals = [];
+  const rotationArrowUp = new THREE.Vector3( 0, 1, 0 );
   let activeDrag = null;
+  let activeRotate = null;
   let enabled = true;
 
   root.name = name;
@@ -212,6 +271,94 @@ export function createXYMoveHandle( context, {
   hitMesh.renderOrder = renderOrder + 3;
   root.add( hitMesh );
 
+  if ( canRotate ) {
+
+    const rotateArcAngle = Math.PI * 0.68;
+    const rotateRadius = Math.max( 0.001, rotateRingRadius );
+    const rotateTube = Math.max( 0.001, rotateRingTubeRadius );
+    const rotateMaterialOptions = {
+      color: colorOr( rotateArrowColor, 0x8df7a4 ),
+      emissive: colorOr( rotateArrowEmissive, 0x1d5a34 ),
+      opacity: numberOr( rotateArrowOpacity, 0.88 ),
+      roughness: 0.24,
+      metalness: 0.1,
+    };
+    const rotateArrowConfigs = [
+      { startAngle: - Math.PI * 0.9 },
+      { startAngle: Math.PI * 0.1 },
+    ];
+
+    rotateArrowConfigs.forEach( ( config, index ) => {
+
+      const endAngle = config.startAngle + rotateArcAngle;
+      const arcGeometry = new THREE.TorusGeometry( rotateRadius, rotateTube, 14, 42, rotateArcAngle );
+      arcGeometry.rotateZ( config.startAngle );
+      arcGeometry.rotateX( Math.PI * 0.5 );
+      const arc = new THREE.Mesh(
+        arcGeometry,
+        createStandardMaterial( rotateMaterialOptions ),
+      );
+      arc.name = `${name}-rotate-arrow-arc-${index}`;
+      arc.renderOrder = renderOrder + 4;
+      root.add( arc );
+
+      const headPosition = new THREE.Vector3(
+        Math.cos( endAngle ) * rotateRadius,
+        0,
+        Math.sin( endAngle ) * rotateRadius,
+      );
+      const headDirection = new THREE.Vector3(
+        - Math.sin( endAngle ),
+        0,
+        Math.cos( endAngle ),
+      ).normalize();
+      const head = new THREE.Mesh(
+        new THREE.ConeGeometry(
+          Math.max( 0.001, rotateArrowRadius ),
+          Math.max( 0.001, rotateArrowLength ),
+          Math.max( 8, Math.round( arrowSegments ) ),
+        ),
+        createStandardMaterial( rotateMaterialOptions ),
+      );
+      head.name = `${name}-rotate-arrow-head-${index}`;
+      head.position.copy( headPosition );
+      head.quaternion.setFromUnitVectors( rotationArrowUp, headDirection );
+      head.renderOrder = renderOrder + 5;
+      root.add( head );
+      rotationVisuals.push( {
+        arc,
+        head,
+        headPosition,
+      } );
+
+    } );
+
+  }
+
+  const rotateHitMesh = canRotate
+    ? new THREE.Mesh(
+      new THREE.TorusGeometry(
+        Math.max( 0.001, rotateInteractiveRadius ),
+        Math.max( 0.001, rotateInteractiveTubeRadius ),
+        12,
+        64,
+      ),
+      createBasicMaterial( {
+        color: colorOr( hitColor, 0xffffff ),
+        opacity: numberOr( hitOpacity, 0 ),
+      } ),
+    )
+    : null;
+
+  if ( rotateHitMesh ) {
+
+    rotateHitMesh.name = `${name}-rotate-hit`;
+    rotateHitMesh.rotation.x = Math.PI * 0.5;
+    rotateHitMesh.renderOrder = renderOrder + 6;
+    root.add( rotateHitMesh );
+
+  }
+
   decorateHitMesh?.( hitMesh );
   context?.registerRaycastTarget?.( hitMesh, {
     onSelectStart( payload ) {
@@ -294,10 +441,131 @@ export function createXYMoveHandle( context, {
     },
   } );
 
+  if ( rotateHitMesh ) {
+
+    context?.registerRaycastTarget?.( rotateHitMesh, {
+      onSelectStart( payload ) {
+
+        if ( ! enabled || context?.getInteractionPolicy?.()?.canInteract === false ) {
+
+          return;
+
+        }
+
+        const hitPoint = resolvePlaneHit( payload );
+
+        if ( ! hitPoint ) {
+
+          return;
+
+        }
+
+        const anchorPosition = readAnchorWorldPosition();
+        activeRotate = {
+          source: payload.source,
+          anchorPosition: anchorPosition.clone(),
+          startAngle: Math.atan2( hitPoint.z - anchorPosition.z, hitPoint.x - anchorPosition.x ),
+          startQuaternion: readTargetQuaternion().clone(),
+          lastYaw: 0,
+          didRotate: false,
+        };
+        onRotateStart?.( payload );
+
+      },
+      onSelectMove( payload ) {
+
+        if ( ! activeRotate || activeRotate.source !== payload.source ) {
+
+          return;
+
+        }
+
+        const hitPoint = resolvePlaneHit( payload );
+
+        if ( ! hitPoint ) {
+
+          return;
+
+        }
+
+        const currentAngle = Math.atan2(
+          hitPoint.z - activeRotate.anchorPosition.z,
+          hitPoint.x - activeRotate.anchorPosition.x,
+        );
+        const deltaYawRad = normalizeAngleRadians( currentAngle - activeRotate.startAngle );
+        const minRotateAngleRad = THREE.MathUtils.degToRad( Math.max( 0, numberOr( minRotateAngleDeg, 1.25 ) ) );
+
+        if ( Math.abs( normalizeAngleRadians( deltaYawRad - activeRotate.lastYaw ) ) <= minRotateAngleRad ) {
+
+          return;
+
+        }
+
+        activeRotate.didRotate = true;
+        activeRotate.lastYaw = deltaYawRad;
+        tempYawQuaternion.setFromAxisAngle( WORLD_UP, deltaYawRad );
+        tempNextQuaternion.copy( activeRotate.startQuaternion ).premultiply( tempYawQuaternion );
+        setTargetQuaternion( tempNextQuaternion.clone() );
+        syncFromTarget();
+        onRotateMove?.( payload, tempNextQuaternion.clone(), deltaYawRad );
+
+      },
+      onSelectEnd( payload ) {
+
+        if ( ! activeRotate || activeRotate.source !== payload.source ) {
+
+          return;
+
+        }
+
+        const didRotate = activeRotate.didRotate;
+        activeRotate = null;
+        const finalQuaternion = readTargetQuaternion().clone();
+        syncFromTarget();
+        onRotateEnd?.( payload, finalQuaternion, didRotate );
+
+      },
+    } );
+
+  }
+
   function readTargetPosition() {
 
     tempTargetPosition.copy( vector3FromValue( getTargetPosition?.(), tempTargetPosition ) );
     return tempTargetPosition;
+
+  }
+
+  function readAnchorWorldPosition() {
+
+    if ( typeof getAnchorWorldPosition === 'function' ) {
+
+      tempAnchorPosition.copy( vector3FromValue( getAnchorWorldPosition(), readTargetPosition() ) );
+      return tempAnchorPosition;
+
+    }
+
+    if ( targetObject?.localToWorld ) {
+
+      tempAnchorLocalPosition.copy(
+        vector3FromValue( anchorLocalPosition ?? attachmentLocalPosition, tempAnchorLocalPosition.set( 0, 0, 0 ) ),
+      );
+      tempAnchorPosition.copy( tempAnchorLocalPosition );
+      targetObject.updateMatrixWorld?.( true );
+      targetObject.localToWorld( tempAnchorPosition );
+      return tempAnchorPosition;
+
+    }
+
+    tempAnchorPosition.copy( readTargetPosition() );
+    return tempAnchorPosition;
+
+  }
+
+  function readTargetQuaternion() {
+
+    tempTargetQuaternion.copy( quaternionFromValue( getTargetQuaternion?.(), DEFAULT_QUATERNION ) );
+    return tempTargetQuaternion;
 
   }
 
@@ -325,14 +593,14 @@ export function createXYMoveHandle( context, {
 
   function syncFromTarget() {
 
-    const targetPosition = readTargetPosition().clone();
-    const localFloorY = numberOr( floorY, 0 ) - targetPosition.y;
+    const anchorPosition = readAnchorWorldPosition().clone();
+    const localFloorY = numberOr( floorY, 0 ) - anchorPosition.y;
     const lineHeight = Math.max( 0.05, Math.abs( localFloorY ) );
 
     if ( parent ) {
 
       parent.updateMatrixWorld?.( true );
-      tempParentLocal.copy( targetPosition );
+      tempParentLocal.copy( anchorPosition );
       parent.worldToLocal?.( tempParentLocal );
       root.position.copy( tempParentLocal );
       parent.getWorldQuaternion?.( tempParentQuaternion );
@@ -340,7 +608,7 @@ export function createXYMoveHandle( context, {
 
     } else {
 
-      root.position.copy( targetPosition );
+      root.position.copy( anchorPosition );
       root.quaternion.identity();
 
     }
@@ -357,12 +625,35 @@ export function createXYMoveHandle( context, {
     } );
     hitMesh.position.set( 0, localFloorY + Math.max( 0.001, interactiveHeight ) * 0.5, 0 );
 
+    rotationVisuals.forEach( ( visual ) => {
+
+      const rotateLift = Math.max( 0.001, rotateRingTubeRadius );
+      visual.arc.position.set( 0, localFloorY + rotateLift, 0 );
+      visual.head.position.set(
+        visual.headPosition.x,
+        localFloorY + rotateLift,
+        visual.headPosition.z,
+      );
+
+    } );
+
+    if ( rotateHitMesh ) {
+
+      rotateHitMesh.position.set( 0, localFloorY + Math.max( 0.001, rotateInteractiveTubeRadius ), 0 );
+
+    }
+
   }
 
   function setVisible( isVisible ) {
 
     root.visible = Boolean( isVisible );
     hitMesh.visible = root.visible && enabled;
+    if ( rotateHitMesh ) {
+
+      rotateHitMesh.visible = root.visible && enabled;
+
+    }
 
   }
 
@@ -370,11 +661,29 @@ export function createXYMoveHandle( context, {
 
     enabled = Boolean( isEnabled );
     hitMesh.visible = root.visible && enabled;
+    if ( rotateHitMesh ) {
+
+      rotateHitMesh.visible = root.visible && enabled;
+
+    }
 
   }
 
   function dispose() {
 
+    if ( rotateHitMesh ) {
+
+      context?.unregisterRaycastTarget?.( rotateHitMesh );
+      disposeMesh( rotateHitMesh );
+
+    }
+
+    rotationVisuals.forEach( ( visual ) => {
+
+      disposeMesh( visual.head );
+      disposeMesh( visual.arc );
+
+    } );
     context?.unregisterRaycastTarget?.( hitMesh );
     disposeMesh( hitMesh );
     arrows.forEach( disposeMesh );
@@ -391,6 +700,7 @@ export function createXYMoveHandle( context, {
   return {
     root,
     hitMesh,
+    rotateHitMesh,
     dispose,
     setVisible,
     setEnabled,
@@ -398,6 +708,11 @@ export function createXYMoveHandle( context, {
     isDragging() {
 
       return activeDrag !== null;
+
+    },
+    isRotating() {
+
+      return activeRotate !== null;
 
     },
   };

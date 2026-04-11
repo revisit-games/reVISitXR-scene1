@@ -58,7 +58,9 @@ Panel dragging commits the semantic transform on drag end and moves the workspac
 
 All four workspace panels opt into the shared `scenes/core/xyMoveHandle.js` helper through `demo3VisualConfig.panels.withXYMoveBarDefault`, `demo3VisualConfig.views[viewId].withXYMoveBar`, and `demo3VisualConfig.xyMoveHandle`.
 
-The user-facing XY move bars sit on the floor as siblings of the panels under the workspace root. Dragging a handle moves only that panel's root in Three.js world `X/Z`, keeps the panel's `Y` unchanged, switches the workspace to `free`, and commits the compact `panelLayouts[viewId]` transform only on drag end.
+The user-facing XY move bars sit on the floor as siblings of the panels under the workspace root. Their vertical line uses a bottom-center attachment point just below each rectangular panel, while movement still targets the panel root/center. Dragging a handle moves only that panel's root in Three.js world `X/Z`, keeps the panel's `Y` unchanged, switches the workspace to `free`, and commits the compact `panelLayouts[viewId]` transform only on drag end.
+
+Demo 3 also enables the helper's optional rotation arrows with `demo3VisualConfig.xyMoveHandle.allowedRotate`. The green outer arrows use the helper's `rotateRing*`, `rotateArrow*`, and `rotateInteractive*` knobs, and their separate torus hit target yaws the panel horizontally around Three.js world `Y`. Rotation updates `panel.root.quaternion` during drag and commits the existing `panelLayouts[viewId].quaternion` value on drag end.
 
 ## Layout Modes
 
@@ -79,7 +81,7 @@ Preset transforms live in `demo3VisualConfig.js` under `layouts.compare`, `layou
 
 All views use shared semantic datum ids such as `region:africa`. When linked highlighting is enabled, selecting or hovering a region in any view highlights the same region across the other views. When disabled, hover is local to the active view while `selectedDatumId` remains available to the summary panel and task submission.
 
-Selected datum highlighting is tuned in `demo3VisualConfig.charts` with `selectedDimmedOpacity`, `selectedScaleMultiplier`, `selectedOutlineColor`, and `selectedOutlineOpacity`. The selected region stays full opacity with a stronger selected color and outline/halo, while non-selected marks dim instead of disappearing.
+Selected datum highlighting is tuned in `demo3VisualConfig.charts` with `selectedColor`, `selectedDimmedOpacity`, `selectedScaleMultiplier`, `selectedOutlineColor`, and `selectedOutlineOpacity`. The selected region uses a white fill with a gold outline/halo across the trend, ranking, comparison, and linked-highlighted views, while non-selected marks dim instead of disappearing.
 
 ## Performance Strategy
 

@@ -518,6 +518,7 @@ export const demo3SceneDefinition = Object.freeze( {
     let currentHoveredViewId = null;
     let activePanelDrag = null;
     let activePanelHandleDrag = null;
+    let activePanelHandleRotation = null;
     let pendingDatumVisualRefresh = null;
     let lastSummaryActiveDatumId = null;
 
@@ -1402,6 +1403,8 @@ export const demo3SceneDefinition = Object.freeze( {
       }
 
       activateView( viewId, { source: payload.source || 'scene-panel-drag-start', shouldLog: false } );
+      activePanelHandleDrag = null;
+      activePanelHandleRotation = null;
       context.camera.getWorldDirection( tempWorldDirection ).normalize();
       panel.root.getWorldPosition( dragPoint );
       dragPlane.setFromNormalAndCoplanarPoint( tempWorldDirection, payload.point || dragPoint );
@@ -1495,6 +1498,7 @@ export const demo3SceneDefinition = Object.freeze( {
       }
 
       activePanelDrag = null;
+      activePanelHandleRotation = null;
       activePanelHandleDrag = {
         viewId,
         source: payload.source || 'scene-panel-xy-move-start',
@@ -1564,6 +1568,91 @@ export const demo3SceneDefinition = Object.freeze( {
       if ( shouldLog ) {
 
         recordSceneChange( 'movePanel', payload.source || 'scene-panel-xy-move-end', {
+          flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd === true,
+        } );
+
+      }
+
+    }
+
+    function beginPanelXYRotate( viewId, payload ) {
+
+      const panel = panelByViewId.get( viewId );
+
+      if ( ! panel ) {
+
+        return false;
+
+      }
+
+      activePanelDrag = null;
+      activePanelHandleDrag = null;
+      activePanelHandleRotation = {
+        viewId,
+        source: payload.source || 'scene-panel-xy-rotate-start',
+        didRotate: false,
+      };
+      currentSceneState.layoutMode = DEMO3_LAYOUT_MODES.FREE;
+      activateView( viewId, { source: activePanelHandleRotation.source, shouldLog: false } );
+      DEMO3_VIEW_ID_LIST.forEach( ( candidateViewId ) => {
+
+        const candidatePanel = panelByViewId.get( candidateViewId );
+
+        if ( candidatePanel ) {
+
+          candidatePanel.root.scale.setScalar( 1 );
+          candidatePanel.xyMoveHandle?.syncFromTarget();
+
+        }
+
+      } );
+      updatePanelShellVisuals();
+      syncDesktopPanel();
+      return true;
+
+    }
+
+    function rotatePanelWithXYHandle( viewId, nextQuaternion ) {
+
+      const panel = panelByViewId.get( viewId );
+
+      if ( ! panel || ! nextQuaternion?.isQuaternion ) {
+
+        return;
+
+      }
+
+      panel.root.quaternion.copy( nextQuaternion );
+      panel.xyMoveHandle?.syncFromTarget();
+
+      if ( activePanelHandleRotation?.viewId === viewId ) {
+
+        activePanelHandleRotation.didRotate = true;
+
+      }
+
+    }
+
+    function endPanelXYRotate( viewId, payload, didRotate ) {
+
+      const panel = panelByViewId.get( viewId );
+      const shouldLog = didRotate === true || activePanelHandleRotation?.didRotate === true;
+      activePanelHandleRotation = null;
+
+      if ( ! panel ) {
+
+        return;
+
+      }
+
+      commitPanelLayout( viewId );
+      panel.xyMoveHandle?.syncFromTarget();
+      updatePanelShellVisuals();
+      syncDesktopPanel();
+
+      if ( shouldLog ) {
+
+        recordSceneChange( 'movePanel', payload.source || 'scene-panel-xy-rotate-end', {
           flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd === true,
         } );
 
@@ -2155,14 +2244,23 @@ export const demo3SceneDefinition = Object.freeze( {
 
       }
 
+      const panelAnchorGap = 0.02;
       const handle = createXYMoveHandle( context, {
         parent: root,
         name: `demo3-${panel.viewId}-xy-move-handle`,
         ...xyMoveHandle,
+        targetObject: panel.root,
+        anchorLocalPosition: [ 0, - workspace.panelHeight * 0.5 - panelAnchorGap, 0 ],
         getTargetPosition: () => panel.root.position,
         setTargetPosition( nextPosition ) {
 
           movePanelWithXYHandle( panel.viewId, nextPosition );
+
+        },
+        getTargetQuaternion: () => panel.root.quaternion,
+        setTargetQuaternion( nextQuaternion ) {
+
+          rotatePanelWithXYHandle( panel.viewId, nextQuaternion );
 
         },
         onDragStart( payload ) {
@@ -2174,6 +2272,17 @@ export const demo3SceneDefinition = Object.freeze( {
         onDragEnd( payload, _finalPosition, didMove ) {
 
           endPanelXYMove( panel.viewId, payload, didMove );
+
+        },
+        onRotateStart( payload ) {
+
+          beginPanelXYRotate( panel.viewId, payload );
+
+        },
+        onRotateMove() {},
+        onRotateEnd( payload, _finalQuaternion, didRotate ) {
+
+          endPanelXYRotate( panel.viewId, payload, didRotate );
 
         },
       } );

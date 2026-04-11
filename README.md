@@ -452,9 +452,13 @@ Because these surfaces use the same `registerRaycastTarget()` path as the rest o
 
 ### Reusable XY Move Handle
 
-`scenes/core/xyMoveHandle.js` exports `createXYMoveHandle(context, options)` for scene-owned horizontal movement affordances. The helper creates a root group, a vertical line down to the floor, a floor ring/disc, four non-interactive arrows, and one invisible cylinder hit surface registered through `registerRaycastTarget()`.
+`scenes/core/xyMoveHandle.js` exports `createXYMoveHandle(context, options)` for scene-owned horizontal movement affordances. The helper creates a root group, a vertical line down to the floor, a floor ring/disc, four non-interactive move arrows, and one invisible cylinder hit surface registered through `registerRaycastTarget()`. When `allowedRotate: true`, it also creates two curved rotation arrows and a separate invisible torus hit target for horizontal yaw rotation around Three.js world `Y`.
 
 Scenes provide `getTargetPosition()` and `setTargetPosition(nextPosition)` plus optional `onDragStart`, `onDragMove`, and `onDragEnd` callbacks. The user-facing name is an XY move handle or XY move bar, but Three.js uses `X/Z` for the ground plane: the helper preserves target `Y` and changes only world `X/Z`.
+
+The visual attachment point can be distinct from the moved target center. By default the handle anchors at `getTargetPosition()`. For rectangular panels or other off-center affordances, pass `getAnchorWorldPosition()` or pass `targetObject` with `anchorLocalPosition` / `attachmentLocalPosition`; the helper uses that anchor for the root, vertical line, floor ring/disc/arrows, and hit surfaces while still moving the target through `setTargetPosition()`.
+
+Rotation remains opt-in. With `allowedRotate: true`, scenes should provide `getTargetQuaternion()` and `setTargetQuaternion(nextQuaternion)` plus optional `onRotateStart`, `onRotateMove`, and `onRotateEnd` callbacks. The helper computes floor-plane angle deltas around the anchor and applies yaw around world `Y`; it does not implement pitch or roll.
 
 Recommended scene config pattern:
 
@@ -469,10 +473,11 @@ xyMoveHandle: {
   floorY: 0.035,
   ringRadius: 0.14,
   interactiveRadius: 0.17,
+  allowedRotate: false,
 }
 ```
 
-The helper owns only visual/raycast behavior. Semantic state, provenance labels, replay snapshots, and flush policy remain scene-owned so replay stores compact scene state rather than dense drag samples.
+Use per-view flags such as `withXYMoveBar` or scene defaults such as `withXYMoveBarDefault` to decide which objects receive the helper. The helper owns only visual/raycast behavior. Semantic state, provenance labels, replay snapshots, and flush policy remain scene-owned so replay stores compact scene state rather than dense drag samples.
 
 ## Demo 1 Dataset Layout
 

@@ -34,6 +34,7 @@ export const demo2VisualConfig = Object.freeze( {
       interactiveRadius: 0.2,
       interactiveHeight: 0.14,
       minMoveDistance: 0.005,
+      allowedRotate: false,
       lineColor: 0x88c9f3,
       lineEmissive: 0x133349,
       lineOpacity: 0.8,
