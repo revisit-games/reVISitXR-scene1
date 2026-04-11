@@ -3,9 +3,13 @@ import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createSituatedAnchor } from '../scenes/core/situatedAnchor.js';
 import {
+  DEMO4_INTERACTION_MODALITIES,
   DEMO4_LAYER_MODES,
+  DEMO4_PLACEMENT_SOURCES,
   DEMO4_PLACEMENT_MODES,
+  normalizeDemo4InteractionModality,
   normalizeDemo4MetricId,
+  normalizeDemo4PlacementSource,
   normalizeDemo4SceneState,
   normalizeDemo4SiteId,
   normalizeDemo4TimeIndex,
@@ -27,6 +31,9 @@ import { demo4LoggingConfig } from './demo4LoggingConfig.js';
 import { demo4VisualConfig } from './demo4VisualConfig.js';
 
 const HALF_PI = Math.PI * 0.5;
+const gazeRaycaster = new THREE.Raycaster();
+const tempCameraWorldPosition = new THREE.Vector3();
+const tempCameraWorldDirection = new THREE.Vector3();
 
 function isFiniteNumber( value ) {
 
@@ -303,6 +310,8 @@ function buildAnchorTransformFromState( sceneState ) {
     position: sceneState.arAnchorPosition,
     quaternion: sceneState.arAnchorQuaternion,
     scale: sceneState.arScaleFactor,
+    placementSource: sceneState.placementSource,
+    surfaceDetected: sceneState.surfaceDetected,
   };
 
 }
@@ -311,6 +320,10 @@ export const demo4SceneDefinition = Object.freeze( {
   sceneKey: 'demo4',
   queryValue: '4',
   label: 'Demo 4 Situated AR Overlay',
+  supportedImmersiveModes: Object.freeze( {
+    ar: true,
+    vr: false,
+  } ),
   loggingConfig: demo4LoggingConfig,
   templateConfig: Object.freeze( {
     showFloor: true,
@@ -318,6 +331,24 @@ export const demo4SceneDefinition = Object.freeze( {
     showPedestal: false,
     showTemplateCube: false,
     enableDefaultObjectManipulation: false,
+    modeOverrides: Object.freeze( {
+      desktop: Object.freeze( {
+        showFloor: true,
+        showGrid: true,
+      } ),
+      'immersive-ar': Object.freeze( {
+        showFloor: false,
+        showGrid: false,
+      } ),
+      'immersive-vr': Object.freeze( {
+        showFloor: false,
+        showGrid: false,
+      } ),
+      analysis: Object.freeze( {
+        showFloor: true,
+        showGrid: true,
+      } ),
+    } ),
   } ),
   normalizeSceneState( candidateState, fallbackState ) {
 
@@ -343,6 +374,11 @@ export const demo4SceneDefinition = Object.freeze( {
     let panelBodyText = null;
     let detailText = null;
     let placementPromptText = null;
+    let dwellProgressRing = null;
+    let dwellTargetSiteId = null;
+    let dwellElapsedMs = 0;
+    let dwellActivatedSiteId = null;
+    let unsupportedImmersiveMode = null;
 
     root.name = 'demo4-situated-overlay-root';
     context.sceneContentRoot?.add( root );
@@ -372,6 +408,51 @@ export const demo4SceneDefinition = Object.freeze( {
         label: getStableSceneLabel( labelKey ),
         flushImmediately,
       } ) === true;
+
+    }
+
+    function isBlockedVRMode() {
+
+      return context.getPresentationMode?.() === 'immersive-vr';
+
+    }
+
+    function getActivationSequence() {
+
+      return currentSceneState.gazeDwellCount + currentSceneState.handSelectCount + 1;
+
+    }
+
+    function getPlacementInstructionText() {
+
+      if ( isBlockedVRMode() ) {
+
+        return 'Demo 4 is AR-first. Exit VR and start AR to place the situated overlay.';
+
+      }
+
+      if ( currentSceneState.arPlacementConfirmed ) {
+
+        return `Overlay placed via ${currentSceneState.placementSource}.`;
+
+      }
+
+      if ( context.getPresentationMode?.() === 'desktop' ) {
+
+        return 'Desktop fallback: confirm the default footprint or enter AR.';
+
+      }
+
+      if (
+        currentSceneState.placementSource === DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST &&
+        currentSceneState.surfaceDetected
+      ) {
+
+        return 'Aim at a real surface and select to place.';
+
+      }
+
+      return 'Real surface hit-test unavailable; using fallback placement plane.';
 
     }
 
@@ -462,9 +543,13 @@ export const demo4SceneDefinition = Object.freeze( {
       return [
         `Task: ${task.prompt}`,
         `Placement: ${placementText}`,
+        `Source: ${currentSceneState.placementSource}`,
+        `Surface detected: ${currentSceneState.surfaceDetected ? 'Yes' : 'No'}`,
         `Metric: ${metric?.label || currentSceneState.metricId}`,
         `Time: ${timeSlice?.label || currentSceneState.timeIndex}`,
         `Layer: ${currentSceneState.layerMode}`,
+        `Interaction: ${currentSceneState.interactionModality}`,
+        `Activations: gaze ${currentSceneState.gazeDwellCount}, hand ${currentSceneState.handSelectCount}`,
         `Visible sites: ${currentSceneState.visibleSiteIds.length}/${DEMO4_SITE_IDS.length}`,
         selectionText,
         currentSceneState.taskSubmitted ? 'Task submitted' : 'Task not submitted',
@@ -483,6 +568,13 @@ export const demo4SceneDefinition = Object.freeze( {
       currentSceneState.arScaleFactor = isFiniteNumber( transform?.scale )
         ? transform.scale
         : placementAnchor.anchorRoot.scale.x;
+      currentSceneState.placementSource = normalizeDemo4PlacementSource(
+        transform?.placementSource,
+        currentSceneState.placementSource,
+      );
+      currentSceneState.surfaceDetected = typeof transform?.surfaceDetected === 'boolean'
+        ? transform.surfaceDetected
+        : currentSceneState.surfaceDetected;
 
     }
 
@@ -508,14 +600,20 @@ export const demo4SceneDefinition = Object.freeze( {
 
     function confirmPlacement( source, transform = null ) {
 
-      if ( placementConfirmInProgress ) {
+      if ( placementConfirmInProgress || isBlockedVRMode() ) {
 
         return;
 
       }
 
       placementConfirmInProgress = true;
-      const finalTransform = transform || placementAnchor.confirmPlacement();
+      const fallbackPlacementSource = context.getPresentationMode?.() === 'desktop'
+        ? DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT
+        : currentSceneState.placementSource;
+      const finalTransform = transform || placementAnchor.confirmPlacement( {
+        placementSource: fallbackPlacementSource,
+        surfaceDetected: currentSceneState.surfaceDetected,
+      } );
       updateAnchorStateFromTransform( finalTransform );
       currentSceneState.arPlacementConfirmed = true;
       currentSceneState.placementMode = DEMO4_PLACEMENT_MODES.ANCHORED;
@@ -620,7 +718,42 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
-    function selectSite( siteId, source ) {
+    function setInteractionModality( modality, source ) {
+
+      const nextModality = normalizeDemo4InteractionModality( modality, currentSceneState.interactionModality );
+
+      if ( nextModality === currentSceneState.interactionModality ) {
+
+        return;
+
+      }
+
+      currentSceneState.interactionModality = nextModality;
+      dwellTargetSiteId = null;
+      dwellElapsedMs = 0;
+      dwellActivatedSiteId = null;
+      syncVisuals();
+      recordSceneChange( 'interactionModality', source || 'demo4-interaction-modality', {
+        flushImmediately: getSceneStateLoggingConfig().flushOnInteractionModalityChange === true,
+      } );
+
+    }
+
+    function toggleInteractionModality( source ) {
+
+      setInteractionModality(
+        currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL
+          ? DEMO4_INTERACTION_MODALITIES.HAND_RAY
+          : DEMO4_INTERACTION_MODALITIES.GAZE_DWELL,
+        source,
+      );
+
+    }
+
+    function selectSite( siteId, source, {
+      activationEventType = null,
+      shouldLog = true,
+    } = {} ) {
 
       const normalizedSiteId = normalizeDemo4SiteId( siteId, null );
 
@@ -638,15 +771,46 @@ export const demo4SceneDefinition = Object.freeze( {
       currentSceneState.focusedSiteId = normalizedSiteId;
       currentSceneState.taskAnswer = normalizedSiteId;
       currentSceneState.detailExpanded = true;
+
+      if ( activationEventType ) {
+
+        const activationSequence = getActivationSequence();
+
+        if ( activationEventType === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL ) {
+
+          currentSceneState.gazeDwellCount += 1;
+
+        } else if ( activationEventType === DEMO4_INTERACTION_MODALITIES.HAND_RAY ) {
+
+          currentSceneState.handSelectCount += 1;
+
+        }
+
+        currentSceneState.lastActivationEvent = {
+          activationEventType,
+          activationSiteId: normalizedSiteId,
+          sequence: activationSequence,
+        };
+
+      }
+
       syncVisuals();
 
-      if ( changed ) {
+      if ( shouldLog && ( changed || activationEventType ) ) {
 
-        recordSceneChange( 'siteSelection', source || 'demo4-site-selection', {
-          flushImmediately: getSceneStateLoggingConfig().flushOnSiteSelection === true,
+        recordSceneChange( activationEventType ? 'activation' : 'siteSelection', source || 'demo4-site-selection', {
+          flushImmediately: activationEventType
+            ? getSceneStateLoggingConfig().flushOnActivation === true
+            : getSceneStateLoggingConfig().flushOnSiteSelection === true,
         } );
 
       }
+
+    }
+
+    function activateSite( siteId, activationEventType, source ) {
+
+      selectSite( siteId, source, { activationEventType } );
 
     }
 
@@ -763,7 +927,7 @@ export const demo4SceneDefinition = Object.freeze( {
       context.registerRaycastTarget?.( hitMesh, {
         onHoverChange( payload ) {
 
-          if ( ! currentSceneState.arPlacementConfirmed ) {
+          if ( isBlockedVRMode() || ! currentSceneState.arPlacementConfirmed ) {
 
             return;
 
@@ -775,6 +939,7 @@ export const demo4SceneDefinition = Object.freeze( {
         onSelectStart( payload ) {
 
           if (
+            isBlockedVRMode() ||
             ! currentSceneState.arPlacementConfirmed ||
             ! currentSceneState.visibleSiteIds.includes( site.id )
           ) {
@@ -783,7 +948,11 @@ export const demo4SceneDefinition = Object.freeze( {
 
           }
 
-          selectSite( site.id, payload.source || 'demo4-site-select' );
+          activateSite(
+            site.id,
+            DEMO4_INTERACTION_MODALITIES.HAND_RAY,
+            payload.source || 'demo4-site-select',
+          );
 
         },
       } );
@@ -849,6 +1018,16 @@ export const demo4SceneDefinition = Object.freeze( {
       record.material.color.setHex( nextColor );
       record.material.opacity = enabled ? 0.96 : 0.52;
       record.material.needsUpdate = true;
+
+      if ( record.key === 'modality' ) {
+
+        record.textController.setText(
+          currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL
+            ? 'Gaze'
+            : 'Hand',
+        );
+
+      }
 
     }
 
@@ -990,6 +1169,10 @@ export const demo4SceneDefinition = Object.freeze( {
 
       } );
 
+      createControlButton( 'modality', 'Mode', [ 0.255, - 0.005 ], ( source ) => toggleInteractionModality( source ), {
+        width: 0.13,
+        isActive: () => currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL,
+      } );
       createControlButton( 'layer', 'Layer', [ - 0.255, - 0.23 ], ( source ) => toggleLayerMode( source ), {
         width: 0.13,
         isActive: () => currentSceneState.layerMode === DEMO4_LAYER_MODES.ALERTS,
@@ -1052,12 +1235,40 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function createDwellProgressVisual() {
+
+      const interaction = demo4VisualConfig.interaction;
+      dwellProgressRing = createTrackedMesh(
+        disposables,
+        placementAnchor.anchorRoot,
+        new THREE.TorusGeometry(
+          interaction.dwellProgressBaseRadius,
+          interaction.dwellProgressTubeRadius,
+          10,
+          48,
+        ),
+        createMaterial( {
+          color: interaction.dwellProgressColor,
+          emissive: interaction.dwellProgressEmissive,
+          opacity: interaction.dwellProgressOpacity,
+        } ),
+        {
+          name: 'demo4-gaze-dwell-progress',
+          rotation: [ HALF_PI, 0, 0 ],
+          renderOrder: 22,
+        },
+      );
+      dwellProgressRing.visible = false;
+
+    }
+
     function createAnchoredOverlayVisuals() {
 
       createFootprintVisuals( placementAnchor.anchorRoot );
       dataset.sites.forEach( createMarker );
       createControlPanel();
       createDetailCard();
+      createDwellProgressVisual();
 
     }
 
@@ -1106,6 +1317,47 @@ export const demo4SceneDefinition = Object.freeze( {
         record.labelController.setText( `${record.site.shortLabel}\n${formatDemo4Reading( value, currentSceneState.metricId )}` );
 
       } );
+
+    }
+
+    function syncDwellProgressVisual() {
+
+      if ( ! dwellProgressRing ) {
+
+        return;
+
+      }
+
+      const targetRecord = dwellTargetSiteId ? markerRecords.get( dwellTargetSiteId ) : null;
+      const dwellDurationMs = demo4VisualConfig.interaction.dwellDurationMs;
+      const progress = THREE.MathUtils.clamp( dwellElapsedMs / Math.max( 1, dwellDurationMs ), 0, 1 );
+      const visible = (
+        currentSceneState.arPlacementConfirmed &&
+        currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL &&
+        Boolean( targetRecord ) &&
+        progress > 0 &&
+        ! isBlockedVRMode()
+      );
+
+      dwellProgressRing.visible = visible;
+
+      if ( ! visible ) {
+
+        return;
+
+      }
+
+      const interaction = demo4VisualConfig.interaction;
+      dwellProgressRing.position.copy( targetRecord.group.position );
+      dwellProgressRing.position.y = 0.028;
+      const radiusScale = THREE.MathUtils.lerp(
+        1,
+        interaction.dwellProgressRadius / interaction.dwellProgressBaseRadius,
+        progress,
+      );
+      dwellProgressRing.scale.setScalar( radiusScale );
+      dwellProgressRing.material.opacity = THREE.MathUtils.lerp( 0.35, interaction.dwellProgressOpacity, progress );
+      dwellProgressRing.material.needsUpdate = true;
 
     }
 
@@ -1173,6 +1425,9 @@ export const demo4SceneDefinition = Object.freeze( {
         : 'Layer: All';
       desktopRefs.labelsButton.textContent = currentSceneState.labelsVisible ? 'Labels: On' : 'Labels: Off';
       desktopRefs.detailButton.textContent = currentSceneState.detailExpanded ? 'Detail: Expanded' : 'Detail: Compact';
+      desktopRefs.modalityButton.textContent = currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL
+        ? 'Mode: Gaze'
+        : 'Mode: Hand';
       desktopRefs.confirmButton.disabled = currentSceneState.arPlacementConfirmed;
       desktopRefs.submitButton.disabled = ! currentSceneState.taskAnswer;
 
@@ -1182,13 +1437,177 @@ export const demo4SceneDefinition = Object.freeze( {
 
       syncDerivedVisibleSiteIds();
       applyPlacementStateToAnchor();
-      placementPromptText?.setText( currentSceneState.arPlacementConfirmed
-        ? 'Overlay placed'
-        : 'Select floor to place overlay' );
+      placementPromptText?.setText( getPlacementInstructionText() );
       syncMarkerVisuals();
+      syncDwellProgressVisual();
       syncControlPanel();
       syncDetailCard();
       syncDesktopPanel();
+
+    }
+
+    function updatePlacementPreviewFromRuntime( runtime = {} ) {
+
+      if ( currentSceneState.arPlacementConfirmed || isBlockedVRMode() ) {
+
+        return;
+
+      }
+
+      const presentationMode = runtime.presentationMode || context.getPresentationMode?.();
+
+      if (
+        presentationMode === 'immersive-ar' &&
+        runtime.xrHitTest?.surfaceDetected &&
+        Array.isArray( runtime.xrHitTest.position )
+      ) {
+
+        updateAnchorStateFromTransform(
+          placementAnchor.setPreviewFromPlacementPose( {
+            position: runtime.xrHitTest.position,
+            quaternion: runtime.xrHitTest.quaternion,
+            source: DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST,
+            surfaceDetected: true,
+          } ),
+        );
+        syncVisuals();
+        return;
+
+      }
+
+      if ( presentationMode === 'immersive-ar' ) {
+
+        context.camera.getWorldPosition( tempCameraWorldPosition );
+        context.camera.getWorldDirection( tempCameraWorldDirection );
+        const transform = placementAnchor.setPreviewFromRay(
+          tempCameraWorldPosition,
+          tempCameraWorldDirection,
+          {
+            source: DEMO4_PLACEMENT_SOURCES.FLOOR_PLANE_FALLBACK,
+            surfaceDetected: false,
+          },
+        );
+
+        if ( transform ) {
+
+          updateAnchorStateFromTransform( transform );
+          syncVisuals();
+
+        }
+
+        return;
+
+      }
+
+      if ( presentationMode === 'desktop' && currentSceneState.placementSource !== DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT ) {
+
+        currentSceneState.placementSource = DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT;
+        currentSceneState.surfaceDetected = false;
+        syncVisuals();
+
+      }
+
+    }
+
+    function getGazeTargetSiteId() {
+
+      if ( ! currentSceneState.arPlacementConfirmed || isBlockedVRMode() ) {
+
+        return null;
+
+      }
+
+      const hitTargets = [ ...markerRecords.values() ]
+        .filter( ( record ) => (
+          record.hitMesh.visible &&
+          currentSceneState.visibleSiteIds.includes( record.site.id )
+        ) )
+        .map( ( record ) => record.hitMesh );
+
+      if ( hitTargets.length === 0 ) {
+
+        return null;
+
+      }
+
+      context.camera.getWorldPosition( tempCameraWorldPosition );
+      context.camera.getWorldDirection( tempCameraWorldDirection );
+      gazeRaycaster.set( tempCameraWorldPosition, tempCameraWorldDirection.normalize() );
+      gazeRaycaster.far = 8;
+      const hit = gazeRaycaster.intersectObjects( hitTargets, false )[ 0 ] || null;
+
+      if ( ! hit ) {
+
+        return null;
+
+      }
+
+      return [ ...markerRecords.values() ].find( ( record ) => record.hitMesh === hit.object )?.site.id || null;
+
+    }
+
+    function resetGazeDwell( { keepFocus = false } = {} ) {
+
+      dwellTargetSiteId = null;
+      dwellElapsedMs = 0;
+      dwellActivatedSiteId = null;
+
+      if ( ! keepFocus ) {
+
+        currentSceneState.focusedSiteId = currentSceneState.selectedSiteId;
+
+      }
+
+    }
+
+    function updateGazeDwell( deltaSeconds, runtime = {} ) {
+
+      if (
+        runtime.interactionPolicy?.canInteract === false ||
+        currentSceneState.interactionModality !== DEMO4_INTERACTION_MODALITIES.GAZE_DWELL ||
+        ! currentSceneState.arPlacementConfirmed ||
+        isBlockedVRMode()
+      ) {
+
+        resetGazeDwell( { keepFocus: true } );
+        syncDwellProgressVisual();
+        return;
+
+      }
+
+      const nextTargetSiteId = getGazeTargetSiteId();
+
+      if ( ! nextTargetSiteId ) {
+
+        resetGazeDwell();
+        syncVisuals();
+        return;
+
+      }
+
+      if ( nextTargetSiteId !== dwellTargetSiteId ) {
+
+        dwellTargetSiteId = nextTargetSiteId;
+        dwellElapsedMs = 0;
+        dwellActivatedSiteId = null;
+
+      }
+
+      dwellElapsedMs += deltaSeconds * 1000;
+      currentSceneState.focusedSiteId = nextTargetSiteId;
+
+      if (
+        dwellElapsedMs >= demo4VisualConfig.interaction.dwellDurationMs &&
+        dwellActivatedSiteId !== nextTargetSiteId
+      ) {
+
+        dwellActivatedSiteId = nextTargetSiteId;
+        activateSite( nextTargetSiteId, DEMO4_INTERACTION_MODALITIES.GAZE_DWELL, 'gaze-dwell' );
+        return;
+
+      }
+
+      syncVisuals();
 
     }
 
@@ -1201,6 +1620,8 @@ export const demo4SceneDefinition = Object.freeze( {
         arPlacementConfirmed: currentSceneState.arPlacementConfirmed,
         placementMode: currentSceneState.placementMode,
         placementCount: currentSceneState.placementCount,
+        placementSource: currentSceneState.placementSource,
+        surfaceDetected: currentSceneState.surfaceDetected,
         arAnchorPosition: [ ...currentSceneState.arAnchorPosition ],
         arAnchorQuaternion: [ ...currentSceneState.arAnchorQuaternion ],
         arScaleFactor: currentSceneState.arScaleFactor,
@@ -1211,6 +1632,12 @@ export const demo4SceneDefinition = Object.freeze( {
         selectedSiteId: currentSceneState.selectedSiteId,
         focusedSiteId: currentSceneState.focusedSiteId,
         detailExpanded: currentSceneState.detailExpanded,
+        interactionModality: currentSceneState.interactionModality,
+        gazeDwellCount: currentSceneState.gazeDwellCount,
+        handSelectCount: currentSceneState.handSelectCount,
+        lastActivationEvent: currentSceneState.lastActivationEvent
+          ? { ...currentSceneState.lastActivationEvent }
+          : null,
         visibleSiteIds: [ ...currentSceneState.visibleSiteIds ],
         taskAnswer: currentSceneState.taskAnswer,
         taskSubmitted: currentSceneState.taskSubmitted,
@@ -1232,6 +1659,8 @@ export const demo4SceneDefinition = Object.freeze( {
         xrTaskId: state.taskId,
         xrArPlacementConfirmed: state.arPlacementConfirmed,
         xrArPlacementMode: state.placementMode,
+        xrArPlacementSource: state.placementSource,
+        xrArSurfaceDetected: state.surfaceDetected,
         xrArMetricId: state.metricId,
         xrArTimeIndex: state.timeIndex,
         xrArLayerMode: state.layerMode,
@@ -1239,6 +1668,9 @@ export const demo4SceneDefinition = Object.freeze( {
         xrArSelectedSiteId: state.selectedSiteId,
         xrArFocusedSiteId: state.focusedSiteId,
         xrArDetailExpanded: state.detailExpanded,
+        xrArInteractionModality: state.interactionModality,
+        xrArGazeDwellCount: state.gazeDwellCount,
+        xrArHandSelectCount: state.handSelectCount,
         xrArVisibleSiteCount: state.visibleSiteIds.length,
         xrArAnchorTransformJson: jsonStringifyCompact( anchorTransform ),
         xrStateSummaryJson: jsonStringifyCompact( state ),
@@ -1321,13 +1753,18 @@ export const demo4SceneDefinition = Object.freeze( {
       detailButton.addEventListener( 'click', () => toggleDetail( 'desktop-detail' ) );
       controlRow.appendChild( detailButton );
 
+      const modalityButton = document.createElement( 'button' );
+      modalityButton.type = 'button';
+      modalityButton.addEventListener( 'click', () => toggleInteractionModality( 'desktop-interaction-modality' ) );
+      controlRow.appendChild( modalityButton );
+
       const submitButton = document.createElement( 'button' );
       submitButton.type = 'button';
       submitButton.textContent = 'Submit answer';
       submitButton.addEventListener( 'click', () => submitTask( 'desktop-task-submit' ) );
       controlRow.appendChild( submitButton );
 
-      [ confirmButton, resetButton, layerButton, labelsButton, detailButton, submitButton ].forEach( ( button ) => {
+      [ confirmButton, resetButton, layerButton, labelsButton, detailButton, modalityButton, submitButton ].forEach( ( button ) => {
 
         button.setAttribute( 'style', style.button );
 
@@ -1343,7 +1780,11 @@ export const demo4SceneDefinition = Object.freeze( {
         button.type = 'button';
         button.setAttribute( 'style', style.button );
         button.textContent = site?.label || siteId;
-        button.addEventListener( 'click', () => selectSite( siteId, `desktop-site-${siteId}` ) );
+        button.addEventListener( 'click', () => activateSite(
+          siteId,
+          DEMO4_INTERACTION_MODALITIES.HAND_RAY,
+          `desktop-site-${siteId}`,
+        ) );
         siteRow.appendChild( button );
 
       } );
@@ -1360,6 +1801,7 @@ export const demo4SceneDefinition = Object.freeze( {
         layerButton,
         labelsButton,
         detailButton,
+        modalityButton,
         confirmButton,
         submitButton,
         detail,
@@ -1413,7 +1855,22 @@ export const demo4SceneDefinition = Object.freeze( {
       applySceneStateFromReplay( sceneState ) {
 
         currentSceneState = normalizeDemo4SceneState( sceneState, currentSceneState );
+
+        if ( ! sceneState?.placementSource ) {
+
+          currentSceneState.placementSource = DEMO4_PLACEMENT_SOURCES.REPLAY;
+          currentSceneState.surfaceDetected = false;
+
+        }
+
+        resetGazeDwell( { keepFocus: true } );
         syncVisuals();
+
+      },
+      update( deltaSeconds, runtime = {} ) {
+
+        updatePlacementPreviewFromRuntime( runtime );
+        updateGazeDwell( deltaSeconds, runtime );
 
       },
       getAnswerSummary() {
@@ -1434,6 +1891,16 @@ export const demo4SceneDefinition = Object.freeze( {
       },
       getHudContent( presentationMode ) {
 
+        if ( presentationMode === 'immersive-vr' || unsupportedImmersiveMode === 'immersive-vr' ) {
+
+          return {
+            title: 'Demo 4 Is AR Only',
+            body: 'This situated overlay is designed for real-surface AR placement. VR is intentionally disabled for this scene.',
+            note: 'Exit VR and use Start AR or desktop fallback to continue. Replay hydration still restores the semantic anchor transform.',
+          };
+
+        }
+
         const isPlaced = currentSceneState.arPlacementConfirmed;
         const modeLabel = presentationMode === 'immersive-ar' ? 'AR' : 'desktop';
 
@@ -1449,6 +1916,21 @@ export const demo4SceneDefinition = Object.freeze( {
       handleBackgroundSelect( payload = {} ) {
 
         void payload;
+
+      },
+      onPresentationModeChange( presentationMode ) {
+
+        unsupportedImmersiveMode = presentationMode === 'immersive-vr'
+          ? 'immersive-vr'
+          : null;
+        resetGazeDwell( { keepFocus: true } );
+        syncVisuals();
+
+      },
+      onUnsupportedImmersiveMode( mode ) {
+
+        unsupportedImmersiveMode = mode;
+        syncVisuals();
 
       },
     };

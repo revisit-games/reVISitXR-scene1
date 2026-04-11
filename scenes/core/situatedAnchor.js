@@ -2,6 +2,13 @@ import * as THREE from 'three';
 
 const DEFAULT_WORLD_UP = new THREE.Vector3( 0, 1, 0 );
 
+export const SITUATED_PLACEMENT_SOURCES = Object.freeze( {
+  XR_HIT_TEST: 'xr-hit-test',
+  FLOOR_PLANE_FALLBACK: 'floor-plane-fallback',
+  DESKTOP_DEFAULT: 'desktop-default',
+  REPLAY: 'replay',
+} );
+
 function isFiniteNumber( value ) {
 
   return typeof value === 'number' && Number.isFinite( value );
@@ -122,6 +129,10 @@ export function createSituatedAnchor( context, {
   const placementPlane = new THREE.Plane( new THREE.Vector3( 0, 1, 0 ), - floorY );
   const placementRay = new THREE.Ray();
   const placementPoint = new THREE.Vector3();
+  let placementStatus = {
+    source: SITUATED_PLACEMENT_SOURCES.DESKTOP_DEFAULT,
+    surfaceDetected: false,
+  };
   let placementEnabled = false;
   let surfaceRegistered = false;
 
@@ -164,12 +175,16 @@ export function createSituatedAnchor( context, {
   function buildPlacementTransformFromPoint( point, {
     quaternion = previewRoot.quaternion,
     scale = previewRoot.scale.x,
+    source = SITUATED_PLACEMENT_SOURCES.FLOOR_PLANE_FALLBACK,
+    surfaceDetected = false,
   } = {} ) {
 
     return {
       position: [ point.x, floorY + overlayLift, point.z ],
       quaternion: quaternionToArray( quaternion ),
       scale,
+      placementSource: source,
+      surfaceDetected,
     };
 
   }
@@ -183,7 +198,24 @@ export function createSituatedAnchor( context, {
       scale: transform.scale,
     } );
     previewRoot.position.y = floorY + overlayLift;
-    return getTransformSnapshot( previewRoot );
+
+    if ( typeof transform.placementSource === 'string' || typeof transform.source === 'string' ) {
+
+      placementStatus.source = transform.placementSource || transform.source;
+
+    }
+
+    if ( typeof transform.surfaceDetected === 'boolean' ) {
+
+      placementStatus.surfaceDetected = transform.surfaceDetected;
+
+    }
+
+    return {
+      ...getTransformSnapshot( previewRoot ),
+      placementSource: placementStatus.source,
+      surfaceDetected: placementStatus.surfaceDetected,
+    };
 
   }
 
@@ -219,6 +251,31 @@ export function createSituatedAnchor( context, {
 
   }
 
+  function setPreviewFromPlacementPose( {
+    position = null,
+    quaternion = null,
+    scale = previewRoot.scale.x,
+    source = SITUATED_PLACEMENT_SOURCES.XR_HIT_TEST,
+    surfaceDetected = true,
+  } = {} ) {
+
+    if ( ! position ) {
+
+      return null;
+
+    }
+
+    const point = vector3FromValue( position, defaultPreviewPosition );
+    return setPreviewTransform( {
+      position: [ point.x, floorY + overlayLift, point.z ],
+      quaternion,
+      scale,
+      placementSource: source,
+      surfaceDetected,
+    } );
+
+  }
+
   function setAnchorTransform( transform = {} ) {
 
     applyTransform( anchorRoot, {
@@ -228,7 +285,24 @@ export function createSituatedAnchor( context, {
       scale: transform.scale,
     } );
     anchorRoot.position.y = floorY + overlayLift;
-    return getTransformSnapshot( anchorRoot );
+
+    if ( typeof transform.placementSource === 'string' || typeof transform.source === 'string' ) {
+
+      placementStatus.source = transform.placementSource || transform.source;
+
+    }
+
+    if ( typeof transform.surfaceDetected === 'boolean' ) {
+
+      placementStatus.surfaceDetected = transform.surfaceDetected;
+
+    }
+
+    return {
+      ...getTransformSnapshot( anchorRoot ),
+      placementSource: placementStatus.source,
+      surfaceDetected: placementStatus.surfaceDetected,
+    };
 
   }
 
@@ -244,7 +318,11 @@ export function createSituatedAnchor( context, {
     anchorRoot.visible = true;
     previewRoot.visible = false;
     setPlacementEnabled( false );
-    return nextTransform;
+    return {
+      ...nextTransform,
+      placementSource: placementStatus.source,
+      surfaceDetected: placementStatus.surfaceDetected,
+    };
 
   }
 
@@ -259,7 +337,11 @@ export function createSituatedAnchor( context, {
     anchorRoot.visible = false;
     previewRoot.visible = true;
     setPlacementEnabled( true );
-    return getTransformSnapshot( previewRoot );
+    return {
+      ...getTransformSnapshot( previewRoot ),
+      placementSource: placementStatus.source,
+      surfaceDetected: placementStatus.surfaceDetected,
+    };
 
   }
 
@@ -336,6 +418,7 @@ export function createSituatedAnchor( context, {
     setPreviewTransform,
     setPreviewFromWorldPoint,
     setPreviewFromRay,
+    setPreviewFromPlacementPose,
     setPreviewVisible( visible ) {
 
       previewRoot.visible = visible === true;
@@ -355,6 +438,11 @@ export function createSituatedAnchor( context, {
     getPreviewTransform() {
 
       return getTransformSnapshot( previewRoot );
+
+    },
+    getPlacementStatus() {
+
+      return { ...placementStatus };
 
     },
     confirmPlacement,

@@ -149,6 +149,8 @@ const tempReplayPointerTarget = new THREE.Vector3();
 const tempReplayTooltipAnchor = new THREE.Vector3();
 const tempReplayCameraForward = new THREE.Vector3();
 const desktopEuler = new THREE.Euler( 0, 0, 0, 'YXZ' );
+const tempXRHitTestPosition = new THREE.Vector3();
+const tempXRHitTestQuaternion = new THREE.Quaternion();
 
 const desktopState = {
   activePointerId: null,
@@ -191,6 +193,10 @@ let replayGhostPointersHiddenByViewer = false;
 let replayGhostPointersHiddenReason = null;
 let activeSceneDefinition = resolvedInitialScene.sceneDefinition;
 let activeSceneController = null;
+let xrHitTestViewerSpace = null;
+let xrHitTestSource = null;
+let xrHitTestAvailable = false;
+let xrHitTestSetupPending = false;
 
 const replayPointerVisuals = {};
 const replayCameraPose = {
@@ -759,13 +765,57 @@ function invalidateSceneHoverForSource( source ) {
 
 function getActiveTemplateConfig() {
 
-  return activeSceneDefinition?.templateConfig || {
+  const defaultTemplateConfig = {
     showFloor: true,
     showGrid: true,
     showPedestal: true,
     showTemplateCube: true,
     enableDefaultObjectManipulation: true,
   };
+  const rawTemplateConfig = activeSceneDefinition?.templateConfig || defaultTemplateConfig;
+  const {
+    modeOverrides = {},
+    ...baseTemplateConfig
+  } = rawTemplateConfig;
+  const interactionPolicy = studyLogger?.getInteractionPolicy?.() || null;
+
+  return {
+    ...defaultTemplateConfig,
+    ...baseTemplateConfig,
+    ...( modeOverrides?.[ currentMode ] || {} ),
+    ...( interactionPolicy?.isAnalysisSession ? ( modeOverrides?.analysis || {} ) : {} ),
+  };
+
+}
+
+function getActiveImmersiveSupport() {
+
+  const supportedImmersiveModes = activeSceneDefinition?.supportedImmersiveModes || {};
+
+  return {
+    ar: supportedImmersiveModes.ar !== false,
+    vr: supportedImmersiveModes.vr !== false,
+  };
+
+}
+
+function isPresentationModeSupportedByActiveScene( mode ) {
+
+  const support = getActiveImmersiveSupport();
+
+  if ( mode === PRESENTATION_MODES.IMMERSIVE_AR ) {
+
+    return support.ar;
+
+  }
+
+  if ( mode === PRESENTATION_MODES.IMMERSIVE_VR ) {
+
+    return support.vr;
+
+  }
+
+  return true;
 
 }
 
@@ -862,6 +912,7 @@ function activateSceneDefinition( nextSceneDefinition ) {
   applyActiveTemplateConfig();
   activeSceneController?.onPresentationModeChange?.( currentMode );
   updateHud();
+  updateBridgeLockStateUI();
   refreshInteractableAppearance();
   updateScenePanelVisibility();
 
@@ -1131,7 +1182,7 @@ function applyButtonPlacement( button, left ) {
 }
 
 const arButton = ARButton.createButton( renderer, {
-  optionalFeatures: [ 'local-floor', 'bounded-floor' ],
+  optionalFeatures: [ 'local-floor', 'bounded-floor', 'hit-test' ],
 } );
 applyButtonPlacement( arButton, '20px' );
 document.body.appendChild( arButton );
@@ -1361,11 +1412,14 @@ function isLocalInteractionBlocked() {
 function updateBridgeLockStateUI() {
 
   const immersiveBlocked = studyLogger ? ! studyLogger.canEnterImmersiveSession() : false;
+  const immersiveSupport = getActiveImmersiveSupport();
   const pointerEvents = immersiveBlocked ? 'none' : 'auto';
   const opacity = immersiveBlocked ? '0.45' : '1';
 
+  arButton.style.display = immersiveSupport.ar ? '' : 'none';
   arButton.style.pointerEvents = pointerEvents;
   arButton.style.opacity = opacity;
+  vrButton.style.display = immersiveSupport.vr ? '' : 'none';
   vrButton.style.pointerEvents = pointerEvents;
   vrButton.style.opacity = opacity;
 
@@ -1549,6 +1603,7 @@ function setPresentationMode( mode ) {
   applyActiveTemplateConfig();
   activeSceneController?.onPresentationModeChange?.( mode );
   updateHud();
+  updateBridgeLockStateUI();
   updateScenePanelVisibility();
   studyLogger?.recordModeChange( { mode } );
 
@@ -1569,6 +1624,122 @@ function resetCameraForXRSession() {
   camera.quaternion.identity();
   camera.scale.set( 1, 1, 1 );
   camera.updateMatrixWorld( true );
+
+}
+
+function resetXRHitTestState() {
+
+  if ( xrHitTestSource?.cancel ) {
+
+    try {
+
+      xrHitTestSource.cancel();
+
+    } catch ( error ) {
+
+      console.warn( 'Unable to cancel AR hit-test source.', error );
+
+    }
+
+  }
+
+  xrHitTestViewerSpace = null;
+  xrHitTestSource = null;
+  xrHitTestAvailable = false;
+  xrHitTestSetupPending = false;
+
+}
+
+async function setupARHitTestSource( session ) {
+
+  if (
+    ! session ||
+    typeof session.requestReferenceSpace !== 'function' ||
+    typeof session.requestHitTestSource !== 'function'
+  ) {
+
+    xrHitTestAvailable = false;
+    return;
+
+  }
+
+  xrHitTestSetupPending = true;
+
+  try {
+
+    xrHitTestViewerSpace = await session.requestReferenceSpace( 'viewer' );
+    xrHitTestSource = await session.requestHitTestSource( { space: xrHitTestViewerSpace } );
+    xrHitTestAvailable = true;
+
+  } catch ( error ) {
+
+    xrHitTestViewerSpace = null;
+    xrHitTestSource = null;
+    xrHitTestAvailable = false;
+    console.warn( 'AR hit-test unavailable; scenes can use placement fallback.', error );
+
+  } finally {
+
+    xrHitTestSetupPending = false;
+
+  }
+
+}
+
+function getCompactXRHitTestState( xrFrame ) {
+
+  const state = {
+    available: xrHitTestAvailable === true || xrHitTestSetupPending === true,
+    surfaceDetected: false,
+    position: null,
+    quaternion: null,
+  };
+
+  if (
+    currentMode !== PRESENTATION_MODES.IMMERSIVE_AR ||
+    ! xrFrame ||
+    ! xrHitTestSource ||
+    typeof xrFrame.getHitTestResults !== 'function'
+  ) {
+
+    return state;
+
+  }
+
+  const referenceSpace = renderer.xr.getReferenceSpace();
+
+  if ( ! referenceSpace ) {
+
+    return state;
+
+  }
+
+  const hitTestResults = xrFrame.getHitTestResults( xrHitTestSource );
+  const hitTestResult = hitTestResults[ 0 ] || null;
+  const hitPose = hitTestResult?.getPose?.( referenceSpace ) || null;
+
+  if ( ! hitPose?.transform ) {
+
+    return state;
+
+  }
+
+  tempXRHitTestPosition.set(
+    hitPose.transform.position.x,
+    hitPose.transform.position.y,
+    hitPose.transform.position.z,
+  );
+  tempXRHitTestQuaternion.set(
+    hitPose.transform.orientation.x,
+    hitPose.transform.orientation.y,
+    hitPose.transform.orientation.z,
+    hitPose.transform.orientation.w,
+  );
+
+  state.surfaceDetected = true;
+  state.position = vector3ToArray( tempXRHitTestPosition );
+  state.quaternion = quaternionToArray( tempXRHitTestQuaternion );
+  return state;
 
 }
 
@@ -2689,6 +2860,7 @@ function handleInteractionPolicyChange( policy ) {
 
   }
 
+  applyActiveTemplateConfig();
   updateHud();
   updateScenePanelVisibility();
   updatePausedReplayOverlay( policy );
@@ -2710,10 +2882,12 @@ function handleInteractionPolicyChange( policy ) {
 
 }
 
-function animate() {
+function animate( _timestamp = 0, xrFrame = null ) {
 
   timer.update();
   const deltaSeconds = Math.min( timer.getDelta(), 0.05 );
+  const interactionPolicy = studyLogger?.getInteractionPolicy?.();
+  const xrHitTest = getCompactXRHitTestState( xrFrame );
   updateKeyboardMovement( deltaSeconds );
 
   for ( const controller of controllers ) {
@@ -2755,9 +2929,11 @@ function animate() {
 
   }
 
-  activeSceneController?.update?.( deltaSeconds );
-
-  const interactionPolicy = studyLogger?.getInteractionPolicy?.();
+  activeSceneController?.update?.( deltaSeconds, {
+    presentationMode: currentMode,
+    xrHitTest,
+    interactionPolicy,
+  } );
 
   if ( isReplayVisualAnalysisActive( interactionPolicy ) ) {
 
@@ -2804,8 +2980,18 @@ renderer.xr.addEventListener( 'sessionstart', () => {
   const nextMode = isPassthroughStyle
     ? PRESENTATION_MODES.IMMERSIVE_AR
     : PRESENTATION_MODES.IMMERSIVE_VR;
+  const session = renderer.xr.getSession();
 
   setPresentationMode( nextMode );
+
+  if ( ! isPresentationModeSupportedByActiveScene( nextMode ) ) {
+
+    activeSceneController?.onUnsupportedImmersiveMode?.( nextMode );
+    updateHud();
+    return;
+
+  }
+
   studyLogger?.recordSessionStart( {
     mode: nextMode,
     source: 'xr-session',
@@ -2814,6 +3000,7 @@ renderer.xr.addEventListener( 'sessionstart', () => {
   if ( isPassthroughStyle ) {
 
     void alignARViewToFloor();
+    void setupARHitTestSource( session );
 
   }
 
@@ -2829,6 +3016,7 @@ renderer.xr.addEventListener( 'sessionend', () => {
   desktopState.hovered = null;
   renderer.xr.setReferenceSpace( null );
   renderer.xr.setReferenceSpaceType( 'local-floor' );
+  resetXRHitTestState();
   setPresentationMode( PRESENTATION_MODES.DESKTOP );
   cameraSamplingRequested = false;
 

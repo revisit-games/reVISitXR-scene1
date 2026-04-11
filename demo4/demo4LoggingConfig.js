@@ -44,6 +44,8 @@ export const demo4LoggingConfig = Object.freeze( {
     flushOnLabelsToggle: true,
     flushOnSiteSelection: true,
     flushOnDetailToggle: true,
+    flushOnInteractionModalityChange: true,
+    flushOnActivation: true,
     flushOnTaskSubmit: true,
   } ),
   demo4: Object.freeze( {
@@ -56,6 +58,8 @@ export const demo4LoggingConfig = Object.freeze( {
       labels: 'Toggle Demo 4 Labels',
       siteSelection: 'Select Demo 4 Site',
       detail: 'Toggle Demo 4 Detail',
+      interactionModality: 'Change Demo 4 Interaction Modality',
+      activation: 'Activate Demo 4 Site',
       taskSubmit: 'Submit Demo 4 Task',
     } ),
   } ),

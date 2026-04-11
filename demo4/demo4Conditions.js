@@ -27,6 +27,30 @@ export const DEMO4_LAYER_MODE_LIST = Object.freeze( [
   DEMO4_LAYER_MODES.ALERTS,
 ] );
 
+export const DEMO4_PLACEMENT_SOURCES = Object.freeze( {
+  XR_HIT_TEST: 'xr-hit-test',
+  FLOOR_PLANE_FALLBACK: 'floor-plane-fallback',
+  DESKTOP_DEFAULT: 'desktop-default',
+  REPLAY: 'replay',
+} );
+
+export const DEMO4_PLACEMENT_SOURCE_LIST = Object.freeze( [
+  DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST,
+  DEMO4_PLACEMENT_SOURCES.FLOOR_PLANE_FALLBACK,
+  DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT,
+  DEMO4_PLACEMENT_SOURCES.REPLAY,
+] );
+
+export const DEMO4_INTERACTION_MODALITIES = Object.freeze( {
+  GAZE_DWELL: 'gaze-dwell',
+  HAND_RAY: 'hand-ray',
+} );
+
+export const DEMO4_INTERACTION_MODALITY_LIST = Object.freeze( [
+  DEMO4_INTERACTION_MODALITIES.GAZE_DWELL,
+  DEMO4_INTERACTION_MODALITIES.HAND_RAY,
+] );
+
 export const DEMO4_DEFAULT_METRIC_ID = 'co2';
 export const DEMO4_DEFAULT_TIME_INDEX = Math.max( 0, DEMO4_TIME_SLICE_IDS.indexOf( 'midday' ) );
 export const DEMO4_DEFAULT_LAYER_MODE = DEMO4_LAYER_MODES.ALL;
@@ -34,6 +58,8 @@ export const DEMO4_DEFAULT_LABELS_VISIBLE = true;
 export const DEMO4_DEFAULT_ANCHOR_POSITION = Object.freeze( [ 0, 0.053, - 1.45 ] );
 export const DEMO4_DEFAULT_ANCHOR_QUATERNION = Object.freeze( [ 0, 0, 0, 1 ] );
 export const DEMO4_DEFAULT_SCALE_FACTOR = 1;
+export const DEMO4_DEFAULT_PLACEMENT_SOURCE = DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT;
+export const DEMO4_DEFAULT_INTERACTION_MODALITY = DEMO4_INTERACTION_MODALITIES.GAZE_DWELL;
 
 function isFiniteNumber( value ) {
 
@@ -105,6 +131,18 @@ export function normalizeDemo4LayerMode( value, fallbackValue = DEMO4_DEFAULT_LA
 
 }
 
+export function normalizeDemo4PlacementSource( value, fallbackValue = DEMO4_DEFAULT_PLACEMENT_SOURCE ) {
+
+  return DEMO4_PLACEMENT_SOURCE_LIST.includes( value ) ? value : fallbackValue;
+
+}
+
+export function normalizeDemo4InteractionModality( value, fallbackValue = DEMO4_DEFAULT_INTERACTION_MODALITY ) {
+
+  return DEMO4_INTERACTION_MODALITY_LIST.includes( value ) ? value : fallbackValue;
+
+}
+
 export function normalizeDemo4PlacementMode( value, fallbackValue = DEMO4_PLACEMENT_MODES.PREVIEW ) {
 
   return DEMO4_PLACEMENT_MODE_LIST.includes( value ) ? value : fallbackValue;
@@ -163,6 +201,38 @@ export function normalizeDemo4Quaternion( candidateValue, fallbackValue = DEMO4_
 
 }
 
+export function normalizeDemo4ActivationEvent( candidateValue, fallbackValue = null ) {
+
+  const fallback = fallbackValue && typeof fallbackValue === 'object' ? fallbackValue : null;
+  const candidate = candidateValue && typeof candidateValue === 'object' ? candidateValue : {};
+  const activationEventType = normalizeDemo4InteractionModality(
+    candidate.activationEventType,
+    fallback?.activationEventType || null,
+  );
+  const activationSiteId = normalizeDemo4SiteId(
+    candidate.activationSiteId,
+    normalizeDemo4SiteId( fallback?.activationSiteId, null ),
+  );
+  const fallbackSequence = isFiniteNumber( fallback?.sequence ) ? fallback.sequence : 0;
+  const sequence = Math.max(
+    0,
+    Math.round( isFiniteNumber( candidate.sequence ) ? candidate.sequence : fallbackSequence ),
+  );
+
+  if ( ! activationEventType || ! activationSiteId ) {
+
+    return null;
+
+  }
+
+  return {
+    activationEventType,
+    activationSiteId,
+    sequence,
+  };
+
+}
+
 export function parseDemo4Conditions( search = window.location.search, {
   defaultTaskId = DEMO4_DEFAULT_TASK_ID,
 } = {} ) {
@@ -177,6 +247,8 @@ export function parseDemo4Conditions( search = window.location.search, {
     arPlacementConfirmed: false,
     placementMode: DEMO4_PLACEMENT_MODES.PREVIEW,
     placementCount: 0,
+    placementSource: DEMO4_DEFAULT_PLACEMENT_SOURCE,
+    surfaceDetected: false,
     arAnchorPosition: [ ...DEMO4_DEFAULT_ANCHOR_POSITION ],
     arAnchorQuaternion: [ ...DEMO4_DEFAULT_ANCHOR_QUATERNION ],
     arScaleFactor: DEMO4_DEFAULT_SCALE_FACTOR,
@@ -187,6 +259,10 @@ export function parseDemo4Conditions( search = window.location.search, {
     selectedSiteId: normalizeDemo4SiteId( searchParams.get( 'site' ), null ),
     focusedSiteId: null,
     detailExpanded: normalizeBoolean( searchParams.get( 'detail' ), false ),
+    interactionModality: normalizeDemo4InteractionModality( searchParams.get( 'modality' ), DEMO4_DEFAULT_INTERACTION_MODALITY ),
+    gazeDwellCount: 0,
+    handSelectCount: 0,
+    lastActivationEvent: null,
     visibleSiteIds: [ ...DEMO4_SITE_IDS ],
     taskAnswer: null,
     taskSubmitted: false,
@@ -222,6 +298,13 @@ export function normalizeDemo4SceneState( candidateState, fallbackState = null, 
           : ( isFiniteNumber( fallback.placementCount ) ? fallback.placementCount : 0 ),
       ),
     ),
+    placementSource: normalizeDemo4PlacementSource(
+      candidateState?.placementSource,
+      normalizeDemo4PlacementSource( fallback.placementSource, DEMO4_DEFAULT_PLACEMENT_SOURCE ),
+    ),
+    surfaceDetected: typeof candidateState?.surfaceDetected === 'boolean'
+      ? candidateState.surfaceDetected
+      : Boolean( fallback.surfaceDetected ),
     arAnchorPosition: normalizeDemo4Vector3( candidateState?.arAnchorPosition, normalizeDemo4Vector3( fallback.arAnchorPosition ) ),
     arAnchorQuaternion: normalizeDemo4Quaternion( candidateState?.arAnchorQuaternion, normalizeDemo4Quaternion( fallback.arAnchorQuaternion ) ),
     arScaleFactor: Math.max(
@@ -256,6 +339,30 @@ export function normalizeDemo4SceneState( candidateState, fallbackState = null, 
     detailExpanded: typeof candidateState?.detailExpanded === 'boolean'
       ? candidateState.detailExpanded
       : Boolean( fallback.detailExpanded ),
+    interactionModality: normalizeDemo4InteractionModality(
+      candidateState?.interactionModality,
+      normalizeDemo4InteractionModality( fallback.interactionModality, DEMO4_DEFAULT_INTERACTION_MODALITY ),
+    ),
+    gazeDwellCount: Math.max(
+      0,
+      Math.round(
+        isFiniteNumber( candidateState?.gazeDwellCount )
+          ? candidateState.gazeDwellCount
+          : ( isFiniteNumber( fallback.gazeDwellCount ) ? fallback.gazeDwellCount : 0 ),
+      ),
+    ),
+    handSelectCount: Math.max(
+      0,
+      Math.round(
+        isFiniteNumber( candidateState?.handSelectCount )
+          ? candidateState.handSelectCount
+          : ( isFiniteNumber( fallback.handSelectCount ) ? fallback.handSelectCount : 0 ),
+      ),
+    ),
+    lastActivationEvent: normalizeDemo4ActivationEvent(
+      candidateState?.lastActivationEvent,
+      normalizeDemo4ActivationEvent( fallback.lastActivationEvent, null ),
+    ),
     visibleSiteIds: normalizeDemo4VisibleSiteIds(
       candidateState?.visibleSiteIds,
       normalizeDemo4VisibleSiteIds( fallback.visibleSiteIds, DEMO4_SITE_IDS ),

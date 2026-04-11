@@ -44,6 +44,15 @@ export const demo4VisualConfig = Object.freeze( {
     visibleOpacity: 0.88,
     selectedRingColor: 0xffd58f,
   } ),
+  interaction: Object.freeze( {
+    dwellDurationMs: 900,
+    dwellProgressColor: 0xffffff,
+    dwellProgressEmissive: 0x62531c,
+    dwellProgressOpacity: 0.92,
+    dwellProgressBaseRadius: 0.08,
+    dwellProgressRadius: 0.16,
+    dwellProgressTubeRadius: 0.006,
+  } ),
   text: Object.freeze( {
     label: Object.freeze( {
       worldHeight: 0.09,
@@ -99,8 +108,8 @@ export const demo4VisualConfig = Object.freeze( {
   } ),
   panel: Object.freeze( {
     width: 0.72,
-    height: 0.52,
-    position: Object.freeze( [ 0, 0.54, - 0.72 ] ),
+    height: 0.58,
+    position: Object.freeze( [ 0, 0.57, - 0.72 ] ),
     backgroundColor: 0x101924,
     backgroundOpacity: 0.86,
     borderColor: 0x7fe7dc,

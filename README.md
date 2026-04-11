@@ -244,6 +244,7 @@ Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene de
 - `queryValue`
 - `label`
 - `templateConfig`
+- optional `supportedImmersiveModes`
 - optional `loggingConfig`
 - `createScene(context)`
 - `normalizeSceneState(candidateState, fallbackState)`
@@ -252,12 +253,31 @@ The active scene controller can expose:
 
 - `activate()`
 - `dispose()`
-- `update(deltaSeconds)`
+- `update(deltaSeconds, runtimeContext)`
 - `getSceneStateForReplay()`
 - `applySceneStateFromReplay(sceneState)`
 - `getHudContent(presentationMode)`
 - optional `getAnswerSummary()`
 - optional `onPresentationModeChange(presentationMode)`
+
+`supportedImmersiveModes` lets a scene opt out of AR or VR entry without hardcoding scene names in `main.js`. Missing values default to the legacy behavior:
+
+```js
+supportedImmersiveModes: {
+  ar: true,
+  vr: true,
+}
+```
+
+Demo 4 sets `vr: false` because it is an AR-first situated overlay. The runtime hides the unsupported entry button, while desktop remains available.
+
+The optional `runtimeContext` passed into `update()` currently includes:
+
+- `presentationMode`
+- `interactionPolicy`
+- `xrHitTest`
+
+`xrHitTest` is a compact WebXR hit-test payload with `available`, `surfaceDetected`, `position`, and `quaternion`. Scenes should treat it as live placement assistance only. Replay should hydrate from semantic scene state instead of depending on a live hit-test source.
 
 ## Default Template Scene
 
@@ -281,6 +301,21 @@ The most important template flags are:
 - `enableDefaultObjectManipulation`
 
 Demo 1 and Example 1 both keep the floor and grid, but turn off the pedestal, hide the template cube, and disable default cube manipulation.
+
+Scenes can provide mode-specific template overrides:
+
+```js
+templateConfig: {
+  showFloor: true,
+  showGrid: true,
+  modeOverrides: {
+    'immersive-ar': { showFloor: false, showGrid: false },
+    analysis: { showFloor: true, showGrid: true },
+  },
+}
+```
+
+`main.js` resolves template visibility by merging the base config, the active presentation-mode override, and an optional `analysis` override. Demo 4 uses this to hide the virtual floor/grid in live AR while keeping desktop and analysis replay understandable.
 
 ## Scene-Specific Replay State
 
@@ -343,6 +378,8 @@ Demo 4 uses:
 - `arPlacementConfirmed`
 - `placementMode`
 - `placementCount`
+- `placementSource`
+- `surfaceDetected`
 - `arAnchorPosition`
 - `arAnchorQuaternion`
 - `arScaleFactor`
@@ -353,11 +390,15 @@ Demo 4 uses:
 - `selectedSiteId`
 - `focusedSiteId`
 - `detailExpanded`
+- `interactionModality`
+- `gazeDwellCount`
+- `handSelectCount`
+- `lastActivationEvent`
 - `visibleSiteIds`
 - `taskAnswer`
 - `taskSubmitted`
 
-This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, metric, time slice, layer mode, label visibility, focused and selected site, detail card state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
+This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, placement source, surface-detected flag, interaction modality, activation counts, metric, time slice, layer mode, label visibility, focused and selected site, detail card state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
 
 Example 1 uses:
 
@@ -487,6 +528,15 @@ Because these surfaces use the same `registerRaycastTarget()` path as the rest o
 The helper projects desktop or controller rays onto a deterministic horizontal floor plane, keeps the preview transform separate from semantic scene state, and copies the preview transform into the anchor root only when placement is confirmed. Scene code still owns task data, labels, controls, provenance labels, replay state, and answer summaries.
 
 Demo 4 uses this helper for its AR-first placement flow. It logs placement confirmation and reset/reposition commits, not dense preview motion.
+
+The helper also tracks placement-source status for situated scenes:
+
+- `xr-hit-test`
+- `floor-plane-fallback`
+- `desktop-default`
+- `replay`
+
+Use `setPreviewFromPlacementPose()` for real WebXR hit-test poses, `setPreviewFromRay()` for the deterministic floor-plane fallback, and `getPlacementStatus()` when scene state needs to expose which source is active.
 
 ### Reusable XY Move Handle
 
