@@ -1269,7 +1269,8 @@ export const demo3SceneDefinition = Object.freeze( {
         panel.titleMaterial.color.setHex( isFocused ? 0x21445c : panelStyle.titleColor );
         panel.titleMaterial.opacity = isHovered ? 0.98 : 0.92;
         panel.backgroundMaterial.opacity = isFocused ? Math.min( 1, panelStyle.backgroundOpacity + 0.04 ) : panelStyle.backgroundOpacity;
-        panel.titleController.updateText( `${isPinned ? 'Pinned ' : ''}${formatViewLabel( viewId )}${isFocused ? ' Focused' : ''}` );
+        const nextTitle = `${isPinned ? 'Pinned ' : ''}${formatViewLabel( viewId )}${isFocused ? ' Focused' : ''}`;
+        panel.titleController.setText?.( nextTitle );
 
       } );
 
