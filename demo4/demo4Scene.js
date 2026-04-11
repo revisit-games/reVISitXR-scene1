@@ -41,6 +41,7 @@ const tempPlacementPosition = new THREE.Vector3();
 const tempPlacementQuaternion = new THREE.Quaternion();
 const tempSurfaceNormal = new THREE.Vector3();
 const tempInstructionCardPosition = new THREE.Vector3();
+const tempInstructionCardTargetPosition = new THREE.Vector3();
 
 function isFiniteNumber( value ) {
 
@@ -417,18 +418,21 @@ export const demo4SceneDefinition = Object.freeze( {
     let currentSceneState = normalizeDemo4SceneState( defaultSceneState, defaultSceneState );
     let placementConfirmInProgress = false;
     let placementAnchor = null;
+    let anchoredContentRoot = null;
     let controlPanelRoot = null;
     let detailRoot = null;
     let panelTaskText = null;
     let panelPlacementText = null;
     let panelStateText = null;
     let panelInteractionHelpText = null;
+    let panelDetailText = null;
     let detailText = null;
     let placementPromptText = null;
     let placementInstructionCardRoot = null;
     let placementInstructionBodyText = null;
     let placementInstructionStatusText = null;
     let supportPedestalMesh = null;
+    let supportPedestalLabelController = null;
     let dwellProgressRing = null;
     let dwellTargetSiteId = null;
     let dwellElapsedMs = 0;
@@ -438,6 +442,9 @@ export const demo4SceneDefinition = Object.freeze( {
     let placementPreviewSourceLabel = null;
     let placementPromptOverrideText = null;
     let placementPromptOverrideUntil = 0;
+    let hasInstructionCardPose = false;
+    let lastInstructionCardPoseAt = 0;
+    const lastInstructionCardPosition = new THREE.Vector3();
     const lastPlacementSelectDebug = {
       source: null,
       interactor: null,
@@ -841,6 +848,50 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function getPanelTaskText() {
+
+      return task.id === DEMO4_DEFAULT_TASK_ID
+        ? 'Task: Find the site with the highest midday CO2.'
+        : `Task: ${task.prompt}`;
+
+    }
+
+    function getPanelPlacementText() {
+
+      return 'Placement: Left controller on a real surface.';
+
+    }
+
+    function getPanelDetailText() {
+
+      const activeSite = getActiveSite();
+      const metric = getCurrentMetric();
+      const timeSlice = getCurrentTimeSlice();
+
+      if ( ! activeSite || ! metric || ! timeSlice ) {
+
+        return 'Selected: none';
+
+      }
+
+      if ( currentSceneState.detailExpanded ) {
+
+        return [
+          `Selected: ${activeSite.label}`,
+          `Occupancy: ${formatDemo4Reading( getDemo4Reading( activeSite.id, 'occupancy', timeSlice.index ), 'occupancy' )}`,
+          `Noise: ${formatDemo4Reading( getDemo4Reading( activeSite.id, 'noise', timeSlice.index ), 'noise' )}`,
+          `CO2: ${formatDemo4Reading( getDemo4Reading( activeSite.id, 'co2', timeSlice.index ), 'co2' )}`,
+        ].join( ' | ' );
+
+      }
+
+      return `Selected: ${activeSite.label} | ${timeSlice.label} ${metric.label}: ${formatDemo4Reading(
+        getDemo4Reading( activeSite.id, metric.id, timeSlice.index ),
+        metric.id,
+      )}`;
+
+    }
+
     function getPanelStatusText() {
 
       const metric = getCurrentMetric();
@@ -895,7 +946,7 @@ export const demo4SceneDefinition = Object.freeze( {
 
     function getPanelInteractionHelpText() {
 
-      return 'Gaze mode: look at a site for 0.9s to select. Hand mode: aim and trigger.';
+      return 'Gaze: look at a site for 0.9s. Hand: aim and trigger.';
 
     }
 
@@ -1032,6 +1083,7 @@ export const demo4SceneDefinition = Object.freeze( {
       placementPreviewStatus = 'lost';
       placementPreviewSourceLabel = null;
       resetPlacementStabilizer( { clearPose: true } );
+      resetInstructionCardPose();
       hoveredSiteBySource.clear();
       applyPlacementStateToAnchor();
       syncVisuals();
@@ -1284,6 +1336,22 @@ export const demo4SceneDefinition = Object.freeze( {
         },
       );
       supportPedestalMesh.visible = false;
+      supportPedestalLabelController = createTrackedTextSprite(
+        disposables,
+        placementAnchor.anchorRoot,
+        {
+          ...supportPedestal.label,
+          text: supportPedestal.label.text,
+        },
+        [ 0, 0, 0 ],
+        {
+          name: 'demo4-analysis-support-pedestal-label',
+          renderOrder: footprint.renderOrder + 12,
+        },
+      );
+      supportPedestalLabelController.sprite.visible = false;
+      supportPedestalLabelController.sprite.material.depthTest = false;
+      supportPedestalLabelController.sprite.material.needsUpdate = true;
 
     }
 
@@ -1382,7 +1450,7 @@ export const demo4SceneDefinition = Object.freeze( {
       const group = new THREE.Group();
       group.name = `demo4-marker-${site.id}`;
       group.position.copy( vector3FromArray( site.localPosition ) );
-      placementAnchor.anchorRoot.add( group );
+      anchoredContentRoot.add( group );
 
       const material = createMaterial( {
         color: markerStyle.colors[ currentSceneState.metricId ] || markerStyle.colors.co2,
@@ -1517,6 +1585,14 @@ export const demo4SceneDefinition = Object.freeze( {
             : 'Layer: All',
         );
 
+      } else if ( record.key === 'detail' ) {
+
+        record.textController.setText(
+          currentSceneState.detailExpanded
+            ? 'Detail: Full'
+            : 'Detail: Brief',
+        );
+
       }
 
     }
@@ -1594,7 +1670,7 @@ export const demo4SceneDefinition = Object.freeze( {
       controlPanelRoot = new THREE.Group();
       controlPanelRoot.name = 'demo4-control-panel-root';
       controlPanelRoot.position.copy( vector3FromArray( panel.position ) );
-      placementAnchor.anchorRoot.add( controlPanelRoot );
+      anchoredContentRoot.add( controlPanelRoot );
 
       createTrackedMesh(
         disposables,
@@ -1617,8 +1693,8 @@ export const demo4SceneDefinition = Object.freeze( {
       createTrackedTextPlane(
         disposables,
         controlPanelRoot,
-        { ...demo4VisualConfig.text.panelTitle, text: 'Campus Commons' },
-        [ - 0.215, 0.32, 0.022 ],
+        { ...demo4VisualConfig.text.panelTitle, text: 'Control Panel' },
+        [ panel.textPositions.title[ 0 ], panel.textPositions.title[ 1 ], 0.022 ],
         { name: 'demo4-panel-title', renderOrder: 17 },
       );
       panelTaskText = createTrackedTextPlane(
@@ -1626,10 +1702,9 @@ export const demo4SceneDefinition = Object.freeze( {
         controlPanelRoot,
         {
           ...demo4VisualConfig.text.panelBody,
-          text: `Task: ${task.prompt}`,
-          planeHeight: 0.08,
+          text: getPanelTaskText(),
         },
-        [ 0, 0.235, 0.022 ],
+        [ panel.textPositions.task[ 0 ], panel.textPositions.task[ 1 ], 0.022 ],
         { name: 'demo4-panel-task', renderOrder: 17 },
       );
       panelPlacementText = createTrackedTextPlane(
@@ -1637,9 +1712,9 @@ export const demo4SceneDefinition = Object.freeze( {
         controlPanelRoot,
         {
           ...demo4VisualConfig.text.panelHelp,
-          text: 'Placement: use LEFT controller on a real surface.',
+          text: getPanelPlacementText(),
         },
-        [ 0, 0.16, 0.022 ],
+        [ panel.textPositions.placement[ 0 ], panel.textPositions.placement[ 1 ], 0.022 ],
         { name: 'demo4-panel-placement-help', renderOrder: 17 },
       );
       panelStateText = createTrackedTextPlane(
@@ -1648,11 +1723,19 @@ export const demo4SceneDefinition = Object.freeze( {
         {
           ...demo4VisualConfig.text.panelBody,
           text: '',
-          planeHeight: 0.065,
-          fontSize: 28,
         },
-        [ 0, 0.085, 0.022 ],
+        [ panel.textPositions.state[ 0 ], panel.textPositions.state[ 1 ], 0.022 ],
         { name: 'demo4-panel-state', renderOrder: 17 },
+      );
+      panelDetailText = createTrackedTextPlane(
+        disposables,
+        controlPanelRoot,
+        {
+          ...demo4VisualConfig.text.panelDetail,
+          text: getPanelDetailText(),
+        },
+        [ panel.textPositions.detail[ 0 ], panel.textPositions.detail[ 1 ], 0.022 ],
+        { name: 'demo4-panel-selected-site', renderOrder: 17 },
       );
       panelInteractionHelpText = createTrackedTextPlane(
         disposables,
@@ -1661,7 +1744,7 @@ export const demo4SceneDefinition = Object.freeze( {
           ...demo4VisualConfig.text.panelHelp,
           text: getPanelInteractionHelpText(),
         },
-        [ 0, 0.018, 0.022 ],
+        [ panel.textPositions.help[ 0 ], panel.textPositions.help[ 1 ], 0.022 ],
         { name: 'demo4-panel-interaction-help', renderOrder: 17 },
       );
 
@@ -1671,7 +1754,7 @@ export const demo4SceneDefinition = Object.freeze( {
         createControlButton(
           `metric-${metricId}`,
           metric?.label || metricId,
-          [ - 0.21 + index * 0.21, - 0.105 ],
+          [ panel.buttonColumns[ index ], panel.buttonRows.metrics ],
           ( source ) => setMetric( metricId, source ),
           {
             isActive: () => currentSceneState.metricId === metricId,
@@ -1685,7 +1768,7 @@ export const demo4SceneDefinition = Object.freeze( {
         createControlButton(
           `time-${timeSlice.id}`,
           timeSlice.label,
-          [ - 0.21 + index * 0.21, - 0.18 ],
+          [ panel.buttonColumns[ index ], panel.buttonRows.times ],
           ( source ) => setTimeIndex( timeSlice.index, source ),
           {
             isActive: () => currentSceneState.timeIndex === timeSlice.index,
@@ -1694,20 +1777,20 @@ export const demo4SceneDefinition = Object.freeze( {
 
       } );
 
-      createControlButton( 'modality', 'Mode: Gaze', [ - 0.38, - 0.285 ], ( source ) => toggleInteractionModality( source ), {
+      createControlButton( 'modality', 'Mode: Gaze', [ panel.buttonColumns[ 0 ], panel.buttonRows.controls ], ( source ) => toggleInteractionModality( source ), {
         isActive: () => currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL,
       } );
-      createControlButton( 'layer', 'Layer: All', [ - 0.228, - 0.285 ], ( source ) => toggleLayerMode( source ), {
+      createControlButton( 'layer', 'Layer: All', [ panel.buttonColumns[ 1 ], panel.buttonRows.controls ], ( source ) => toggleLayerMode( source ), {
         isActive: () => currentSceneState.layerMode === DEMO4_LAYER_MODES.ALERTS,
       } );
-      createControlButton( 'labels', 'Labels', [ - 0.076, - 0.285 ], ( source ) => toggleLabels( source ), {
+      createControlButton( 'labels', 'Labels', [ panel.buttonColumns[ 2 ], panel.buttonRows.controls ], ( source ) => toggleLabels( source ), {
         isActive: () => currentSceneState.labelsVisible,
       } );
-      createControlButton( 'detail', 'Detail', [ 0.076, - 0.285 ], ( source ) => toggleDetail( source ), {
+      createControlButton( 'detail', 'Detail: Brief', [ panel.buttonColumns[ 0 ], panel.buttonRows.actions ], ( source ) => toggleDetail( source ), {
         isActive: () => currentSceneState.detailExpanded,
       } );
-      createControlButton( 'reset', 'Reset', [ 0.228, - 0.285 ], ( source ) => resetPlacement( source ) );
-      createControlButton( 'submit', 'Submit', [ 0.38, - 0.285 ], ( source ) => submitTask( source ), {
+      createControlButton( 'reset', 'Reset', [ panel.buttonColumns[ 1 ], panel.buttonRows.actions ], ( source ) => resetPlacement( source ) );
+      createControlButton( 'submit', 'Submit', [ panel.buttonColumns[ 2 ], panel.buttonRows.actions ], ( source ) => submitTask( source ), {
         isActive: () => currentSceneState.taskSubmitted,
         isEnabled: () => Boolean( currentSceneState.taskAnswer ),
       } );
@@ -1720,7 +1803,8 @@ export const demo4SceneDefinition = Object.freeze( {
       detailRoot = new THREE.Group();
       detailRoot.name = 'demo4-detail-card-root';
       detailRoot.position.copy( vector3FromArray( detail.position ) );
-      placementAnchor.anchorRoot.add( detailRoot );
+      detailRoot.visible = false;
+      anchoredContentRoot.add( detailRoot );
       createTrackedMesh(
         disposables,
         detailRoot,
@@ -1758,7 +1842,7 @@ export const demo4SceneDefinition = Object.freeze( {
       const interaction = demo4VisualConfig.interaction;
       dwellProgressRing = createTrackedMesh(
         disposables,
-        placementAnchor.anchorRoot,
+        anchoredContentRoot,
         new THREE.TorusGeometry(
           interaction.dwellProgressBaseRadius,
           interaction.dwellProgressTubeRadius,
@@ -1780,9 +1864,19 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function createAnchoredContentRoot() {
+
+      anchoredContentRoot = new THREE.Group();
+      anchoredContentRoot.name = 'demo4-anchored-content-root';
+      anchoredContentRoot.rotation.y = demo4VisualConfig.overlay.contentYawOffsetRad;
+      placementAnchor.anchorRoot.add( anchoredContentRoot );
+
+    }
+
     function createAnchoredOverlayVisuals() {
 
-      createFootprintVisuals( placementAnchor.anchorRoot );
+      createAnchoredContentRoot();
+      createFootprintVisuals( anchoredContentRoot );
       createSupportPedestalVisual();
       dataset.sites.forEach( createMarker );
       createControlPanel();
@@ -1890,15 +1984,20 @@ export const demo4SceneDefinition = Object.freeze( {
 
       const policy = context.getInteractionPolicy?.() || null;
       const surfaceHeight = Math.max( 0, currentSceneState.arAnchorSurfaceHeight || 0 );
+      const presentationMode = context.getPresentationMode?.();
       const visible = (
         currentSceneState.arPlacementConfirmed &&
         surfaceHeight > demo4VisualConfig.supportPedestal.minVisibleHeight &&
-        policy?.isAnalysisSession === true &&
-        policy?.hasReceivedReplayState === true &&
-        context.getPresentationMode?.() !== 'immersive-ar'
+        ( policy?.isAnalysisSession === true || policy?.hasReceivedReplayState === true ) &&
+        presentationMode !== 'immersive-ar'
       );
 
       supportPedestalMesh.visible = visible;
+      if ( supportPedestalLabelController?.sprite ) {
+
+        supportPedestalLabelController.sprite.visible = visible;
+
+      }
 
       if ( ! visible ) {
 
@@ -1916,6 +2015,16 @@ export const demo4SceneDefinition = Object.freeze( {
         - demo4VisualConfig.placement.overlayLift - surfaceHeight * 0.5,
         0,
       );
+      if ( supportPedestalLabelController?.sprite ) {
+
+        const { footprint, supportPedestal } = demo4VisualConfig;
+        supportPedestalLabelController.sprite.position.set(
+          footprint.width * 0.5 + supportPedestal.label.horizontalOffset,
+          - demo4VisualConfig.placement.overlayLift - surfaceHeight * 0.5,
+          footprint.depth * 0.5 + supportPedestal.label.zOffset,
+        );
+
+      }
 
     }
 
@@ -1928,15 +2037,16 @@ export const demo4SceneDefinition = Object.freeze( {
       }
 
       const presentationMode = context.getPresentationMode?.();
+      const policy = context.getInteractionPolicy?.() || null;
       const visible = (
         ! currentSceneState.arPlacementConfirmed &&
         presentationMode === 'immersive-ar' &&
-        ! isBlockedVRMode()
+        ! isBlockedVRMode() &&
+        policy?.isAnalysisSession !== true &&
+        policy?.hasReceivedReplayState !== true
       );
 
       placementInstructionCardRoot.visible = visible;
-      placementInstructionBodyText?.setText( getPlacementInstructionCardBodyText() );
-      placementInstructionStatusText?.setText( getPlacementStatusText() );
 
       if ( ! visible ) {
 
@@ -1944,28 +2054,62 @@ export const demo4SceneDefinition = Object.freeze( {
 
       }
 
+      placementInstructionBodyText?.setText( getPlacementInstructionCardBodyText() );
+      placementInstructionStatusText?.setText( getPlacementStatusText() );
+
       const card = demo4VisualConfig.placementInstructionCard;
       const livePlacementStatus = placementAnchor?.getPlacementStatus?.() || {};
       const hasLivePreviewPose = (
         placementAnchor?.previewRoot?.visible === true &&
+        placementStabilizer.hasSmoothedPose === true &&
         livePlacementStatus.surfaceDetected === true &&
         placementPreviewStatus !== 'lost'
       );
-
-      context.camera.getWorldPosition( tempCameraWorldPosition );
-      context.camera.getWorldDirection( tempCameraWorldDirection );
+      const now = performance.now();
 
       if ( hasLivePreviewPose ) {
 
-        placementAnchor.previewRoot.getWorldPosition( tempInstructionCardPosition );
-        tempInstructionCardPosition.y += card.verticalOffset;
+        placementAnchor.previewRoot.getWorldPosition( tempInstructionCardTargetPosition );
+        tempInstructionCardTargetPosition.y += card.verticalOffset;
+
+        if ( hasInstructionCardPose ) {
+
+          lastInstructionCardPosition.lerp( tempInstructionCardTargetPosition, card.positionSmoothingAlpha );
+
+        } else {
+
+          lastInstructionCardPosition.copy( tempInstructionCardTargetPosition );
+          hasInstructionCardPose = true;
+
+        }
+
+        lastInstructionCardPoseAt = now;
+        tempInstructionCardPosition.copy( lastInstructionCardPosition );
+
+      } else if ( hasInstructionCardPose ) {
+
+        if (
+          now - lastInstructionCardPoseAt > card.staleHitHoldMs &&
+          placementAnchor?.previewRoot?.visible === true
+        ) {
+
+          placementAnchor.previewRoot.getWorldPosition( tempInstructionCardTargetPosition );
+          tempInstructionCardTargetPosition.y += card.verticalOffset;
+          lastInstructionCardPosition.lerp( tempInstructionCardTargetPosition, card.positionSmoothingAlpha * 0.25 );
+
+        }
+
+        tempInstructionCardPosition.copy( lastInstructionCardPosition );
 
       } else {
 
+        context.camera.getWorldPosition( tempCameraWorldPosition );
+        context.camera.getWorldDirection( tempCameraWorldDirection );
         tempInstructionCardPosition
           .copy( tempCameraWorldPosition )
           .addScaledVector( tempCameraWorldDirection.normalize(), card.cameraFallbackDistance );
         tempInstructionCardPosition.y += card.cameraFallbackYOffset;
+        lastInstructionCardPoseAt = now - card.staleHitHoldMs;
 
       }
 
@@ -1983,9 +2127,10 @@ export const demo4SceneDefinition = Object.freeze( {
       }
 
       controlPanelRoot.visible = currentSceneState.arPlacementConfirmed;
-      panelTaskText?.setText( `Task: ${task.prompt}` );
-      panelPlacementText?.setText( 'Placement: use LEFT controller on a real surface.' );
+      panelTaskText?.setText( getPanelTaskText() );
+      panelPlacementText?.setText( getPanelPlacementText() );
       panelStateText?.setText( getPanelStateText() );
+      panelDetailText?.setText( getPanelDetailText() );
       panelInteractionHelpText?.setText( getPanelInteractionHelpText() );
       buttonRecords.forEach( updateButtonVisualState );
 
@@ -1999,11 +2144,8 @@ export const demo4SceneDefinition = Object.freeze( {
 
       }
 
-      const activeSite = getActiveSite();
-      detailRoot.visible = currentSceneState.arPlacementConfirmed && Boolean( activeSite );
-      detailText.setText( activeSite
-        ? getSiteSummaryText( activeSite.id, { expanded: currentSceneState.detailExpanded } )
-        : 'Select a site marker to inspect local readings.' );
+      detailRoot.visible = false;
+      detailText.setText( '' );
 
     }
 
@@ -2053,6 +2195,11 @@ export const demo4SceneDefinition = Object.freeze( {
 
       syncDerivedVisibleSiteIds();
       applyPlacementStateToAnchor();
+      if ( anchoredContentRoot ) {
+
+        anchoredContentRoot.rotation.y = demo4VisualConfig.overlay.contentYawOffsetRad;
+
+      }
       placementPromptText?.setText( getPlacementPromptText() );
       if ( placementPromptText?.sprite ) {
 
@@ -2069,6 +2216,14 @@ export const demo4SceneDefinition = Object.freeze( {
       syncControlPanel();
       syncDetailCard();
       syncDesktopPanel();
+
+    }
+
+    function resetInstructionCardPose() {
+
+      hasInstructionCardPose = false;
+      lastInstructionCardPoseAt = 0;
+      lastInstructionCardPosition.set( 0, 0, 0 );
 
     }
 
@@ -2298,6 +2453,17 @@ export const demo4SceneDefinition = Object.freeze( {
     }
 
     function updateGazeDwell( deltaSeconds, runtime = {} ) {
+
+      if (
+        runtime.interactionPolicy?.isAnalysisSession === true ||
+        runtime.interactionPolicy?.hasReceivedReplayState === true
+      ) {
+
+        resetGazeDwell( { keepFocus: true } );
+        syncDwellProgressVisual();
+        return;
+
+      }
 
       if (
         runtime.interactionPolicy?.canInteract === false ||

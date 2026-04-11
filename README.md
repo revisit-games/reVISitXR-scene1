@@ -401,7 +401,7 @@ Demo 4 uses:
 - `taskAnswer`
 - `taskSubmitted`
 
-This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, placement source, placement driver/controller fallback, surface height, surface-detected flag, interaction modality, activation counts, metric, time slice, layer mode, label visibility, focused and selected site, detail card state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
+This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, placement source, placement driver/controller fallback, surface height, surface-detected flag, interaction modality, activation counts, metric, time slice, layer mode, label visibility, focused and selected site, control-panel detail expansion state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
 
 Example 1 uses:
 
@@ -657,7 +657,7 @@ Demo 4 keeps its situated campus overlay under `demo4/`:
 
 The local dataset contains six deterministic campus sites, three time slices, and three metrics: occupancy, noise, and CO2. The default task asks which site has the highest midday CO2 reading, with `site:classroom` as the expected answer. There are no external downloads, geolocation calls, GPS dependencies, or world-mesh requirements.
 
-Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface, and a separate camera-facing instruction card keeps the placement instructions readable before the overlay is anchored.
+Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface. A separate live-AR-only instruction card stays above the stabilized placement footprint before the overlay is anchored; desktop analysis replay hides that helper and uses a labeled gray support pedestal to show elevated real-world surface height. Replay free-camera inspection also disables gaze dwell so it cannot change marker focus or selection.
 
 Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include an automatic copy or mirror command for moving that build into any study repo; deployment or study asset refresh remains an explicit external step.
 

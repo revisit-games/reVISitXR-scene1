@@ -43,7 +43,7 @@ Replay may also hydrate `placementSource: 'replay'` for older snapshots without 
 
 Demo 4 placement is driven by the left controller before the overlay is confirmed. Gaze/head ray placement is intentionally ignored, and the right controller cannot move or confirm the footprint. If WebXR does not expose handedness, `controller-0` is accepted as a fallback and the prompt/HUD calls that out. Desktop remains deterministic: reviewers can confirm the default footprint from the side panel.
 
-In live AR, the left trigger confirms the current stabilized WebXR hit-test preview even when the controller ray does not intersect the invisible Three.js fallback placement surface. This keeps real-surface preview and trigger confirmation on the same semantic placement path. A separate camera-facing placement card appears before confirmation with the left-controller instruction and live surface status, so the prompt remains readable even when the preview footprint is lying flat on a real table or bed.
+In live AR, the left trigger confirms the current stabilized WebXR hit-test preview even when the controller ray does not intersect the invisible Three.js fallback placement surface. This keeps real-surface preview and trigger confirmation on the same semantic placement path. A separate placement card appears only during live AR before confirmation with the left-controller instruction and live surface status. After a surface preview is acquired, the card stays above the stabilized footprint instead of following the camera, so the prompt remains readable even when the preview footprint is lying flat on a real table or bed. Desktop analysis replay never shows this live placement helper.
 
 Demo 4 does not claim real plane detection when WebXR hit-test is unavailable. In AR it tells the participant whether real hit-test placement is stabilizing, ready, or lost. Preview motion is smoothed and spike-filtered, but the raw preview path is not logged.
 
@@ -63,7 +63,7 @@ The scene stores placement as semantic state:
 
 Preview motion is intentionally not logged. Only placement confirmation and reset/reposition commits create semantic scene-state nodes.
 
-Real `xr-hit-test` placement preserves the hit pose's world Y value through confirmation and replay. Floor-plane fallback and desktop default placement still use `floorY + overlayLift`. During desktop analysis replay, anchors above the virtual floor show a translucent light-gray support cuboid under the footprint so tabletop/bed placements remain interpretable without appearing in live AR.
+Real `xr-hit-test` placement preserves the hit pose's world Y value through confirmation and replay. Floor-plane fallback and desktop default placement still use `floorY + overlayLift`. During desktop analysis replay, anchors above the virtual floor show a translucent gray support pedestal under the footprint so tabletop/bed placements remain interpretable without appearing in live AR. The pedestal includes a side label, "Real-world surface height reference", to clarify that the cuboid represents the approximate physical support surface height.
 
 ## Situated Interaction
 
@@ -81,7 +81,7 @@ The `interactionModality` state toggles between:
 - `gaze-dwell`
 - `hand-ray`
 
-`gaze-dwell` uses the camera forward ray to focus visible site markers. A stable dwell of about 900 ms activates the site, expands detail, stores it as the answer draft, increments `gazeDwellCount`, and records `lastActivationEvent`. `hand-ray` preserves controller and desktop marker selection, increments `handSelectCount`, and records the same activation summary shape.
+`gaze-dwell` uses the live testing camera forward ray to focus visible site markers. A stable dwell of about 900 ms activates the site, expands detail, stores it as the answer draft, increments `gazeDwellCount`, and records `lastActivationEvent`. During analysis replay inspection, gaze dwell is disabled so the analyst's free camera cannot change marker focus or selection. `hand-ray` preserves controller and desktop marker selection, increments `handSelectCount`, and records the same activation summary shape.
 
 ## Interactions
 
@@ -94,15 +94,17 @@ After placement, anchored markers and controls support:
 - switch time slice
 - toggle labels
 - toggle layer mode between `all` and `alerts`
-- expand or collapse the detail card
+- toggle compact or expanded selected-site detail inside the main control panel
 - reset/reposition the anchor
 - submit the selected site as the answer
 
 The `alerts` layer derives `visibleSiteIds` from the active metric's threshold at the active time slice. If the selected site is hidden by the alerts layer, the semantic answer remains stored and replayable.
 
+Selected site details are shown in the main control panel and desktop sidebar. Demo 4 no longer shows a separate floating in-scene detail tooltip/card next to the site markers.
+
 ## Replay And Answers
 
-`getSceneStateForReplay()` returns normalized semantic state only. `applySceneStateFromReplay()` hydrates the anchor transform, placement source label, surface-detected flag, interaction modality, activation counts, metric, time slice, layer, labels, focused/selected site, detail state, answer, and submission state directly. It does not replay raw placement animation and does not need live hit-test.
+`getSceneStateForReplay()` returns normalized semantic state only. `applySceneStateFromReplay()` hydrates the anchor transform, placement source label, surface-detected flag, interaction modality, activation counts, metric, time slice, layer, labels, focused/selected site, control-panel detail expansion state, answer, and submission state directly. It does not replay raw placement animation and does not need live hit-test.
 
 The scene-specific answer summary exposes:
 
