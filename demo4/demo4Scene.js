@@ -8,6 +8,7 @@ import {
   DEMO4_PLACEMENT_SOURCES,
   DEMO4_PLACEMENT_MODES,
   DEMO4_PLACEMENT_DRIVERS,
+  normalizeDemo4ControlPanelY,
   normalizeDemo4InteractionModality,
   normalizeDemo4MetricId,
   normalizeDemo4PlacementControllerSource,
@@ -42,6 +43,11 @@ const tempPlacementQuaternion = new THREE.Quaternion();
 const tempSurfaceNormal = new THREE.Vector3();
 const tempInstructionCardPosition = new THREE.Vector3();
 const tempInstructionCardTargetPosition = new THREE.Vector3();
+const tempControlPanelDragPoint = new THREE.Vector3();
+const tempControlPanelWorldPosition = new THREE.Vector3();
+const tempControlPanelPlaneNormal = new THREE.Vector3();
+const controlPanelHeightDragRay = new THREE.Ray();
+const controlPanelHeightDragPlane = new THREE.Plane();
 
 function isFiniteNumber( value ) {
 
@@ -420,6 +426,10 @@ export const demo4SceneDefinition = Object.freeze( {
     let placementAnchor = null;
     let anchoredContentRoot = null;
     let controlPanelRoot = null;
+    let controlPanelTitleBarMesh = null;
+    let controlPanelTitleBarMaterial = null;
+    let controlPanelTitleBarHovered = false;
+    let activeControlPanelHeightDrag = null;
     let detailRoot = null;
     let panelTaskText = null;
     let panelPlacementText = null;
@@ -433,6 +443,7 @@ export const demo4SceneDefinition = Object.freeze( {
     let placementInstructionStatusText = null;
     let supportPedestalMesh = null;
     let supportPedestalLabelController = null;
+    let supportPedestalVisible = false;
     let dwellProgressRing = null;
     let dwellTargetSiteId = null;
     let dwellElapsedMs = 0;
@@ -726,6 +737,8 @@ export const demo4SceneDefinition = Object.freeze( {
         lastPlacementSelectAccepted: lastPlacementSelectDebug.accepted,
         lastPlacementSelectReason: lastPlacementSelectDebug.reason,
         lastBackgroundSelectConfirmed: lastPlacementSelectDebug.backgroundConfirmed,
+        supportPedestalVisible,
+        arAnchorSurfaceHeight: currentSceneState.arAnchorSurfaceHeight,
       };
 
     }
@@ -748,6 +761,8 @@ export const demo4SceneDefinition = Object.freeze( {
         `accepted=${debugState.lastPlacementSelectAccepted ? 'yes' : 'no'}`,
         `reason=${debugState.lastPlacementSelectReason || 'none'}`,
         `bgConfirm=${debugState.lastBackgroundSelectConfirmed ? 'yes' : 'no'}`,
+        `support=${debugState.supportPedestalVisible ? 'yes' : 'no'}`,
+        `height=${debugState.arAnchorSurfaceHeight.toFixed( 2 )}m`,
       ].join( ' | ' );
 
     }
@@ -950,6 +965,44 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function getControlPanelFixedX() {
+
+      return demo4VisualConfig.panel.position[ 0 ] || 0;
+
+    }
+
+    function getControlPanelFixedZ() {
+
+      return demo4VisualConfig.panel.position[ 2 ] || 0;
+
+    }
+
+    function applyControlPanelY( nextY, { commitState = true } = {} ) {
+
+      const clampedY = normalizeDemo4ControlPanelY( nextY, currentSceneState.controlPanelY );
+
+      if ( commitState ) {
+
+        currentSceneState.controlPanelY = clampedY;
+
+      }
+
+      if ( controlPanelRoot ) {
+
+        controlPanelRoot.position.set( getControlPanelFixedX(), clampedY, getControlPanelFixedZ() );
+
+      }
+
+      return clampedY;
+
+    }
+
+    function syncControlPanelPosition() {
+
+      applyControlPanelY( currentSceneState.controlPanelY );
+
+    }
+
     function updateAnchorStateFromTransform( transform, payload = null ) {
 
       currentSceneState.arAnchorPosition = Array.isArray( transform?.position )
@@ -979,7 +1032,11 @@ export const demo4SceneDefinition = Object.freeze( {
 
     function applyPlacementStateToAnchor() {
 
-      currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
+      if ( ! isFiniteNumber( currentSceneState.arAnchorSurfaceHeight ) || currentSceneState.arAnchorSurfaceHeight <= 0 ) {
+
+        currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
+
+      }
       const transform = buildAnchorTransformFromState( currentSceneState );
 
       if ( currentSceneState.arPlacementConfirmed ) {
@@ -1332,7 +1389,7 @@ export const demo4SceneDefinition = Object.freeze( {
         } ),
         {
           name: 'demo4-analysis-support-pedestal',
-          renderOrder: footprint.renderOrder - 1,
+          renderOrder: supportPedestal.renderOrder,
         },
       );
       supportPedestalMesh.visible = false;
@@ -1346,7 +1403,7 @@ export const demo4SceneDefinition = Object.freeze( {
         [ 0, 0, 0 ],
         {
           name: 'demo4-analysis-support-pedestal-label',
-          renderOrder: footprint.renderOrder + 12,
+          renderOrder: supportPedestal.label.renderOrder,
         },
       );
       supportPedestalLabelController.sprite.visible = false;
@@ -1597,6 +1654,158 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function updateControlPanelTitleBarVisual() {
+
+      if ( ! controlPanelTitleBarMaterial ) {
+
+        return;
+
+      }
+
+      const panelStyle = demo4VisualConfig.panel;
+      const nextColor = activeControlPanelHeightDrag
+        ? panelStyle.titleBarDragColor
+        : ( controlPanelTitleBarHovered ? panelStyle.titleBarHoverColor : panelStyle.titleBarColor );
+      controlPanelTitleBarMaterial.color.setHex( nextColor );
+      controlPanelTitleBarMaterial.opacity = panelStyle.titleBarOpacity;
+      controlPanelTitleBarMaterial.needsUpdate = true;
+
+    }
+
+    function getControlPanelHeightDragIntersection( payload, target = tempControlPanelDragPoint ) {
+
+      if ( ! activeControlPanelHeightDrag || ! payload?.rayOrigin || ! payload?.rayDirection ) {
+
+        return null;
+
+      }
+
+      controlPanelHeightDragRay.origin.copy( payload.rayOrigin );
+      controlPanelHeightDragRay.direction.copy( payload.rayDirection ).normalize();
+      return controlPanelHeightDragRay.intersectPlane( activeControlPanelHeightDrag.dragPlane, target );
+
+    }
+
+    function beginControlPanelHeightDrag( payload = {} ) {
+
+      const panelStyle = demo4VisualConfig.panel;
+
+      if (
+        ! controlPanelRoot ||
+        panelStyle.heightDrag?.enabled !== true ||
+        context.getInteractionPolicy?.()?.canInteract === false
+      ) {
+
+        return false;
+
+      }
+
+      context.camera.getWorldDirection( tempControlPanelPlaneNormal ).normalize();
+      tempControlPanelPlaneNormal.y = 0;
+
+      if ( tempControlPanelPlaneNormal.lengthSq() < 0.0001 ) {
+
+        tempControlPanelPlaneNormal.set( 0, 0, 1 );
+
+      } else {
+
+        tempControlPanelPlaneNormal.normalize();
+
+      }
+
+      controlPanelTitleBarMesh?.getWorldPosition( tempControlPanelWorldPosition );
+      controlPanelHeightDragPlane.setFromNormalAndCoplanarPoint(
+        tempControlPanelPlaneNormal,
+        payload.point || tempControlPanelWorldPosition,
+      );
+
+      activeControlPanelHeightDrag = {
+        dragPlane: controlPanelHeightDragPlane.clone(),
+        startPointY: 0,
+        startPanelY: controlPanelRoot.position.y,
+        startSemanticY: currentSceneState.controlPanelY,
+        fixedX: getControlPanelFixedX(),
+        fixedZ: getControlPanelFixedZ(),
+        didMove: false,
+      };
+
+      const startPoint = payload.point?.clone?.() || getControlPanelHeightDragIntersection( payload )?.clone?.() || tempControlPanelWorldPosition.clone();
+      activeControlPanelHeightDrag.startPointY = startPoint.y;
+      activeControlPanelHeightDrag.startPanelY = controlPanelRoot.position.y;
+      updateControlPanelTitleBarVisual();
+      return true;
+
+    }
+
+    function updateControlPanelHeightDrag( payload = {} ) {
+
+      if ( ! activeControlPanelHeightDrag || ! controlPanelRoot ) {
+
+        return false;
+
+      }
+
+      const nextPoint = getControlPanelHeightDragIntersection( payload );
+
+      if ( ! nextPoint ) {
+
+        return false;
+
+      }
+
+      const nextY = normalizeDemo4ControlPanelY(
+        activeControlPanelHeightDrag.startPanelY + nextPoint.y - activeControlPanelHeightDrag.startPointY,
+        activeControlPanelHeightDrag.startPanelY,
+      );
+      controlPanelRoot.position.set(
+        activeControlPanelHeightDrag.fixedX,
+        nextY,
+        activeControlPanelHeightDrag.fixedZ,
+      );
+
+      if ( Math.abs( nextY - activeControlPanelHeightDrag.startPanelY ) > 0.0001 ) {
+
+        activeControlPanelHeightDrag.didMove = true;
+
+      }
+
+      return true;
+
+    }
+
+    function endControlPanelHeightDrag( payload = {} ) {
+
+      if ( ! activeControlPanelHeightDrag ) {
+
+        return false;
+
+      }
+
+      const dragState = activeControlPanelHeightDrag;
+      const nextY = normalizeDemo4ControlPanelY(
+        controlPanelRoot?.position.y,
+        dragState.startSemanticY,
+      );
+      const changed = Math.abs( nextY - dragState.startSemanticY ) >= demo4VisualConfig.panel.heightDrag.dragEpsilon;
+      currentSceneState.controlPanelY = changed
+        ? nextY
+        : normalizeDemo4ControlPanelY( dragState.startSemanticY );
+      activeControlPanelHeightDrag = null;
+      syncControlPanelPosition();
+      updateControlPanelTitleBarVisual();
+
+      if ( changed ) {
+
+        recordSceneChange( 'controlPanelHeight', payload.source || 'demo4-control-panel-height-drag-end', {
+          flushImmediately: getSceneStateLoggingConfig().flushOnControlPanelHeightDragEnd === true,
+        } );
+
+      }
+
+      return true;
+
+    }
+
     function createControlButton( key, label, position, onPress, {
       width = demo4VisualConfig.panel.buttonWidth,
       height = demo4VisualConfig.panel.buttonHeight,
@@ -1669,7 +1878,11 @@ export const demo4SceneDefinition = Object.freeze( {
       const metricButtonOrder = [ 'co2', 'noise', 'occupancy' ].filter( ( metricId ) => DEMO4_METRIC_IDS.includes( metricId ) );
       controlPanelRoot = new THREE.Group();
       controlPanelRoot.name = 'demo4-control-panel-root';
-      controlPanelRoot.position.copy( vector3FromArray( panel.position ) );
+      controlPanelRoot.position.set(
+        getControlPanelFixedX(),
+        normalizeDemo4ControlPanelY( currentSceneState.controlPanelY ),
+        getControlPanelFixedZ(),
+      );
       anchoredContentRoot.add( controlPanelRoot );
 
       createTrackedMesh(
@@ -1689,6 +1902,52 @@ export const demo4SceneDefinition = Object.freeze( {
         0.004,
         'demo4-control-panel-border',
       );
+
+      controlPanelTitleBarMaterial = createBasicMaterial( {
+        color: panel.titleBarColor,
+        opacity: panel.titleBarOpacity,
+      } );
+      controlPanelTitleBarMesh = createTrackedMesh(
+        disposables,
+        controlPanelRoot,
+        new THREE.PlaneGeometry( panel.width, panel.titleBarHeight ),
+        controlPanelTitleBarMaterial,
+        {
+          name: 'demo4-control-panel-titlebar',
+          position: [ 0, panel.titleBarY, 0.018 ],
+          renderOrder: 16,
+        },
+      );
+      context.registerRaycastTarget?.( controlPanelTitleBarMesh, {
+        onHoverChange( payload ) {
+
+          controlPanelTitleBarHovered = payload.isHovered === true;
+          updateControlPanelTitleBarVisual();
+
+        },
+        onSelectStart( payload ) {
+
+          beginControlPanelHeightDrag( payload );
+
+        },
+        onSelectMove( payload ) {
+
+          updateControlPanelHeightDrag( payload );
+
+        },
+        onSelectEnd( payload ) {
+
+          endControlPanelHeightDrag( payload );
+
+        },
+      } );
+      disposables.push( {
+        dispose() {
+
+          context.unregisterRaycastTarget?.( controlPanelTitleBarMesh );
+
+        },
+      } );
 
       createTrackedTextPlane(
         disposables,
@@ -1984,14 +2243,14 @@ export const demo4SceneDefinition = Object.freeze( {
 
       const policy = context.getInteractionPolicy?.() || null;
       const surfaceHeight = Math.max( 0, currentSceneState.arAnchorSurfaceHeight || 0 );
-      const presentationMode = context.getPresentationMode?.();
+      const isReplayInspection = policy?.isAnalysisSession === true || policy?.hasReceivedReplayState === true;
       const visible = (
         currentSceneState.arPlacementConfirmed &&
         surfaceHeight > demo4VisualConfig.supportPedestal.minVisibleHeight &&
-        ( policy?.isAnalysisSession === true || policy?.hasReceivedReplayState === true ) &&
-        presentationMode !== 'immersive-ar'
+        isReplayInspection
       );
 
+      supportPedestalVisible = visible;
       supportPedestalMesh.visible = visible;
       if ( supportPedestalLabelController?.sprite ) {
 
@@ -2127,11 +2386,17 @@ export const demo4SceneDefinition = Object.freeze( {
       }
 
       controlPanelRoot.visible = currentSceneState.arPlacementConfirmed;
+      if ( ! activeControlPanelHeightDrag ) {
+
+        syncControlPanelPosition();
+
+      }
       panelTaskText?.setText( getPanelTaskText() );
       panelPlacementText?.setText( getPanelPlacementText() );
       panelStateText?.setText( getPanelStateText() );
       panelDetailText?.setText( getPanelDetailText() );
       panelInteractionHelpText?.setText( getPanelInteractionHelpText() );
+      updateControlPanelTitleBarVisual();
       buttonRecords.forEach( updateButtonVisualState );
 
     }
@@ -2628,6 +2893,7 @@ export const demo4SceneDefinition = Object.freeze( {
         arAnchorQuaternion: [ ...currentSceneState.arAnchorQuaternion ],
         arAnchorSurfaceHeight: currentSceneState.arAnchorSurfaceHeight,
         arScaleFactor: currentSceneState.arScaleFactor,
+        controlPanelY: currentSceneState.controlPanelY,
         metricId: currentSceneState.metricId,
         timeIndex: currentSceneState.timeIndex,
         layerMode: currentSceneState.layerMode,
@@ -2868,7 +3134,12 @@ export const demo4SceneDefinition = Object.freeze( {
       applySceneStateFromReplay( sceneState ) {
 
         currentSceneState = normalizeDemo4SceneState( sceneState, currentSceneState );
-        currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
+
+        if ( ! isFiniteNumber( sceneState?.arAnchorSurfaceHeight ) || sceneState.arAnchorSurfaceHeight <= 0 ) {
+
+          currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
+
+        }
 
         if ( ! sceneState?.placementSource ) {
 

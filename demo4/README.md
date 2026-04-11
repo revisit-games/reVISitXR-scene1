@@ -60,10 +60,11 @@ The scene stores placement as semantic state:
 - `arAnchorQuaternion`
 - `arAnchorSurfaceHeight`
 - `arScaleFactor`
+- `controlPanelY`
 
 Preview motion is intentionally not logged. Only placement confirmation and reset/reposition commits create semantic scene-state nodes.
 
-Real `xr-hit-test` placement preserves the hit pose's world Y value through confirmation and replay. Floor-plane fallback and desktop default placement still use `floorY + overlayLift`. During desktop analysis replay, anchors above the virtual floor show a translucent gray support pedestal under the footprint so tabletop/bed placements remain interpretable without appearing in live AR. The pedestal includes a side label, "Real-world surface height reference", to clarify that the cuboid represents the approximate physical support surface height.
+Real `xr-hit-test` placement preserves the hit pose's world Y value through confirmation and replay. Floor-plane fallback and desktop default placement still use `floorY + overlayLift`. During analysis replay, anchors above the virtual floor show a translucent gray support pedestal under the footprint so tabletop/bed placements remain interpretable without appearing in live AR. The pedestal includes a side label, "Estimated real-world support surface", to clarify that the cuboid is an approximate physical support-surface proxy.
 
 ## Situated Interaction
 
@@ -95,6 +96,7 @@ After placement, anchored markers and controls support:
 - toggle labels
 - toggle layer mode between `all` and `alerts`
 - toggle compact or expanded selected-site detail inside the main control panel
+- drag the Control Panel title bar to adjust panel height only
 - reset/reposition the anchor
 - submit the selected site as the answer
 
@@ -102,9 +104,11 @@ The `alerts` layer derives `visibleSiteIds` from the active metric's threshold a
 
 Selected site details are shown in the main control panel and desktop sidebar. Demo 4 no longer shows a separate floating in-scene detail tooltip/card next to the site markers.
 
+The Control Panel title strip is a raycast target for either controller and desktop pointer. Dragging it changes only the panel's local Y position, clamps that height with `demo4VisualConfig.panel.heightDrag.minY/maxY`, and records one semantic `controlPanelY` change on drag end when the movement exceeds `heightDrag.dragEpsilon`. Its default position and title-strip styling live in `demo4VisualConfig.panel.position`, `titleBarHeight`, `titleBarY`, `titleBarColor`, `titleBarHoverColor`, `titleBarDragColor`, and `titleBarOpacity`.
+
 ## Replay And Answers
 
-`getSceneStateForReplay()` returns normalized semantic state only. `applySceneStateFromReplay()` hydrates the anchor transform, placement source label, surface-detected flag, interaction modality, activation counts, metric, time slice, layer, labels, focused/selected site, control-panel detail expansion state, answer, and submission state directly. It does not replay raw placement animation and does not need live hit-test.
+`getSceneStateForReplay()` returns normalized semantic state only. `applySceneStateFromReplay()` hydrates the anchor transform, placement source label, stored support-surface height, control-panel height, surface-detected flag, interaction modality, activation counts, metric, time slice, layer, labels, focused/selected site, control-panel detail expansion state, answer, and submission state directly. It does not replay raw placement animation and does not need live hit-test.
 
 The scene-specific answer summary exposes:
 
@@ -128,6 +132,6 @@ The scene-specific answer summary exposes:
 - `xrArAnchorTransformJson`
 - `xrStateSummaryJson`
 
-New placement implementation fields such as `placementDriver`, `placementControllerSource`, and `arAnchorSurfaceHeight` stay inside `xrStateSummaryJson`. `xrArAnchorTransformJson` also includes compact anchor height/source metadata under the existing reactive id; no new Repo B sidebar reactive ids are required.
+New placement and panel implementation fields such as `placementDriver`, `placementControllerSource`, `arAnchorSurfaceHeight`, and `controlPanelY` stay inside `xrStateSummaryJson`. `xrArAnchorTransformJson` also includes compact anchor height/source metadata under the existing reactive id; no new Repo B sidebar reactive ids are required.
 
 The existing global replay avatar and ghost controller rays are managed by `main.js` and are not changed by Demo 4.

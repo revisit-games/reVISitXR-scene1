@@ -47,6 +47,7 @@ export const demo4LoggingConfig = Object.freeze( {
     flushOnInteractionModalityChange: true,
     flushOnActivation: true,
     flushOnTaskSubmit: true,
+    flushOnControlPanelHeightDragEnd: true,
   } ),
   demo4: Object.freeze( {
     stableLabels: Object.freeze( {
@@ -61,6 +62,7 @@ export const demo4LoggingConfig = Object.freeze( {
       interactionModality: 'Change Demo 4 Interaction Modality',
       activation: 'Activate Demo 4 Site',
       taskSubmit: 'Submit Demo 4 Task',
+      controlPanelHeight: 'Adjust Demo 4 Control Panel Height',
     } ),
   } ),
 } );

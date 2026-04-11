@@ -69,6 +69,11 @@ export const DEMO4_DEFAULT_SCALE_FACTOR = 1;
 export const DEMO4_DEFAULT_PLACEMENT_SOURCE = DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT;
 export const DEMO4_DEFAULT_PLACEMENT_DRIVER = DEMO4_PLACEMENT_DRIVERS.LEFT_CONTROLLER;
 export const DEMO4_DEFAULT_INTERACTION_MODALITY = DEMO4_INTERACTION_MODALITIES.GAZE_DWELL;
+export const DEMO4_DEFAULT_CONTROL_PANEL_Y = 1.15;
+export const DEMO4_CONTROL_PANEL_Y_RANGE = Object.freeze( {
+  min: 0.72,
+  max: 1.55,
+} );
 
 function isFiniteNumber( value ) {
 
@@ -131,6 +136,25 @@ export function normalizeDemo4TimeIndex( value, fallbackValue = DEMO4_DEFAULT_TI
   }
 
   return Math.max( 0, Math.min( DEMO4_TIME_SLICE_IDS.length - 1, fallbackValue ) );
+
+}
+
+export function normalizeDemo4ControlPanelY( value, fallbackValue = DEMO4_DEFAULT_CONTROL_PANEL_Y ) {
+
+  const numericValue = typeof value === 'string' && value.trim().length > 0
+    ? Number( value )
+    : value;
+  const numericFallback = isFiniteNumber( fallbackValue )
+    ? fallbackValue
+    : DEMO4_DEFAULT_CONTROL_PANEL_Y;
+  const nextValue = isFiniteNumber( numericValue )
+    ? numericValue
+    : numericFallback;
+
+  return Math.min(
+    DEMO4_CONTROL_PANEL_Y_RANGE.max,
+    Math.max( DEMO4_CONTROL_PANEL_Y_RANGE.min, nextValue ),
+  );
 
 }
 
@@ -284,6 +308,7 @@ export function parseDemo4Conditions( search = window.location.search, {
     arAnchorQuaternion: [ ...DEMO4_DEFAULT_ANCHOR_QUATERNION ],
     arAnchorSurfaceHeight: 0,
     arScaleFactor: DEMO4_DEFAULT_SCALE_FACTOR,
+    controlPanelY: normalizeDemo4ControlPanelY( searchParams.get( 'panelY' ), DEMO4_DEFAULT_CONTROL_PANEL_Y ),
     metricId: defaultMetricId,
     timeIndex: defaultTimeIndex,
     layerMode: normalizeDemo4LayerMode( searchParams.get( 'layer' ), DEMO4_DEFAULT_LAYER_MODE ),
@@ -358,6 +383,10 @@ export function normalizeDemo4SceneState( candidateState, fallbackState = null, 
       isFiniteNumber( candidateState?.arScaleFactor )
         ? candidateState.arScaleFactor
         : ( isFiniteNumber( fallback.arScaleFactor ) ? fallback.arScaleFactor : DEMO4_DEFAULT_SCALE_FACTOR ),
+    ),
+    controlPanelY: normalizeDemo4ControlPanelY(
+      candidateState?.controlPanelY,
+      normalizeDemo4ControlPanelY( fallback.controlPanelY, DEMO4_DEFAULT_CONTROL_PANEL_Y ),
     ),
     metricId: normalizeDemo4MetricId(
       candidateState?.metricId,
