@@ -664,7 +664,7 @@ Useful customization points:
 - `createGhostReplayPointer()` in `main.js`
 - `updateGhostReplayPointer()` in `main.js`
 
-During paused analysis interaction, the ghost pointers are hidden on the first local viewer manipulation. The next replay snapshot restores them from participant state.
+During paused analysis interaction, free-camera navigation keeps ghost pointers visible by default. Right-drag camera rotation, WASD movement, mouse wheel movement, and empty-background pan are treated as viewer navigation, so the last hydrated controller rays, hit markers, and labels remain visible in world space until the next replay snapshot updates them. Actual scene/object manipulation can still hide ghost pointers when configured to do so.
 
 ## Replay Visual Customization
 
@@ -735,12 +735,16 @@ Replay performance knobs live in `replayVisualConfig.js` under `performance`:
 - `lazyLoadReplayAvatar`
 - `renderCssLabelsOnlyInAnalysis`
 - `disableReplayVisualsDuringImmersiveStudy`
+- `keepReplayPointersDuringPausedCameraNavigation`
+- `hideReplayPointersOnPausedSceneInteraction`
 
 These defaults keep replay visuals analysis-only:
 
 - the OBJ avatar is not loaded during normal study mode unless replay visuals actually become relevant
 - the CSS2D label layer is hidden and not rendered during immersive study-mode XR
 - per-frame replay avatar updates are skipped outside analysis replay
+- paused free-camera navigation preserves replay controller ghost rays by default
+- paused local scene/object manipulation may still hide replay controller ghost rays by default
 
 If you add new replay-only visuals later, keep them behind the same analysis-session gates so immersive study mode stays focused on participant interaction rather than analysis overlays.
 

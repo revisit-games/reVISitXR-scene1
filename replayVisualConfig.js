@@ -38,6 +38,8 @@ export const replayVisualConfig = Object.freeze( {
     lazyLoadReplayAvatar: true,
     renderCssLabelsOnlyInAnalysis: true,
     disableReplayVisualsDuringImmersiveStudy: true,
+    keepReplayPointersDuringPausedCameraNavigation: true,
+    hideReplayPointersOnPausedSceneInteraction: true,
   } ),
   pausedOverlay: Object.freeze( {
     bannerText: 'Replay Paused. Free Camera Moving',

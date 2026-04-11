@@ -188,6 +188,7 @@ let currentMode = PRESENTATION_MODES.DESKTOP;
 let studyLogger = null;
 let cameraSamplingRequested = false;
 let replayGhostPointersHiddenByViewer = false;
+let replayGhostPointersHiddenReason = null;
 let activeSceneDefinition = resolvedInitialScene.sceneDefinition;
 let activeSceneController = null;
 
@@ -1308,6 +1309,8 @@ function getGhostReplayPointerDebugState() {
         tooltipVisible: visuals?.labelAnchor.visible ?? false,
         tooltipText: visuals?.labelElement.textContent ?? null,
         tooltipAnchor: visuals ? vector3ToArray( visuals.labelAnchor.position ) : null,
+        hiddenByViewer: replayGhostPointersHiddenByViewer,
+        hiddenReason: replayGhostPointersHiddenReason,
       },
     ];
 
@@ -1315,7 +1318,7 @@ function getGhostReplayPointerDebugState() {
 
 }
 
-function hideReplayGhostPointersForLocalInteraction() {
+function hideReplayGhostPointersForLocalInteraction( { reason = 'scene-interaction' } = {} ) {
 
   if ( ! studyLogger?.isAnalysisSession() || ! studyLogger.canInteract() ) {
 
@@ -1323,7 +1326,28 @@ function hideReplayGhostPointersForLocalInteraction() {
 
   }
 
+  const performanceConfig = replayVisualConfig.performance || {};
+
+  if (
+    reason === 'camera-navigation' &&
+    performanceConfig.keepReplayPointersDuringPausedCameraNavigation !== false
+  ) {
+
+    return;
+
+  }
+
+  if (
+    reason === 'scene-interaction' &&
+    performanceConfig.hideReplayPointersOnPausedSceneInteraction === false
+  ) {
+
+    return;
+
+  }
+
   replayGhostPointersHiddenByViewer = true;
+  replayGhostPointersHiddenReason = reason;
   hideAllGhostReplayPointers();
 
 }
@@ -1955,8 +1979,6 @@ function onPointerDown( event ) {
 
   }
 
-  hideReplayGhostPointersForLocalInteraction();
-
   setPointerFromEvent( event );
   desktopState.activePointerId = event.pointerId;
   desktopState.lastPointer.set( event.clientX, event.clientY );
@@ -1984,6 +2006,7 @@ function onPointerDown( event ) {
 
   if ( sceneEntry?.object ) {
 
+    hideReplayGhostPointersForLocalInteraction( { reason: 'scene-interaction' } );
     desktopState.mode = 'scene-target';
     desktopState.sceneSelection = {
       ...sceneEntry,
@@ -2003,6 +2026,7 @@ function onPointerDown( event ) {
 
   if ( hit ) {
 
+    hideReplayGhostPointersForLocalInteraction( { reason: 'scene-interaction' } );
     desktopState.mode = 'object';
     desktopState.selected = hit.object;
     desktopState.hovered = hit.object;
@@ -2025,6 +2049,7 @@ function onPointerDown( event ) {
   activeSceneController?.handleBackgroundSelect?.( {
     source: INTERACTORS.DESKTOP_POINTER,
   } );
+  hideReplayGhostPointersForLocalInteraction( { reason: 'camera-navigation' } );
   desktopState.mode = 'pan';
   renderer.domElement.setPointerCapture( event.pointerId );
   renderer.domElement.style.cursor = 'grabbing';
@@ -2196,7 +2221,7 @@ function onKeyDown( event ) {
 
   if ( event.code === 'KeyW' || event.code === 'KeyA' || event.code === 'KeyS' || event.code === 'KeyD' ) {
 
-    hideReplayGhostPointersForLocalInteraction();
+    hideReplayGhostPointersForLocalInteraction( { reason: 'camera-navigation' } );
     pressedKeys.add( event.code );
     event.preventDefault();
 
@@ -2233,7 +2258,7 @@ function onWheel( event ) {
 
   }
 
-  hideReplayGhostPointersForLocalInteraction();
+  hideReplayGhostPointersForLocalInteraction( { reason: 'camera-navigation' } );
   moveCameraForward( - direction * wheelMoveStep );
   event.preventDefault();
 
@@ -2586,6 +2611,7 @@ function applyReplayState( replayState ) {
   onPointerCancel();
   releaseAllXRControllerActions();
   replayGhostPointersHiddenByViewer = false;
+  replayGhostPointersHiddenReason = null;
 
   if (
     typeof replayState.sceneKey === 'string' &&
@@ -2658,6 +2684,7 @@ function handleInteractionPolicyChange( policy ) {
   if ( ! policy.isAnalysisSession || ! policy.hasReceivedReplayState ) {
 
     replayGhostPointersHiddenByViewer = false;
+    replayGhostPointersHiddenReason = null;
     hideAllGhostReplayPointers();
 
   }
