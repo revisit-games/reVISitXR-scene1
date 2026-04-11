@@ -234,7 +234,7 @@ Scene selection is URL-driven:
 - `index.html?scene=2`
   Loads Demo 2, the paper-facing migration globe baseline.
 - `index.html?scene=3`
-  Loads the Example 3 placeholder scene.
+  Loads Demo 3, the paper-facing immersive analytic workspace.
 
 Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene definition provides:
 
@@ -315,6 +315,24 @@ Demo 1 uses:
 - `taskSubmitted`
 
 This keeps scatterplot replay semantic. The scene restores authored navigation mode, overview visibility, plot scale, selection, and task state without logging or replaying per-point animation.
+
+Demo 3 uses:
+
+- `demoId`
+- `taskId`
+- `layoutMode`
+- `focusedViewId`
+- `selectedViewId`
+- `selectedDatumId`
+- `linkedHighlightEnabled`
+- `visibleViewIds`
+- `pinnedViewIds`
+- `panelLayouts`
+- `panelOrder`
+- `taskAnswer`
+- `taskSubmitted`
+
+This keeps the multi-view workspace replay semantic. Demo 3 restores layout presets, committed floating panel transforms, focused and selected panels, linked region selection, pinned panels, and task submission without replaying dense drag motion. The local OWID bundle lives in `demo3/data/`, and package-specific visual customization is centralized in `demo3/demo3VisualConfig.js`.
 
 Example 1 uses:
 
