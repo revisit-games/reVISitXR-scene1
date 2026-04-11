@@ -40,6 +40,7 @@ const tempCameraWorldDirection = new THREE.Vector3();
 const tempPlacementPosition = new THREE.Vector3();
 const tempPlacementQuaternion = new THREE.Quaternion();
 const tempSurfaceNormal = new THREE.Vector3();
+const tempInstructionCardPosition = new THREE.Vector3();
 
 function isFiniteNumber( value ) {
 
@@ -133,6 +134,7 @@ function createBasicMaterial( {
   opacity = 1,
   side = THREE.DoubleSide,
   depthWrite = false,
+  depthTest = true,
 } = {} ) {
 
   return new THREE.MeshBasicMaterial( {
@@ -141,6 +143,7 @@ function createBasicMaterial( {
     opacity,
     side,
     depthWrite,
+    depthTest,
     toneMapped: false,
   } );
 
@@ -193,6 +196,7 @@ function createTrackedTextPlane( collection, parent, options, position, {
   name = '',
   rotation = null,
   renderOrder = null,
+  depthTest = null,
 } = {} ) {
 
   const controller = createTextPlane( options );
@@ -208,6 +212,13 @@ function createTrackedTextPlane( collection, parent, options, position, {
   if ( Number.isFinite( renderOrder ) ) {
 
     controller.mesh.renderOrder = renderOrder;
+
+  }
+
+  if ( typeof depthTest === 'boolean' ) {
+
+    controller.mesh.material.depthTest = depthTest;
+    controller.mesh.material.needsUpdate = true;
 
   }
 
@@ -414,6 +425,9 @@ export const demo4SceneDefinition = Object.freeze( {
     let panelInteractionHelpText = null;
     let detailText = null;
     let placementPromptText = null;
+    let placementInstructionCardRoot = null;
+    let placementInstructionBodyText = null;
+    let placementInstructionStatusText = null;
     let supportPedestalMesh = null;
     let dwellProgressRing = null;
     let dwellTargetSiteId = null;
@@ -422,6 +436,17 @@ export const demo4SceneDefinition = Object.freeze( {
     let unsupportedImmersiveMode = null;
     let placementPreviewStatus = 'lost';
     let placementPreviewSourceLabel = null;
+    let placementPromptOverrideText = null;
+    let placementPromptOverrideUntil = 0;
+    const lastPlacementSelectDebug = {
+      source: null,
+      interactor: null,
+      handedness: null,
+      controllerIndex: null,
+      accepted: false,
+      reason: 'none',
+      backgroundConfirmed: false,
+    };
     const placementStabilizer = {
       hasSmoothedPose: false,
       smoothedPosition: new THREE.Vector3(),
@@ -530,6 +555,75 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function isDemo4DebugEnabled() {
+
+      if ( import.meta.env.DEV === true ) {
+
+        return true;
+
+      }
+
+      try {
+
+        const params = new URLSearchParams( window.location.search );
+        return params.get( 'debug' ) === '1' || params.get( 'debug' ) === 'true';
+
+      } catch {
+
+        return false;
+
+      }
+
+    }
+
+    function getPrimitivePlacementSelectSource( payload = {} ) {
+
+      return payload.interactor || payload.source || payload.pointerType || 'unknown';
+
+    }
+
+    function setPlacementSelectDebug( payload = {}, {
+      accepted = false,
+      reason = 'none',
+      backgroundConfirmed = false,
+    } = {} ) {
+
+      lastPlacementSelectDebug.source = getPrimitivePlacementSelectSource( payload );
+      lastPlacementSelectDebug.interactor = typeof payload.interactor === 'string' ? payload.interactor : null;
+      lastPlacementSelectDebug.handedness = typeof payload.handedness === 'string' ? payload.handedness : null;
+      lastPlacementSelectDebug.controllerIndex = Number.isInteger( payload.controllerIndex )
+        ? payload.controllerIndex
+        : null;
+      lastPlacementSelectDebug.accepted = accepted === true;
+      lastPlacementSelectDebug.reason = typeof reason === 'string' ? reason : 'none';
+      lastPlacementSelectDebug.backgroundConfirmed = backgroundConfirmed === true;
+
+    }
+
+    function getPlacementPromptOverrideText() {
+
+      if ( placementPromptOverrideText && performance.now() <= placementPromptOverrideUntil ) {
+
+        return placementPromptOverrideText;
+
+      }
+
+      placementPromptOverrideText = null;
+      placementPromptOverrideUntil = 0;
+      return null;
+
+    }
+
+    function setPlacementPromptOverride( text, holdMs = 1400 ) {
+
+      placementPromptOverrideText = typeof text === 'string' ? text : null;
+      placementPromptOverrideUntil = placementPromptOverrideText
+        ? performance.now() + Math.max( 0, holdMs )
+        : 0;
+      updatePlacementPrompt();
+
+    }
+
     function getPlacementStatusText() {
 
       if ( currentSceneState.arPlacementConfirmed ) {
@@ -541,6 +635,14 @@ export const demo4SceneDefinition = Object.freeze( {
       if ( context.getPresentationMode?.() === 'desktop' ) {
 
         return 'Desktop fallback: confirm the default footprint or enter AR.';
+
+      }
+
+      const overrideText = getPlacementPromptOverrideText();
+
+      if ( overrideText ) {
+
+        return overrideText;
 
       }
 
@@ -589,6 +691,57 @@ export const demo4SceneDefinition = Object.freeze( {
         'Pull the trigger to place the overlay.',
         getPlacementStatusText(),
       ].join( '\n' );
+
+    }
+
+    function getPlacementInstructionCardBodyText() {
+
+      return [
+        'Use the LEFT controller to choose a real-world surface.',
+        'Pull the trigger to place the overlay.',
+      ].join( '\n' );
+
+    }
+
+    function getPlacementDebugState() {
+
+      const livePlacementStatus = placementAnchor?.getPlacementStatus?.() || {};
+
+      return {
+        placementPreviewStatus,
+        surfaceDetected: livePlacementStatus.surfaceDetected === true || currentSceneState.surfaceDetected === true,
+        placementSource: livePlacementStatus.source || currentSceneState.placementSource,
+        placementControllerSource: currentSceneState.placementControllerSource || null,
+        lastPlacementSelectSource: lastPlacementSelectDebug.source,
+        lastPlacementSelectInteractor: lastPlacementSelectDebug.interactor,
+        lastPlacementSelectHandedness: lastPlacementSelectDebug.handedness,
+        lastPlacementSelectControllerIndex: lastPlacementSelectDebug.controllerIndex,
+        lastPlacementSelectAccepted: lastPlacementSelectDebug.accepted,
+        lastPlacementSelectReason: lastPlacementSelectDebug.reason,
+        lastBackgroundSelectConfirmed: lastPlacementSelectDebug.backgroundConfirmed,
+      };
+
+    }
+
+    function getPlacementDebugLine() {
+
+      const debugState = getPlacementDebugState();
+      const controllerIndex = Number.isInteger( debugState.lastPlacementSelectControllerIndex )
+        ? debugState.lastPlacementSelectControllerIndex
+        : 'none';
+
+      return [
+        `Debug placement: status=${debugState.placementPreviewStatus}`,
+        `surface=${debugState.surfaceDetected ? 'yes' : 'no'}`,
+        `source=${debugState.placementSource || 'none'}`,
+        `controller=${debugState.placementControllerSource || 'none'}`,
+        `last=${debugState.lastPlacementSelectSource || 'none'}`,
+        `hand=${debugState.lastPlacementSelectHandedness || 'none'}`,
+        `idx=${controllerIndex}`,
+        `accepted=${debugState.lastPlacementSelectAccepted ? 'yes' : 'no'}`,
+        `reason=${debugState.lastPlacementSelectReason || 'none'}`,
+        `bgConfirm=${debugState.lastBackgroundSelectConfirmed ? 'yes' : 'no'}`,
+      ].join( ' | ' );
 
     }
 
@@ -828,10 +981,19 @@ export const demo4SceneDefinition = Object.freeze( {
       const fallbackPlacementSource = context.getPresentationMode?.() === 'desktop'
         ? DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT
         : currentSceneState.placementSource;
-      const finalTransform = transform || placementAnchor.confirmPlacement( {
-        placementSource: fallbackPlacementSource,
-        surfaceDetected: currentSceneState.surfaceDetected,
-      } );
+      const confirmTransform = transform
+        ? {
+          ...transform,
+          placementSource: transform.placementSource || fallbackPlacementSource,
+          surfaceDetected: typeof transform.surfaceDetected === 'boolean'
+            ? transform.surfaceDetected
+            : currentSceneState.surfaceDetected,
+        }
+        : {
+          placementSource: fallbackPlacementSource,
+          surfaceDetected: currentSceneState.surfaceDetected,
+        };
+      const finalTransform = placementAnchor.confirmPlacement( confirmTransform );
       updateAnchorStateFromTransform( finalTransform, placementPayload );
 
       if ( context.getPresentationMode?.() === 'desktop' ) {
@@ -1125,6 +1287,75 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function createPlacementInstructionCard() {
+
+      const card = demo4VisualConfig.placementInstructionCard;
+      placementInstructionCardRoot = new THREE.Group();
+      placementInstructionCardRoot.name = 'demo4-placement-instruction-card-root';
+      placementInstructionCardRoot.visible = false;
+      root.add( placementInstructionCardRoot );
+
+      createTrackedMesh(
+        disposables,
+        placementInstructionCardRoot,
+        new THREE.PlaneGeometry( card.width, card.height ),
+        createBasicMaterial( {
+          color: card.backgroundColor,
+          opacity: card.backgroundOpacity,
+          depthWrite: false,
+          depthTest: false,
+        } ),
+        {
+          name: 'demo4-placement-instruction-card-background',
+          renderOrder: card.renderOrder,
+        },
+      );
+
+      const border = createRectangleBorder(
+        disposables,
+        placementInstructionCardRoot,
+        card.width,
+        card.height,
+        card.borderColor,
+        card.borderOpacity,
+        0.008,
+        'demo4-placement-instruction-card-border',
+      );
+      border.renderOrder = card.renderOrder + 1;
+      border.material.depthTest = false;
+      border.material.needsUpdate = true;
+
+      placementInstructionBodyText = createTrackedTextPlane(
+        disposables,
+        placementInstructionCardRoot,
+        {
+          ...card.bodyText,
+          text: getPlacementInstructionCardBodyText(),
+        },
+        [ 0, 0.045, 0.014 ],
+        {
+          name: 'demo4-placement-instruction-card-body',
+          renderOrder: card.renderOrder + 2,
+          depthTest: false,
+        },
+      );
+      placementInstructionStatusText = createTrackedTextPlane(
+        disposables,
+        placementInstructionCardRoot,
+        {
+          ...card.statusText,
+          text: getPlacementStatusText(),
+        },
+        [ 0, - 0.08, 0.016 ],
+        {
+          name: 'demo4-placement-instruction-card-status',
+          renderOrder: card.renderOrder + 2,
+          depthTest: false,
+        },
+      );
+
+    }
+
     function createPlacementVisuals() {
 
       createFootprintVisuals( placementAnchor.previewRoot, { preview: true } );
@@ -1141,6 +1372,7 @@ export const demo4SceneDefinition = Object.freeze( {
         [ 0, 0.22, 0 ],
         { name: 'demo4-placement-prompt', renderOrder: 20 },
       );
+      createPlacementInstructionCard();
 
     }
 
@@ -1687,6 +1919,61 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function syncPlacementInstructionCard() {
+
+      if ( ! placementInstructionCardRoot ) {
+
+        return;
+
+      }
+
+      const presentationMode = context.getPresentationMode?.();
+      const visible = (
+        ! currentSceneState.arPlacementConfirmed &&
+        presentationMode === 'immersive-ar' &&
+        ! isBlockedVRMode()
+      );
+
+      placementInstructionCardRoot.visible = visible;
+      placementInstructionBodyText?.setText( getPlacementInstructionCardBodyText() );
+      placementInstructionStatusText?.setText( getPlacementStatusText() );
+
+      if ( ! visible ) {
+
+        return;
+
+      }
+
+      const card = demo4VisualConfig.placementInstructionCard;
+      const livePlacementStatus = placementAnchor?.getPlacementStatus?.() || {};
+      const hasLivePreviewPose = (
+        placementAnchor?.previewRoot?.visible === true &&
+        livePlacementStatus.surfaceDetected === true &&
+        placementPreviewStatus !== 'lost'
+      );
+
+      context.camera.getWorldPosition( tempCameraWorldPosition );
+      context.camera.getWorldDirection( tempCameraWorldDirection );
+
+      if ( hasLivePreviewPose ) {
+
+        placementAnchor.previewRoot.getWorldPosition( tempInstructionCardPosition );
+        tempInstructionCardPosition.y += card.verticalOffset;
+
+      } else {
+
+        tempInstructionCardPosition
+          .copy( tempCameraWorldPosition )
+          .addScaledVector( tempCameraWorldDirection.normalize(), card.cameraFallbackDistance );
+        tempInstructionCardPosition.y += card.cameraFallbackYOffset;
+
+      }
+
+      placementInstructionCardRoot.position.copy( tempInstructionCardPosition );
+      placementInstructionCardRoot.quaternion.copy( context.camera.quaternion );
+
+    }
+
     function syncControlPanel() {
 
       if ( ! controlPanelRoot ) {
@@ -1767,9 +2054,18 @@ export const demo4SceneDefinition = Object.freeze( {
       syncDerivedVisibleSiteIds();
       applyPlacementStateToAnchor();
       placementPromptText?.setText( getPlacementPromptText() );
+      if ( placementPromptText?.sprite ) {
+
+        placementPromptText.sprite.visible = ! (
+          context.getPresentationMode?.() === 'immersive-ar' &&
+          ! currentSceneState.arPlacementConfirmed
+        );
+
+      }
       syncMarkerVisuals();
       syncDwellProgressVisual();
       syncSupportPedestalVisual();
+      syncPlacementInstructionCard();
       syncControlPanel();
       syncDetailCard();
       syncDesktopPanel();
@@ -1803,6 +2099,7 @@ export const demo4SceneDefinition = Object.freeze( {
     function updatePlacementPrompt() {
 
       placementPromptText?.setText( getPlacementPromptText() );
+      placementInstructionStatusText?.setText( getPlacementStatusText() );
 
     }
 
@@ -2048,6 +2345,103 @@ export const demo4SceneDefinition = Object.freeze( {
       }
 
       syncVisuals();
+
+    }
+
+    function getReadyBackgroundPreviewTransform() {
+
+      const livePlacementStatus = placementAnchor?.getPlacementStatus?.() || {};
+
+      if (
+        placementPreviewStatus !== 'ready' ||
+        livePlacementStatus.source !== DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST ||
+        livePlacementStatus.surfaceDetected !== true
+      ) {
+
+        return null;
+
+      }
+
+      const previewTransform = placementAnchor?.getPreviewTransform?.();
+
+      if (
+        ! previewTransform ||
+        ! Array.isArray( previewTransform.position ) ||
+        ! Array.isArray( previewTransform.quaternion )
+      ) {
+
+        return null;
+
+      }
+
+      return {
+        ...previewTransform,
+        placementSource: DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST,
+        surfaceDetected: true,
+      };
+
+    }
+
+    function handlePlacementBackgroundSelect( payload = {} ) {
+
+      if ( currentSceneState.arPlacementConfirmed || isBlockedVRMode() ) {
+
+        setPlacementSelectDebug( payload, {
+          accepted: false,
+          reason: currentSceneState.arPlacementConfirmed ? 'already-confirmed' : 'blocked-vr',
+          backgroundConfirmed: false,
+        } );
+        return;
+
+      }
+
+      if ( context.getPresentationMode?.() !== 'immersive-ar' ) {
+
+        setPlacementSelectDebug( payload, {
+          accepted: false,
+          reason: 'not-immersive-ar',
+          backgroundConfirmed: false,
+        } );
+        return;
+
+      }
+
+      if ( ! isAcceptedPlacementSource( payload ) ) {
+
+        setPlacementSelectDebug( payload, {
+          accepted: false,
+          reason: 'rejected-source',
+          backgroundConfirmed: false,
+        } );
+        setPlacementPromptOverride( 'Placement requires the LEFT controller.' );
+        syncPlacementInstructionCard();
+        return;
+
+      }
+
+      const previewTransform = getReadyBackgroundPreviewTransform();
+
+      if ( ! previewTransform ) {
+
+        const livePlacementStatus = placementAnchor?.getPlacementStatus?.() || {};
+        setPlacementSelectDebug( payload, {
+          accepted: true,
+          reason: livePlacementStatus.surfaceDetected === true ? 'surface-stabilizing' : 'surface-not-ready',
+          backgroundConfirmed: false,
+        } );
+        setPlacementPromptOverride( 'Aim the LEFT controller at a detected surface first.' );
+        updatePlacementPrompt();
+        syncPlacementInstructionCard();
+        return;
+
+      }
+
+      setPlacementSelectDebug( payload, {
+        accepted: true,
+        reason: 'confirmed',
+        backgroundConfirmed: true,
+      } );
+      confirmPlacement( payload, previewTransform );
 
     }
 
@@ -2326,6 +2720,7 @@ export const demo4SceneDefinition = Object.freeze( {
         updatePlacementPreviewFromRuntime( runtime );
         updateGazeDwell( deltaSeconds, runtime );
         syncSupportPedestalVisual();
+        syncPlacementInstructionCard();
 
       },
       getAnswerSummary() {
@@ -2368,13 +2763,21 @@ export const demo4SceneDefinition = Object.freeze( {
                 ? getPlacementPromptText()
                 : `Place the campus overlay on the default preview in ${modeLabel}. Desktop can use the side panel confirm button.`
             ),
-          note: 'Placement, metric, time slice, layer, labels, site selection, detail state, and answer submission are stored as semantic replay state.',
+          note: [
+            'Placement, metric, time slice, layer, labels, site selection, detail state, and answer submission are stored as semantic replay state.',
+            isDemo4DebugEnabled() ? getPlacementDebugLine() : null,
+          ].filter( Boolean ).join( '\n' ),
         };
 
       },
       handleBackgroundSelect( payload = {} ) {
 
-        void payload;
+        handlePlacementBackgroundSelect( payload );
+
+      },
+      getDebugState() {
+
+        return getPlacementDebugState();
 
       },
       onPresentationModeChange( presentationMode ) {

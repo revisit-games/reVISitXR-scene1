@@ -43,6 +43,8 @@ Replay may also hydrate `placementSource: 'replay'` for older snapshots without 
 
 Demo 4 placement is driven by the left controller before the overlay is confirmed. Gaze/head ray placement is intentionally ignored, and the right controller cannot move or confirm the footprint. If WebXR does not expose handedness, `controller-0` is accepted as a fallback and the prompt/HUD calls that out. Desktop remains deterministic: reviewers can confirm the default footprint from the side panel.
 
+In live AR, the left trigger confirms the current stabilized WebXR hit-test preview even when the controller ray does not intersect the invisible Three.js fallback placement surface. This keeps real-surface preview and trigger confirmation on the same semantic placement path. A separate camera-facing placement card appears before confirmation with the left-controller instruction and live surface status, so the prompt remains readable even when the preview footprint is lying flat on a real table or bed.
+
 Demo 4 does not claim real plane detection when WebXR hit-test is unavailable. In AR it tells the participant whether real hit-test placement is stabilizing, ready, or lost. Preview motion is smoothed and spike-filtered, but the raw preview path is not logged.
 
 The scene stores placement as semantic state:

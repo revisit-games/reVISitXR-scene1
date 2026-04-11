@@ -379,9 +379,12 @@ Demo 4 uses:
 - `placementMode`
 - `placementCount`
 - `placementSource`
+- `placementDriver`
+- `placementControllerSource`
 - `surfaceDetected`
 - `arAnchorPosition`
 - `arAnchorQuaternion`
+- `arAnchorSurfaceHeight`
 - `arScaleFactor`
 - `metricId`
 - `timeIndex`
@@ -398,7 +401,7 @@ Demo 4 uses:
 - `taskAnswer`
 - `taskSubmitted`
 
-This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, placement source, surface-detected flag, interaction modality, activation counts, metric, time slice, layer mode, label visibility, focused and selected site, detail card state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
+This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, placement source, placement driver/controller fallback, surface height, surface-detected flag, interaction modality, activation counts, metric, time slice, layer mode, label visibility, focused and selected site, detail card state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
 
 Example 1 uses:
 
@@ -654,6 +657,8 @@ Demo 4 keeps its situated campus overlay under `demo4/`:
 
 The local dataset contains six deterministic campus sites, three time slices, and three metrics: occupancy, noise, and CO2. The default task asks which site has the highest midday CO2 reading, with `site:classroom` as the expected answer. There are no external downloads, geolocation calls, GPS dependencies, or world-mesh requirements.
 
+Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface, and a separate camera-facing instruction card keeps the placement instructions readable before the overlay is anchored.
+
 Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include an automatic copy or mirror command for moving that build into any study repo; deployment or study asset refresh remains an explicit external step.
 
 ## Example 1 Dataset Layout
@@ -895,5 +900,6 @@ In Vite dev mode, `window.__revisitXRDebug` is exposed for smoke testing:
 - `getLoggingStats()`
 - `getReplayPointerVisuals()`
 - `getReplayAvatarVisuals()`
+- `getActiveSceneDebugState()`
 
-These helpers are for development only and are useful when validating replay hydration, pause/play behavior, pointer rendering, replay-avatar placement, and whether the logging-density optimizations are actually suppressing redundant samples.
+These helpers are for development only and are useful when validating replay hydration, pause/play behavior, pointer rendering, replay-avatar placement, active scene placement/debug state, and whether the logging-density optimizations are actually suppressing redundant samples.

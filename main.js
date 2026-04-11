@@ -2815,7 +2815,11 @@ function onSelectStart( event ) {
 
   if ( ! resolvedCandidate.hit ) {
 
-    activeSceneController?.handleBackgroundSelect?.( { source: getControllerInteractorId( controller ) } );
+    activeSceneController?.handleBackgroundSelect?.( buildSceneInteractionPayload( {
+      source: getControllerInteractorId( controller ),
+      controller,
+      hit: null,
+    } ) );
     return;
 
   }
@@ -3334,6 +3338,7 @@ if ( import.meta.env.DEV ) {
     getLoggingStats: () => studyLogger.getLoggingStats(),
     getReplayPointerVisuals: () => getGhostReplayPointerDebugState(),
     getReplayAvatarVisuals: () => getReplayAvatarDebugState(),
+    getActiveSceneDebugState: () => activeSceneController?.getDebugState?.() || null,
     getStudyData: () => studyLogger.getStudyData(),
   };
 
