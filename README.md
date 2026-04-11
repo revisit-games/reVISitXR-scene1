@@ -235,6 +235,8 @@ Scene selection is URL-driven:
   Loads Demo 2, the paper-facing migration globe baseline.
 - `index.html?scene=3`
   Loads Demo 3, the paper-facing immersive analytic workspace.
+- `index.html?scene=4`
+  Loads Demo 4, an AR-first situated campus monitoring overlay.
 
 Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene definition provides:
 
@@ -333,6 +335,29 @@ Demo 3 uses:
 - `taskSubmitted`
 
 This keeps the multi-view workspace replay semantic. Demo 3 restores layout presets, committed floating panel transforms, focused and selected panels, linked region selection, pinned panels, and task submission without replaying dense drag motion. The local OWID bundle lives in `demo3/data/`, and package-specific visual customization is centralized in `demo3/demo3VisualConfig.js`.
+
+Demo 4 uses:
+
+- `demoId`
+- `taskId`
+- `arPlacementConfirmed`
+- `placementMode`
+- `placementCount`
+- `arAnchorPosition`
+- `arAnchorQuaternion`
+- `arScaleFactor`
+- `metricId`
+- `timeIndex`
+- `layerMode`
+- `labelsVisible`
+- `selectedSiteId`
+- `focusedSiteId`
+- `detailExpanded`
+- `visibleSiteIds`
+- `taskAnswer`
+- `taskSubmitted`
+
+This keeps the situated AR overlay replay semantic. Demo 4 restores the confirmed anchor transform, metric, time slice, layer mode, label visibility, focused and selected site, detail card state, answer, and submission directly instead of replaying raw placement preview motion. The deterministic site-monitoring bundle lives in `demo4/data/siteReadings.json`.
 
 Example 1 uses:
 
@@ -450,6 +475,19 @@ This is the recommended pattern for future in-world controls such as:
 
 Because these surfaces use the same `registerRaycastTarget()` path as the rest of the scene system, live controller cursor dots and replay ghost pointer targets remain visible without scene-specific replay hacks.
 
+### Reusable Situated Anchors
+
+`scenes/core/situatedAnchor.js` exports `createSituatedAnchor(context, options)` for scenes that need a world-anchored footprint or overlay. The helper creates:
+
+- a reusable root group
+- a translucent preview root
+- a confirmed anchor root
+- an invisible horizontal placement surface registered through the shared raycast layer
+
+The helper projects desktop or controller rays onto a deterministic horizontal floor plane, keeps the preview transform separate from semantic scene state, and copies the preview transform into the anchor root only when placement is confirmed. Scene code still owns task data, labels, controls, provenance labels, replay state, and answer summaries.
+
+Demo 4 uses this helper for its AR-first placement flow. It logs placement confirmation and reset/reposition commits, not dense preview motion.
+
 ### Reusable XY Move Handle
 
 `scenes/core/xyMoveHandle.js` exports `createXYMoveHandle(context, options)` for scene-owned horizontal movement affordances. The helper creates a root group, a vertical line down to the floor, a floor ring/disc, four non-interactive move arrows, and one invisible cylinder hit surface registered through `registerRaycastTarget()`. When `allowedRotate: true`, it also creates two curved rotation arrows and a separate invisible torus hit target for horizontal yaw rotation around Three.js world `Y`.
@@ -551,6 +589,22 @@ Demo 2 keeps its migration baseline under `demo2/`:
 The current Demo 2 runtime bundle is intentionally an Afghanistan-centered outbound migration baseline because the provided OWID flow export is already scoped to emigration from Afghanistan. The scene-local data contract stays generalized around node and flow bundles so future demos can swap in broader OD datasets without changing the shared runtime. Demo 2 now also bundles a local Natural Earth-derived world boundary topology for subtle country linework on the globe, so there is still no runtime network fetch.
 
 Demo 2 uses the same scene-local answer-summary hook pattern as Demo 1. Its controller contributes compact geo state such as year, direction mode, threshold, focused country, selected route, visible-flow count, label visibility, and globe yaw while the generic XR answers still continue to provide `xrMode`, `xrInteractionPhase`, `xrGrabCount`, `xrSessionCount`, `xrLastEvent`, and `xrStateSummaryJson`. Globe interaction remains semantic and replay-safe because Demo 2 now keeps both `globeYawDeg` and `globeAnchorPosition` in scene-local state: direct globe dragging updates yaw, and a floor handle under the globe updates horizontal anchor placement without introducing dense animation logs.
+
+## Demo 4 Dataset Layout
+
+Demo 4 keeps its situated campus overlay under `demo4/`:
+
+- `demo4/data/siteReadings.json`
+- `demo4/demo4Data.js`
+- `demo4/demo4Scene.js`
+- `demo4/demo4VisualConfig.js`
+- `demo4/demo4Conditions.js`
+- `demo4/demo4Tasks.js`
+- `demo4/demo4LoggingConfig.js`
+
+The local dataset contains six deterministic campus sites, three time slices, and three metrics: occupancy, noise, and CO2. The default task asks which site has the highest midday CO2 reading, with `site:classroom` as the expected answer. There are no external downloads, geolocation calls, GPS dependencies, or world-mesh requirements.
+
+Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include an automatic copy or mirror command for moving that build into any study repo; deployment or study asset refresh remains an explicit external step.
 
 ## Example 1 Dataset Layout
 

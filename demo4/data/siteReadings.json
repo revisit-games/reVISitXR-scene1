@@ -1,0 +1,106 @@
+{
+  "datasetId": "campus-commons-site-readings",
+  "label": "Campus Commons Monitoring Overlay",
+  "metrics": [
+    {
+      "id": "occupancy",
+      "label": "Occupancy",
+      "unit": "%",
+      "alertThreshold": 85
+    },
+    {
+      "id": "noise",
+      "label": "Noise",
+      "unit": "dBA",
+      "alertThreshold": 64
+    },
+    {
+      "id": "co2",
+      "label": "CO2",
+      "unit": "ppm",
+      "alertThreshold": 900
+    }
+  ],
+  "timeSlices": [
+    {
+      "id": "morning",
+      "label": "Morning"
+    },
+    {
+      "id": "midday",
+      "label": "Midday"
+    },
+    {
+      "id": "evening",
+      "label": "Evening"
+    }
+  ],
+  "sites": [
+    {
+      "id": "site:library",
+      "label": "Library",
+      "shortLabel": "Library",
+      "localPosition": [-0.55, 0, -0.28],
+      "readings": {
+        "morning": { "occupancy": 38, "noise": 46, "co2": 620 },
+        "midday": { "occupancy": 72, "noise": 58, "co2": 810 },
+        "evening": { "occupancy": 44, "noise": 42, "co2": 690 }
+      }
+    },
+    {
+      "id": "site:atrium",
+      "label": "Atrium",
+      "shortLabel": "Atrium",
+      "localPosition": [0, 0, -0.38],
+      "readings": {
+        "morning": { "occupancy": 51, "noise": 55, "co2": 700 },
+        "midday": { "occupancy": 78, "noise": 62, "co2": 760 },
+        "evening": { "occupancy": 36, "noise": 48, "co2": 650 }
+      }
+    },
+    {
+      "id": "site:cafe",
+      "label": "Cafe",
+      "shortLabel": "Cafe",
+      "localPosition": [0.5, 0, -0.18],
+      "readings": {
+        "morning": { "occupancy": 64, "noise": 60, "co2": 780 },
+        "midday": { "occupancy": 88, "noise": 68, "co2": 890 },
+        "evening": { "occupancy": 47, "noise": 54, "co2": 720 }
+      }
+    },
+    {
+      "id": "site:lab",
+      "label": "Lab",
+      "shortLabel": "Lab",
+      "localPosition": [-0.42, 0, 0.28],
+      "readings": {
+        "morning": { "occupancy": 45, "noise": 49, "co2": 710 },
+        "midday": { "occupancy": 82, "noise": 59, "co2": 940 },
+        "evening": { "occupancy": 61, "noise": 52, "co2": 800 }
+      }
+    },
+    {
+      "id": "site:studio",
+      "label": "Studio",
+      "shortLabel": "Studio",
+      "localPosition": [0.12, 0, 0.2],
+      "readings": {
+        "morning": { "occupancy": 29, "noise": 52, "co2": 660 },
+        "midday": { "occupancy": 68, "noise": 61, "co2": 880 },
+        "evening": { "occupancy": 72, "noise": 58, "co2": 830 }
+      }
+    },
+    {
+      "id": "site:classroom",
+      "label": "Classroom",
+      "shortLabel": "Class",
+      "localPosition": [0.58, 0, 0.32],
+      "readings": {
+        "morning": { "occupancy": 58, "noise": 53, "co2": 760 },
+        "midday": { "occupancy": 92, "noise": 63, "co2": 1120 },
+        "evening": { "occupancy": 35, "noise": 45, "co2": 700 }
+      }
+    }
+  ]
+}
