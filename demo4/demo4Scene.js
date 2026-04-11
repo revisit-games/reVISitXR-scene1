@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createSituatedAnchor } from '../scenes/core/situatedAnchor.js';
+import { REPLAY_POINTER_TOOLTIP_STATES } from '../logging/xrLoggingSchema.js';
 import {
   DEMO4_INTERACTION_MODALITIES,
   DEMO4_LAYER_MODES,
@@ -3215,6 +3216,14 @@ export const demo4SceneDefinition = Object.freeze( {
       getDebugState() {
 
         return getPlacementDebugState();
+
+      },
+      getReplayGazeTooltipState() {
+
+        return currentSceneState.arPlacementConfirmed &&
+          currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL
+          ? REPLAY_POINTER_TOOLTIP_STATES.GAZE_DWELL
+          : REPLAY_POINTER_TOOLTIP_STATES.DEFAULT;
 
       },
       onPresentationModeChange( presentationMode ) {

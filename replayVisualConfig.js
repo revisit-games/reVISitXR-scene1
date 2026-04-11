@@ -4,6 +4,7 @@ export const replayVisualConfig = Object.freeze( {
   pointerColors: Object.freeze( {
     [ INTERACTORS.CONTROLLER_0 ]: 0xff6b6b,
     [ INTERACTORS.CONTROLLER_1 ]: 0x4ecdc4,
+    [ INTERACTORS.GAZE ]: 0xffb347,
   } ),
   pointerTooltips: Object.freeze( {
     anchorLerp: 0.74,

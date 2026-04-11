@@ -82,7 +82,7 @@ The `interactionModality` state toggles between:
 - `gaze-dwell`
 - `hand-ray`
 
-`gaze-dwell` uses the live testing camera forward ray to focus visible site markers. A stable dwell of about 900 ms activates the site, expands detail, stores it as the answer draft, increments `gazeDwellCount`, and records `lastActivationEvent`. During analysis replay inspection, gaze dwell is disabled so the analyst's free camera cannot change marker focus or selection. `hand-ray` preserves controller and desktop marker selection, increments `handSelectCount`, and records the same activation summary shape.
+`gaze-dwell` uses the live testing camera forward ray to focus visible site markers. A stable dwell of about 900 ms activates the site, expands detail, stores it as the answer draft, increments `gazeDwellCount`, and records `lastActivationEvent`. During analysis replay inspection, gaze dwell is disabled so the analyst's free camera cannot change marker focus or selection, while the shared replay pointer system can still render the recorded `USER GAZE: GAZE DWELL` ray and hit point. `hand-ray` preserves controller and desktop marker selection, increments `handSelectCount`, and records the same activation summary shape.
 
 ## Interactions
 
@@ -104,7 +104,7 @@ The `alerts` layer derives `visibleSiteIds` from the active metric's threshold a
 
 Selected site details are shown in the main control panel and desktop sidebar. Demo 4 no longer shows a separate floating in-scene detail tooltip/card next to the site markers.
 
-The Control Panel title strip is a raycast target for either controller and desktop pointer. Dragging it changes only the panel's local Y position, clamps that height with `demo4VisualConfig.panel.heightDrag.minY/maxY`, and records one semantic `controlPanelY` change on drag end when the movement exceeds `heightDrag.dragEpsilon`. Its default position and title-strip styling live in `demo4VisualConfig.panel.position`, `titleBarHeight`, `titleBarY`, `titleBarColor`, `titleBarHoverColor`, `titleBarDragColor`, and `titleBarOpacity`.
+The Control Panel defaults behind the marker cluster with `demo4VisualConfig.panel.position`, so it stays readable without sitting between the viewer and the site cylinders. Its title strip is a raycast target for either controller and desktop pointer. Dragging it changes only the panel's local Y position, clamps that height with `demo4VisualConfig.panel.heightDrag.minY/maxY`, and records one semantic `controlPanelY` change on drag end when the movement exceeds `heightDrag.dragEpsilon`. The fixed X/Z placement and title-strip styling live in `demo4VisualConfig.panel.position`, `titleBarHeight`, `titleBarY`, `titleBarColor`, `titleBarHoverColor`, `titleBarDragColor`, and `titleBarOpacity`.
 
 ## Replay And Answers
 

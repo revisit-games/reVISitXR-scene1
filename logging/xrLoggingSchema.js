@@ -15,11 +15,13 @@ export const INTERACTORS = Object.freeze( {
   DESKTOP_POINTER: 'desktop-pointer',
   CONTROLLER_0: 'controller-0',
   CONTROLLER_1: 'controller-1',
+  GAZE: 'user-gaze',
 } );
 
 export const REPLAY_POINTER_IDS = Object.freeze( [
   INTERACTORS.CONTROLLER_0,
   INTERACTORS.CONTROLLER_1,
+  INTERACTORS.GAZE,
 ] );
 
 export const POINTER_MODES = Object.freeze( {
@@ -32,6 +34,7 @@ export const REPLAY_POINTER_TOOLTIP_STATES = Object.freeze( {
   DEFAULT: 'default',
   GRABBING: 'grabbing',
   RELEASED: 'released',
+  GAZE_DWELL: 'gaze-dwell',
 } );
 
 export const ANALYSIS_MODES = Object.freeze( {
@@ -267,6 +270,12 @@ export function getReplayPointerBaseLabel( interactor ) {
 
   }
 
+  if ( interactor === INTERACTORS.GAZE ) {
+
+    return 'USER GAZE';
+
+  }
+
   return 'CONTROLLER';
 
 }
@@ -295,6 +304,12 @@ export function getReplayPointerTooltipText(
   if ( tooltipState === REPLAY_POINTER_TOOLTIP_STATES.RELEASED ) {
 
     return `${baseLabel}: RELEASED`;
+
+  }
+
+  if ( tooltipState === REPLAY_POINTER_TOOLTIP_STATES.GAZE_DWELL ) {
+
+    return `${baseLabel}: GAZE DWELL`;
 
   }
 
@@ -368,10 +383,12 @@ function cloneReplayPointer( pointer = {}, fallback = createHiddenReplayPointer(
 
 export function createInitialReplayPointers() {
 
-  return {
-    [ INTERACTORS.CONTROLLER_0 ]: createHiddenReplayPointer( INTERACTORS.CONTROLLER_0 ),
-    [ INTERACTORS.CONTROLLER_1 ]: createHiddenReplayPointer( INTERACTORS.CONTROLLER_1 ),
-  };
+  return Object.fromEntries(
+    REPLAY_POINTER_IDS.map( ( interactor ) => [
+      interactor,
+      createHiddenReplayPointer( interactor ),
+    ] ),
+  );
 
 }
 
@@ -446,16 +463,12 @@ export function createInitialXRLoggingState( sceneSnapshot, timestamp = Date.now
     cube: cloneTransform( sceneSnapshot.cube ),
     camera: cloneTransform( sceneSnapshot.camera ),
     xrOrigin: cloneTransform( sceneSnapshot.xrOrigin ),
-    replayPointers: {
-      [ INTERACTORS.CONTROLLER_0 ]: cloneReplayPointer(
-        sceneSnapshot.replayPointers?.[ INTERACTORS.CONTROLLER_0 ],
-        replayPointers[ INTERACTORS.CONTROLLER_0 ],
-      ),
-      [ INTERACTORS.CONTROLLER_1 ]: cloneReplayPointer(
-        sceneSnapshot.replayPointers?.[ INTERACTORS.CONTROLLER_1 ],
-        replayPointers[ INTERACTORS.CONTROLLER_1 ],
-      ),
-    },
+    replayPointers: Object.fromEntries(
+      REPLAY_POINTER_IDS.map( ( interactor ) => [
+        interactor,
+        cloneReplayPointer( sceneSnapshot.replayPointers?.[ interactor ], replayPointers[ interactor ] ),
+      ] ),
+    ),
     activeInteractor: null,
     interactionPhase: INTERACTION_PHASES.IDLE,
     metrics: {

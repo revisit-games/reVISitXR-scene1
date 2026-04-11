@@ -658,7 +658,7 @@ Demo 4 keeps its situated campus overlay under `demo4/`:
 
 The local dataset contains six deterministic campus sites, three time slices, and three metrics: occupancy, noise, and CO2. The default task asks which site has the highest midday CO2 reading, with `site:classroom` as the expected answer. There are no external downloads, geolocation calls, GPS dependencies, or world-mesh requirements.
 
-Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface. A separate live-AR-only instruction card stays above the stabilized placement footprint before the overlay is anchored; analysis replay hides that helper and uses a labeled gray support pedestal to show elevated real-world surface height. Replay free-camera inspection also disables gaze dwell so it cannot change marker focus or selection. The in-scene Control Panel starts higher/back and its title strip supports height-only ray dragging, persisted as compact `controlPanelY` scene state.
+Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface. A separate live-AR-only instruction card stays above the stabilized placement footprint before the overlay is anchored; analysis replay hides that helper and uses a labeled gray support pedestal to show elevated real-world surface height. Replay free-camera inspection also disables gaze dwell so it cannot change marker focus or selection, while the recorded shared `user-gaze` replay pointer can show the `USER GAZE: GAZE DWELL` ray and hit point. The in-scene Control Panel defaults behind the site cylinders and its title strip supports height-only ray dragging, persisted as compact `controlPanelY` scene state.
 
 Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include an automatic copy or mirror command for moving that build into any study repo; deployment or study asset refresh remains an explicit external step.
 
@@ -746,7 +746,7 @@ Example 1 uses this pattern through `example1VisualConfig.js`, `scenes/core/floa
 
 ## Replay Pointer Visuals
 
-Replay controller rays are rendered as ghost visuals in `main.js`. They are intentionally separate from live WebXR controller visuals.
+Replay controller and user-gaze rays are rendered as ghost visuals in `main.js`. They are intentionally separate from live WebXR controller visuals.
 
 The current ghost pointer uses:
 
@@ -760,6 +760,7 @@ Default tooltip behavior:
 - visible hover ray: `LEFT CONTROLLER` or `RIGHT CONTROLLER`
 - active grab ray: `LEFT CONTROLLER: GRABBING` or `RIGHT CONTROLLER: GRABBING`
 - recorded grab release node: `LEFT CONTROLLER: RELEASED` or `RIGHT CONTROLLER: RELEASED`
+- recorded gaze ray: `USER GAZE`, or `USER GAZE: GAZE DWELL` when a scene reports gaze-dwell provenance
 
 Tooltip states are derived in two places:
 
@@ -774,7 +775,7 @@ Useful customization points:
 - `createGhostReplayPointer()` in `main.js`
 - `updateGhostReplayPointer()` in `main.js`
 
-During paused analysis interaction, free-camera navigation keeps ghost pointers visible by default. Right-drag camera rotation, WASD movement, mouse wheel movement, and empty-background pan are treated as viewer navigation, so the last hydrated controller rays, hit markers, and labels remain visible in world space until the next replay snapshot updates them. Actual scene/object manipulation can still hide ghost pointers when configured to do so.
+During paused analysis interaction, free-camera navigation keeps ghost pointers visible by default. Right-drag camera rotation, WASD movement, mouse wheel movement, and empty-background pan are treated as viewer navigation, so the last hydrated controller and user-gaze rays, hit markers, and labels remain visible in world space until the next replay snapshot updates them. Actual scene/object manipulation can still hide ghost pointers when configured to do so.
 
 ## Replay Visual Customization
 

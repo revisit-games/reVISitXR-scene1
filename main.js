@@ -148,6 +148,7 @@ const tempReplayPointerOrigin = new THREE.Vector3();
 const tempReplayPointerTarget = new THREE.Vector3();
 const tempReplayTooltipAnchor = new THREE.Vector3();
 const tempReplayCameraForward = new THREE.Vector3();
+const gazeReplayPointerFallbackDistance = 4.5;
 const desktopEuler = new THREE.Euler( 0, 0, 0, 'YXZ' );
 const tempXRHitTestPosition = new THREE.Vector3();
 const tempXRHitTestQuaternion = new THREE.Quaternion();
@@ -1524,11 +1525,103 @@ function getControllerReplayPointerState( controller ) {
 
 }
 
+function getGazeReplayIntersections() {
+
+  const raycastableObjects = [];
+
+  if ( canUseDefaultObjectManipulation() ) {
+
+    raycastableObjects.push( ...interactables );
+
+  }
+
+  raycastableObjects.push( ...sceneRaycastTargets.keys() );
+
+  return raycastableObjects.length === 0
+    ? []
+    : raycaster.intersectObjects( raycastableObjects, false ).filter( ( hit ) => {
+
+      const targetEntry = getRaycastTargetEntryFromObject( hit.object );
+
+      if ( targetEntry ) {
+
+        return true;
+
+      }
+
+      return hit.object.userData.grabbedBy === null;
+
+    } );
+
+}
+
+function getReplayGazeTooltipState() {
+
+  const tooltipState = activeSceneController?.getReplayGazeTooltipState?.();
+
+  return Object.values( REPLAY_POINTER_TOOLTIP_STATES ).includes( tooltipState )
+    ? tooltipState
+    : REPLAY_POINTER_TOOLTIP_STATES.DEFAULT;
+
+}
+
+function getGazeReplayPointerState() {
+
+  if ( ! renderer.xr.isPresenting ) {
+
+    return createHiddenReplayPointer( INTERACTORS.GAZE );
+
+  }
+
+  camera.updateMatrixWorld( true );
+  camera.getWorldPosition( tempReplayPointerOrigin );
+  camera.getWorldDirection( tempReplayCameraForward ).normalize();
+  raycaster.set( tempReplayPointerOrigin, tempReplayCameraForward );
+
+  const intersections = getGazeReplayIntersections();
+  const resolvedCandidate = resolveSceneRaycastCandidate(
+    intersections,
+    buildSceneRaycastResolverContext( {
+      phase: 'gaze-pointer',
+      source: INTERACTORS.GAZE,
+      pointerType: 'gaze',
+    } ),
+  );
+
+  if ( resolvedCandidate.hit?.point ) {
+
+    tempReplayPointerTarget.copy( resolvedCandidate.hit.point );
+
+  } else {
+
+    tempReplayPointerTarget
+      .copy( tempReplayPointerOrigin )
+      .addScaledVector( tempReplayCameraForward, gazeReplayPointerFallbackDistance );
+
+  }
+
+  const tooltipState = getReplayGazeTooltipState();
+
+  return {
+    visible: true,
+    interactor: INTERACTORS.GAZE,
+    origin: vector3ToArray( tempReplayPointerOrigin ),
+    target: vector3ToArray( tempReplayPointerTarget ),
+    rayLength: tempReplayPointerOrigin.distanceTo( tempReplayPointerTarget ),
+    mode: POINTER_MODES.HOVER,
+    tooltipVisible: true,
+    tooltipState,
+    tooltipText: getReplayPointerTooltipText( INTERACTORS.GAZE, tooltipState ),
+  };
+
+}
+
 function getReplayPointerSnapshot() {
 
   return {
     [ INTERACTORS.CONTROLLER_0 ]: getControllerReplayPointerState( controllers[ 0 ] ),
     [ INTERACTORS.CONTROLLER_1 ]: getControllerReplayPointerState( controllers[ 1 ] ),
+    [ INTERACTORS.GAZE ]: getGazeReplayPointerState(),
   };
 
 }

@@ -186,7 +186,7 @@ export const demo4VisualConfig = Object.freeze( {
   panel: Object.freeze( {
     width: 1.24,
     height: 0.88,
-    position: Object.freeze( [ 0, 1.15, 0.68 ] ),
+    position: Object.freeze( [ 0, 1.2, - 0.78 ] ),
     backgroundColor: 0x101924,
     backgroundOpacity: 0.86,
     borderColor: 0x7fe7dc,
