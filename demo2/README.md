@@ -97,12 +97,14 @@ Demo 2 keeps globe orientation semantic and replay-safe:
 
 The drag interaction intentionally stays yaw-only in v1. Demo 2 does not record globe pitch, roll, or free quaternion motion.
 
-Demo 2 also adds a scene-local floor handle for ground-plane translation:
+Demo 2 consumes the shared `scenes/core/xyMoveHandle.js` helper for floor translation:
 
 - a vertical line now drops from the globe to a floor ring/disc anchor
 - the visible ring/disc is paired with four non-interactive arrow affordances
-- dragging the handle updates the globe anchor in `X/Z` only while keeping `Y` fixed
+- dragging the user-facing XY move bar updates the globe anchor in Three.js world `X/Z` only while keeping `Y` fixed
 - replay restores that anchor semantically instead of reenacting drag motion
+
+The visual tuning lives in `demo2VisualConfig.globe.xyMoveHandle`. Existing flat `globe.handle*` fields are still used as fallbacks for package compatibility. The helper owns the line, ring, disc, arrows, and invisible hit cylinder, while Demo 2 still owns the `GLOBE_HANDLE` raycast role, `moveGlobe` provenance label, replay hydration, and `flushOnGlobeMoveEnd` behavior.
 
 ## Map Display Modes
 

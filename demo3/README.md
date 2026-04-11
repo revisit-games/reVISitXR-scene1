@@ -54,6 +54,12 @@ Each `panelLayouts[viewId]` entry stores:
 
 Panel dragging commits the semantic transform on drag end and moves the workspace into `free` layout. Replay restores the semantic layout, focus, selection, linked highlighting, pinned panels, answer, and submitted state directly.
 
+## Panel XY Move Handles
+
+All four workspace panels opt into the shared `scenes/core/xyMoveHandle.js` helper through `demo3VisualConfig.panels.withXYMoveBarDefault`, `demo3VisualConfig.views[viewId].withXYMoveBar`, and `demo3VisualConfig.xyMoveHandle`.
+
+The user-facing XY move bars sit on the floor as siblings of the panels under the workspace root. Dragging a handle moves only that panel's root in Three.js world `X/Z`, keeps the panel's `Y` unchanged, switches the workspace to `free`, and commits the compact `panelLayouts[viewId]` transform only on drag end.
+
 ## Layout Modes
 
 `demo3Conditions.js` accepts:
@@ -72,6 +78,16 @@ Preset transforms live in `demo3VisualConfig.js` under `layouts.compare`, `layou
 ## Linked Highlighting
 
 All views use shared semantic datum ids such as `region:africa`. When linked highlighting is enabled, selecting or hovering a region in any view highlights the same region across the other views. When disabled, hover is local to the active view while `selectedDatumId` remains available to the summary panel and task submission.
+
+Selected datum highlighting is tuned in `demo3VisualConfig.charts` with `selectedDimmedOpacity`, `selectedScaleMultiplier`, `selectedOutlineColor`, and `selectedOutlineOpacity`. The selected region stays full opacity with a stronger selected color and outline/halo, while non-selected marks dim instead of disappearing.
+
+## Performance Strategy
+
+Demo 3 keeps hover state transient. Hover changes update retained datum visuals, selected halos, mark opacity, scale, render order, and the summary text through a coalesced animation-frame refresh rather than clearing and rebuilding all panel dynamic objects or raycast targets.
+
+Semantic provenance remains event-based: layout mode changes, focus/selection changes, linked-highlighting toggles, panel drag ends, reset, and task submit are logged as scene state changes. Dense hover state and drag motion are not written into reactive answers or replay state.
+
+Ranking chart spacing is config-driven under `demo3VisualConfig.charts.ranking`, including `bottom`, `top`, `tickLabelY`, `xLabelY`, and bar-label width values so the region/value labels and the x-axis title remain separated.
 
 ## Reactive Answer Fields
 

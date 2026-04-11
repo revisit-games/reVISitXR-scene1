@@ -450,6 +450,30 @@ This is the recommended pattern for future in-world controls such as:
 
 Because these surfaces use the same `registerRaycastTarget()` path as the rest of the scene system, live controller cursor dots and replay ghost pointer targets remain visible without scene-specific replay hacks.
 
+### Reusable XY Move Handle
+
+`scenes/core/xyMoveHandle.js` exports `createXYMoveHandle(context, options)` for scene-owned horizontal movement affordances. The helper creates a root group, a vertical line down to the floor, a floor ring/disc, four non-interactive arrows, and one invisible cylinder hit surface registered through `registerRaycastTarget()`.
+
+Scenes provide `getTargetPosition()` and `setTargetPosition(nextPosition)` plus optional `onDragStart`, `onDragMove`, and `onDragEnd` callbacks. The user-facing name is an XY move handle or XY move bar, but Three.js uses `X/Z` for the ground plane: the helper preserves target `Y` and changes only world `X/Z`.
+
+Recommended scene config pattern:
+
+```js
+panels: {
+  withXYMoveBarDefault: true,
+},
+views: {
+  trend: { withXYMoveBar: true },
+},
+xyMoveHandle: {
+  floorY: 0.035,
+  ringRadius: 0.14,
+  interactiveRadius: 0.17,
+}
+```
+
+The helper owns only visual/raycast behavior. Semantic state, provenance labels, replay snapshots, and flush policy remain scene-owned so replay stores compact scene state rather than dense drag samples.
+
 ## Demo 1 Dataset Layout
 
 Demo 1 keeps its local OWID bundle under `demo1/`:

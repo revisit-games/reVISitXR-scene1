@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { PRESENTATION_MODES } from '../logging/xrLoggingSchema.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
+import { createXYMoveHandle } from '../scenes/core/xyMoveHandle.js';
 import { loadDemo3Dataset } from './demo3Data.js';
 import { demo3LoggingConfig } from './demo3LoggingConfig.js';
 import { getDemo3Task } from './demo3Tasks.js';
@@ -225,9 +226,9 @@ function quaternionFromArray( value, fallback = DEFAULT_PANEL_QUATERNION ) {
 function vector3ToArray( vector ) {
 
   return [
-    Number.parseFloat( vector.x.toFixed( 4 ) ),
-    Number.parseFloat( vector.y.toFixed( 4 ) ),
-    Number.parseFloat( vector.z.toFixed( 4 ) ),
+    Number.parseFloat( vector.x.toFixed( 3 ) ),
+    Number.parseFloat( vector.y.toFixed( 3 ) ),
+    Number.parseFloat( vector.z.toFixed( 3 ) ),
   ];
 
 }
@@ -432,6 +433,18 @@ function createCircleMesh( collection, parent, radius, material, position, optio
 
 }
 
+function createRingMesh( collection, parent, innerRadius, outerRadius, material, position, options = {} ) {
+
+  return createTrackedMesh(
+    collection,
+    parent,
+    new THREE.RingGeometry( Math.max( 0.001, innerRadius ), Math.max( 0.002, outerRadius ), 36 ),
+    material,
+    { ...options, position },
+  );
+
+}
+
 function createPlaneBorder( collection, parent, width, height, material, z, name, renderOrder ) {
 
   const x = width * 0.5;
@@ -472,7 +485,17 @@ export const demo3SceneDefinition = Object.freeze( {
   },
   createScene( context ) {
 
-    const { workspace, panels: panelStyle, charts, buttons, text, desktopPanel, palette } = demo3VisualConfig;
+    const {
+      workspace,
+      panels: panelStyle,
+      views,
+      xyMoveHandle,
+      charts,
+      buttons,
+      text,
+      desktopPanel,
+      palette,
+    } = demo3VisualConfig;
     const root = new THREE.Group();
     const panelByViewId = new Map();
     const staticEntries = [];
@@ -484,6 +507,7 @@ export const demo3SceneDefinition = Object.freeze( {
     const dragPoint = new THREE.Vector3();
     const dragPlane = new THREE.Plane();
     const tempWorldDirection = new THREE.Vector3();
+    const tempPanelMovePosition = new THREE.Vector3();
 
     let currentSceneState = normalizeDemo3SceneState( defaultSceneState, defaultSceneState, { defaultTaskId: DEMO3_DEFAULT_TASK_ID } );
     let dataset = null;
@@ -493,6 +517,9 @@ export const demo3SceneDefinition = Object.freeze( {
     let currentHoveredDatumId = null;
     let currentHoveredViewId = null;
     let activePanelDrag = null;
+    let activePanelHandleDrag = null;
+    let pendingDatumVisualRefresh = null;
+    let lastSummaryActiveDatumId = null;
 
     root.name = 'demo3-workspace-root';
 
@@ -574,6 +601,22 @@ export const demo3SceneDefinition = Object.freeze( {
 
     }
 
+    function isPanelXYMoveBarEnabled( viewId ) {
+
+      const viewConfigValue = views?.[ viewId ]?.withXYMoveBar;
+
+      return typeof viewConfigValue === 'boolean'
+        ? viewConfigValue
+        : panelStyle.withXYMoveBarDefault === true;
+
+    }
+
+    function syncPanelMoveHandle( viewId ) {
+
+      panelByViewId.get( viewId )?.xyMoveHandle?.syncFromTarget();
+
+    }
+
     function applyPanelLayout( viewId, layout, { scale = 1 } = {} ) {
 
       const panel = panelByViewId.get( viewId );
@@ -589,6 +632,7 @@ export const demo3SceneDefinition = Object.freeze( {
       panel.root.position.copy( vector3FromArray( normalizedLayout.position, fallbackLayout.position ) );
       panel.root.quaternion.copy( quaternionFromArray( normalizedLayout.quaternion, fallbackLayout.quaternion ) );
       panel.root.scale.setScalar( Math.max( 0.2, scale ) );
+      syncPanelMoveHandle( viewId );
 
     }
 
@@ -652,6 +696,7 @@ export const demo3SceneDefinition = Object.freeze( {
           if ( panel ) {
 
             panel.root.scale.setScalar( 1 );
+            panel.xyMoveHandle?.syncFromTarget();
 
           }
 
@@ -677,6 +722,7 @@ export const demo3SceneDefinition = Object.freeze( {
           if ( panel ) {
 
             panel.root.scale.setScalar( 1 );
+            panel.xyMoveHandle?.syncFromTarget();
 
           }
 
@@ -776,6 +822,7 @@ export const demo3SceneDefinition = Object.freeze( {
       const selectedDatumId = currentSceneState.selectedDatumId;
       const hoveredDatumId = getHoveredDatumIdForView( viewId );
       const hasActiveLinkedDatum = currentSceneState.linkedHighlightEnabled && Boolean( selectedDatumId || currentHoveredDatumId );
+      const hasActiveSelection = Boolean( selectedDatumId );
       const selectedInThisView = selectedDatumId === region.datumId && (
         currentSceneState.linkedHighlightEnabled ||
         viewId === currentSceneState.selectedViewId ||
@@ -783,12 +830,14 @@ export const demo3SceneDefinition = Object.freeze( {
       );
       const hoveredInThisView = hoveredDatumId === region.datumId;
       const highlighted = selectedInThisView || hoveredInThisView;
+      const dimmedBySelection = hasActiveSelection && ! selectedInThisView;
 
       return {
         selected: selectedInThisView,
         hovered: hoveredInThisView,
         highlighted,
-        muted: hasActiveLinkedDatum && ! highlighted,
+        dimmedBySelection,
+        muted: ! dimmedBySelection && hasActiveLinkedDatum && ! highlighted,
       };
 
     }
@@ -799,7 +848,11 @@ export const demo3SceneDefinition = Object.freeze( {
       const color = state.selected
         ? new THREE.Color( charts.selectedColor )
         : ( state.hovered ? new THREE.Color( charts.hoverColor ) : resolveRegionColor( region ) );
-      const opacity = state.muted ? charts.linkedMutedOpacity : baseOpacity;
+      const opacity = state.selected
+        ? 1
+        : ( state.dimmedBySelection
+          ? charts.selectedDimmedOpacity
+          : ( state.muted ? charts.linkedMutedOpacity : baseOpacity ) );
 
       return createMaterial( {
         color,
@@ -807,6 +860,74 @@ export const demo3SceneDefinition = Object.freeze( {
         transparent: opacity < 1,
         depthWrite: false,
       } );
+
+    }
+
+    function getRegionVisualOpacity( state, baseOpacity = 0.9 ) {
+
+      if ( state.selected ) {
+
+        return 1;
+
+      }
+
+      if ( state.dimmedBySelection ) {
+
+        return charts.selectedDimmedOpacity;
+
+      }
+
+      return state.muted ? charts.linkedMutedOpacity : baseOpacity;
+
+    }
+
+    function updateMaterialOpacity( material, opacity ) {
+
+      if ( ! material ) {
+
+        return;
+
+      }
+
+      material.opacity = opacity;
+      material.transparent = opacity < 1;
+      material.needsUpdate = true;
+
+    }
+
+    function updateRegionMaterial( material, region, viewId, { baseOpacity = 0.9, line = false } = {} ) {
+
+      if ( ! material ) {
+
+        return;
+
+      }
+
+      const state = getRegionVisualState( region, viewId );
+      const color = state.selected
+        ? new THREE.Color( charts.selectedColor )
+        : ( state.hovered ? new THREE.Color( charts.hoverColor ) : resolveRegionColor( region ) );
+      const opacity = getRegionVisualOpacity( state, baseOpacity );
+
+      material.color.copy( color );
+      updateMaterialOpacity( material, opacity );
+
+      if ( line ) {
+
+        material.depthWrite = false;
+
+      }
+
+    }
+
+    function getChartBounds( overrideBounds = null ) {
+
+      return {
+        left: overrideBounds?.left ?? charts.left,
+        right: overrideBounds?.right ?? charts.right,
+        bottom: overrideBounds?.bottom ?? charts.bottom,
+        top: overrideBounds?.top ?? charts.top,
+      };
 
     }
 
@@ -854,6 +975,8 @@ export const demo3SceneDefinition = Object.freeze( {
 
       panel.dynamicEntries.forEach( ( entry ) => entry.dispose?.() );
       panel.dynamicEntries.length = 0;
+      panel.datumVisuals.length = 0;
+      panel.summaryTextController = null;
 
     }
 
@@ -887,6 +1010,136 @@ export const demo3SceneDefinition = Object.freeze( {
 
     }
 
+    function applyDatumVisualRecord( record ) {
+
+      if ( ! record?.region ) {
+
+        return;
+
+      }
+
+      const state = getRegionVisualState( record.region, record.viewId );
+      updateRegionMaterial( record.material, record.region, record.viewId, { baseOpacity: record.baseOpacity ?? 0.9 } );
+      updateRegionMaterial( record.lineMaterial, record.region, record.viewId, { baseOpacity: record.lineOpacity ?? charts.lineOpacity, line: true } );
+
+      if ( record.mark && record.baseScale ) {
+
+        const selectedScale = charts.selectedScaleMultiplier ?? 1.2;
+        const scaleMultiplier = state.selected
+          ? selectedScale
+          : ( state.hovered ? ( record.hoverScaleMultiplier ?? 1.15 ) : 1 );
+
+        if ( record.scaleMode === 'x' ) {
+
+          record.mark.scale.set(
+            record.baseScale.x * scaleMultiplier,
+            record.baseScale.y,
+            record.baseScale.z,
+          );
+
+        } else if ( record.scaleMode !== 'none' ) {
+
+          record.mark.scale.copy( record.baseScale ).multiplyScalar( scaleMultiplier );
+
+        }
+
+      }
+
+      if ( record.outline ) {
+
+        record.outline.visible = state.selected;
+
+      }
+
+      if ( record.labelController?.mesh ) {
+
+        record.labelController.mesh.visible = Boolean( record.labelAlwaysVisible || state.highlighted );
+
+      }
+
+      if ( Number.isFinite( record.baseRenderOrder ) && record.mark ) {
+
+        record.mark.renderOrder = state.selected
+          ? record.baseRenderOrder + 6
+          : ( state.hovered ? record.baseRenderOrder + 4 : record.baseRenderOrder );
+
+      }
+
+    }
+
+    function refreshPanelDatumVisuals( panel ) {
+
+      panel.datumVisuals.forEach( applyDatumVisualRecord );
+
+    }
+
+    function getSummaryActiveDatumId() {
+
+      return currentSceneState.selectedDatumId || currentHoveredDatumId || null;
+
+    }
+
+    function refreshSummaryPanelTextIfNeeded( { force = false } = {} ) {
+
+      const activeDatumId = getSummaryActiveDatumId();
+
+      if ( ! force && activeDatumId === lastSummaryActiveDatumId ) {
+
+        return;
+
+      }
+
+      lastSummaryActiveDatumId = activeDatumId;
+      const summaryPanel = panelByViewId.get( DEMO3_VIEW_IDS.SUMMARY );
+      summaryPanel?.summaryTextController?.setText?.( buildSummaryText() );
+
+    }
+
+    function refreshDatumVisualsNow( { forceSummary = false } = {} ) {
+
+      pendingDatumVisualRefresh = null;
+      panelByViewId.forEach( refreshPanelDatumVisuals );
+      refreshSummaryPanelTextIfNeeded( { force: forceSummary } );
+
+    }
+
+    function scheduleDatumVisualRefresh( { forceSummary = false } = {} ) {
+
+      if ( pendingDatumVisualRefresh !== null ) {
+
+        return;
+
+      }
+
+      const scheduleFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind( window )
+        : ( callback ) => setTimeout( callback, 16 );
+      pendingDatumVisualRefresh = scheduleFrame( () => refreshDatumVisualsNow( { forceSummary } ) );
+
+    }
+
+    function cancelPendingDatumVisualRefresh() {
+
+      if ( pendingDatumVisualRefresh === null ) {
+
+        return;
+
+      }
+
+      if ( typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function' ) {
+
+        window.cancelAnimationFrame( pendingDatumVisualRefresh );
+
+      } else {
+
+        clearTimeout( pendingDatumVisualRefresh );
+
+      }
+
+      pendingDatumVisualRefresh = null;
+
+    }
+
     function updateDatumHover( source, viewId, datumId, isHovered ) {
 
       if ( isHovered && datumId ) {
@@ -906,7 +1159,7 @@ export const demo3SceneDefinition = Object.freeze( {
       }
 
       resolveHoverState();
-      renderAllPanelContent();
+      scheduleDatumVisualRefresh();
       syncDesktopPanel();
 
     }
@@ -1169,6 +1422,7 @@ export const demo3SceneDefinition = Object.freeze( {
         if ( candidatePanel ) {
 
           candidatePanel.root.scale.setScalar( 1 );
+          candidatePanel.xyMoveHandle?.syncFromTarget();
 
         }
 
@@ -1196,6 +1450,7 @@ export const demo3SceneDefinition = Object.freeze( {
       }
 
       panel.root.position.copy( nextPoint ).add( activePanelDrag.offset );
+      panel.xyMoveHandle?.syncFromTarget();
       activePanelDrag.didMove = true;
       return true;
 
@@ -1212,6 +1467,7 @@ export const demo3SceneDefinition = Object.freeze( {
       const { viewId, didMove } = activePanelDrag;
       activePanelDrag = null;
       commitPanelLayout( viewId );
+      syncPanelMoveHandle( viewId );
       renderAllPanelContent();
       updatePanelShellVisuals();
       syncDesktopPanel();
@@ -1225,6 +1481,93 @@ export const demo3SceneDefinition = Object.freeze( {
       }
 
       return true;
+
+    }
+
+    function beginPanelXYMove( viewId, payload ) {
+
+      const panel = panelByViewId.get( viewId );
+
+      if ( ! panel ) {
+
+        return false;
+
+      }
+
+      activePanelDrag = null;
+      activePanelHandleDrag = {
+        viewId,
+        source: payload.source || 'scene-panel-xy-move-start',
+        didMove: false,
+      };
+      currentSceneState.layoutMode = DEMO3_LAYOUT_MODES.FREE;
+      activateView( viewId, { source: activePanelHandleDrag.source, shouldLog: false } );
+      DEMO3_VIEW_ID_LIST.forEach( ( candidateViewId ) => {
+
+        const candidatePanel = panelByViewId.get( candidateViewId );
+
+        if ( candidatePanel ) {
+
+          candidatePanel.root.scale.setScalar( 1 );
+          candidatePanel.xyMoveHandle?.syncFromTarget();
+
+        }
+
+      } );
+      updatePanelShellVisuals();
+      syncDesktopPanel();
+      return true;
+
+    }
+
+    function movePanelWithXYHandle( viewId, nextPosition ) {
+
+      const panel = panelByViewId.get( viewId );
+
+      if ( ! panel ) {
+
+        return;
+
+      }
+
+      tempPanelMovePosition.copy( panel.root.position );
+      tempPanelMovePosition.x = nextPosition.x;
+      tempPanelMovePosition.z = nextPosition.z;
+      panel.root.position.copy( tempPanelMovePosition );
+      panel.xyMoveHandle?.syncFromTarget();
+
+      if ( activePanelHandleDrag?.viewId === viewId ) {
+
+        activePanelHandleDrag.didMove = true;
+
+      }
+
+    }
+
+    function endPanelXYMove( viewId, payload, didMove ) {
+
+      const panel = panelByViewId.get( viewId );
+      const shouldLog = didMove === true || activePanelHandleDrag?.didMove === true;
+      activePanelHandleDrag = null;
+
+      if ( ! panel ) {
+
+        return;
+
+      }
+
+      commitPanelLayout( viewId );
+      panel.xyMoveHandle?.syncFromTarget();
+      updatePanelShellVisuals();
+      syncDesktopPanel();
+
+      if ( shouldLog ) {
+
+        recordSceneChange( 'movePanel', payload.source || 'scene-panel-xy-move-end', {
+          flushImmediately: getSceneStateLoggingConfig().flushOnPanelDragEnd === true,
+        } );
+
+      }
 
     }
 
@@ -1242,7 +1585,9 @@ export const demo3SceneDefinition = Object.freeze( {
 
         if ( panel ) {
 
-          panel.root.visible = visibleViewIds.has( viewId );
+          const isVisible = visibleViewIds.has( viewId );
+          panel.root.visible = isVisible;
+          panel.xyMoveHandle?.setVisible( isVisible );
           root.add( panel.root );
 
         }
@@ -1282,12 +1627,21 @@ export const demo3SceneDefinition = Object.freeze( {
 
     }
 
-    function createChartAxes( panel, { xLabel = '', yLabel = '' } = {} ) {
+    function createChartAxes( panel, {
+      xLabel = '',
+      yLabel = '',
+      bounds = null,
+      xLabelY = null,
+      yLabelY = null,
+      xLabelConfig = null,
+      yLabelConfig = null,
+    } = {} ) {
 
+      const chartBounds = getChartBounds( bounds );
       const z = workspace.contentZ + 0.004;
       const positions = [
-        charts.left, charts.bottom, z, charts.right, charts.bottom, z,
-        charts.left, charts.bottom, z, charts.left, charts.top, z,
+        chartBounds.left, chartBounds.bottom, z, chartBounds.right, chartBounds.bottom, z,
+        chartBounds.left, chartBounds.bottom, z, chartBounds.left, chartBounds.top, z,
       ];
 
       createTrackedLineSegments(
@@ -1300,7 +1654,13 @@ export const demo3SceneDefinition = Object.freeze( {
 
       if ( xLabel ) {
 
-        createTrackedTextPlane( panel.dynamicEntries, panel.contentRoot, { ...text.chartLabel, text: xLabel }, getChartPosition( 0, charts.bottom - 0.055, workspace.contentZ + 0.014 ), { name: `${panel.viewId}-x-label`, renderOrder: panelStyle.renderOrderBase + 8 } );
+        createTrackedTextPlane(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          { ...text.chartLabel, ...xLabelConfig, text: xLabel },
+          getChartPosition( 0, xLabelY ?? chartBounds.bottom - 0.055, workspace.contentZ + 0.014 ),
+          { name: `${panel.viewId}-x-label`, renderOrder: panelStyle.renderOrderBase + 8 },
+        );
 
       }
 
@@ -1309,8 +1669,8 @@ export const demo3SceneDefinition = Object.freeze( {
         createTrackedTextPlane(
           panel.dynamicEntries,
           panel.contentRoot,
-          { ...text.chartLabel, text: yLabel, fixedWidth: 150, minWidth: 150, maxTextWidth: 128 },
-          getChartPosition( charts.left + 0.03, charts.top + 0.035, workspace.contentZ + 0.014 ),
+          { ...text.chartLabel, fixedWidth: 150, minWidth: 150, maxTextWidth: 128, ...yLabelConfig, text: yLabel },
+          getChartPosition( chartBounds.left + 0.03, yLabelY ?? chartBounds.top + 0.035, workspace.contentZ + 0.014 ),
           { name: `${panel.viewId}-y-label`, renderOrder: panelStyle.renderOrderBase + 8 },
         );
 
@@ -1388,51 +1748,78 @@ export const demo3SceneDefinition = Object.freeze( {
           workspace.contentZ + 0.018,
         ) );
         const state = getRegionVisualState( region, panel.viewId );
+        const lineMaterial = createLineMaterial( {
+          color: state.selected ? charts.selectedColor : ( state.hovered ? charts.hoverColor : resolveRegionColor( region ).getHex() ),
+          opacity: getRegionVisualOpacity( state, charts.lineOpacity ),
+        } );
 
         createTrackedLine(
           panel.dynamicEntries,
           panel.contentRoot,
           points,
-          createLineMaterial( {
-            color: state.selected ? charts.selectedColor : ( state.hovered ? charts.hoverColor : resolveRegionColor( region ).getHex() ),
-            opacity: state.muted ? charts.linkedMutedOpacity : charts.lineOpacity,
-          } ),
+          lineMaterial,
           { name: `demo3-trend-${region.regionId}`, renderOrder: panelStyle.renderOrderBase + 5 },
         );
 
         const endPoint = points.at( - 1 ) || new THREE.Vector3();
-        createCircleMesh(
+        const endpoint = createCircleMesh(
           panel.dynamicEntries,
           panel.contentRoot,
-          state.highlighted ? charts.markRadius * 1.55 : charts.markRadius,
+          charts.markRadius,
           getStyledRegionMaterial( region, panel.viewId ),
           endPoint.clone().setZ( workspace.contentZ + 0.032 ),
           { name: `demo3-trend-${region.regionId}-endpoint`, renderOrder: panelStyle.renderOrderBase + 10 },
         );
+        const outline = createRingMesh(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          charts.markRadius * 1.7,
+          charts.markRadius * 2.15,
+          createMaterial( {
+            color: charts.selectedOutlineColor,
+            opacity: charts.selectedOutlineOpacity,
+            transparent: true,
+            depthWrite: false,
+          } ),
+          endPoint.clone().setZ( workspace.contentZ + 0.041 ),
+          { name: `demo3-trend-${region.regionId}-selected-ring`, renderOrder: panelStyle.renderOrderBase + 15 },
+        );
         createRegionProxy( panel, region, new THREE.CircleGeometry( charts.markProxyRadius, 24 ), endPoint.clone().setZ( workspace.contentZ + 0.06 ) );
 
-        if ( state.highlighted || dataset.regionList.length <= 7 ) {
-
-          createTrackedTextPlane(
-            panel.dynamicEntries,
-            panel.contentRoot,
-            {
-              ...text.chartLabel,
-              text: truncateLabel( region.regionName, 16 ),
-              fixedWidth: 120,
-              minWidth: 120,
-              maxTextWidth: 98,
-              textColor: state.highlighted ? '#fff6dd' : '#dcecf5',
-            },
-            getChartPosition(
-              THREE.MathUtils.clamp( endPoint.x + 0.055, charts.left + 0.055, charts.right - 0.055 ),
-              THREE.MathUtils.clamp( endPoint.y, charts.bottom + 0.02, charts.top - 0.02 ),
-              workspace.contentZ + 0.05,
-            ),
-            { name: `demo3-trend-${region.regionId}-label`, renderOrder: panelStyle.renderOrderBase + 12 },
-          );
-
-        }
+        const labelController = createTrackedTextPlane(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          {
+            ...text.chartLabel,
+            text: truncateLabel( region.regionName, 16 ),
+            fixedWidth: 120,
+            minWidth: 120,
+            maxTextWidth: 98,
+            textColor: state.highlighted ? '#fff6dd' : '#dcecf5',
+          },
+          getChartPosition(
+            THREE.MathUtils.clamp( endPoint.x + 0.055, charts.left + 0.055, charts.right - 0.055 ),
+            THREE.MathUtils.clamp( endPoint.y, charts.bottom + 0.02, charts.top - 0.02 ),
+            workspace.contentZ + 0.05,
+          ),
+          { name: `demo3-trend-${region.regionId}-label`, renderOrder: panelStyle.renderOrderBase + 12 },
+        );
+        panel.datumVisuals.push( {
+          region,
+          viewId: panel.viewId,
+          mark: endpoint,
+          material: endpoint.material,
+          lineMaterial,
+          lineOpacity: charts.lineOpacity,
+          baseOpacity: 0.9,
+          baseScale: endpoint.scale.clone(),
+          hoverScaleMultiplier: 1.55,
+          outline,
+          labelController,
+          labelAlwaysVisible: dataset.regionList.length <= 7,
+          baseRenderOrder: panelStyle.renderOrderBase + 10,
+        } );
+        applyDatumVisualRecord( panel.datumVisuals.at( - 1 ) );
 
       } );
 
@@ -1447,22 +1834,44 @@ export const demo3SceneDefinition = Object.freeze( {
 
       }
 
-      createChartAxes( panel, { xLabel: 'Regions ranked by gain', yLabel: 'Increase' } );
+      const rankingConfig = charts.ranking || {};
+      const rankingBounds = getChartBounds( rankingConfig );
+      createChartAxes( panel, {
+        xLabel: 'Regions ranked by gain',
+        yLabel: 'Increase',
+        bounds: rankingBounds,
+        xLabelY: rankingConfig.xLabelY,
+        xLabelConfig: { fixedWidth: 230, minWidth: 230, maxTextWidth: 194 },
+      } );
 
       const rankingRegions = dataset.rankingRegionIds.map( ( regionId ) => dataset.regionById.get( regionId ) ).filter( Boolean );
       const maxChange = Math.max( 0.1, dataset.domains.lifeExpectancyChange.max );
-      const span = charts.right - charts.left;
+      const span = rankingBounds.right - rankingBounds.left;
       const step = span / Math.max( 1, rankingRegions.length );
 
       rankingRegions.forEach( ( region, index ) => {
 
-        const x = charts.left + step * ( index + 0.5 );
-        const barHeight = lerpInRange( region.lifeExpectancyChange, 0, maxChange, 0.025, charts.top - charts.bottom );
-        const y = charts.bottom + barHeight * 0.5;
+        const x = rankingBounds.left + step * ( index + 0.5 );
+        const barHeight = lerpInRange( region.lifeExpectancyChange, 0, maxChange, 0.025, rankingBounds.top - rankingBounds.bottom );
+        const y = rankingBounds.bottom + barHeight * 0.5;
         const state = getRegionVisualState( region, panel.viewId );
         const width = Math.min( charts.barWidth, step * 0.72 );
 
-        createRectangleMesh(
+        const outline = createRectangleMesh(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          width * 1.22,
+          barHeight + 0.018,
+          createMaterial( {
+            color: charts.selectedOutlineColor,
+            opacity: charts.selectedOutlineOpacity,
+            transparent: true,
+            depthWrite: false,
+          } ),
+          getChartPosition( x, y, workspace.contentZ + 0.026 ),
+          { name: `demo3-ranking-${region.regionId}-selected-outline`, renderOrder: panelStyle.renderOrderBase + 7 },
+        );
+        const bar = createRectangleMesh(
           panel.dynamicEntries,
           panel.contentRoot,
           width,
@@ -1475,7 +1884,7 @@ export const demo3SceneDefinition = Object.freeze( {
           panel,
           region,
           new THREE.PlaneGeometry( Math.max( width, charts.markProxyRadius ), Math.max( barHeight, charts.barProxyHeight ) ),
-          getChartPosition( x, Math.max( y, charts.bottom + charts.barProxyHeight * 0.5 ), workspace.contentZ + 0.062 ),
+          getChartPosition( x, Math.max( y, rankingBounds.bottom + charts.barProxyHeight * 0.5 ), workspace.contentZ + 0.062 ),
         );
         createTrackedTextPlane(
           panel.dynamicEntries,
@@ -1483,14 +1892,28 @@ export const demo3SceneDefinition = Object.freeze( {
           {
             ...text.chartLabel,
             text: `${region.regionName.split( ' ' ).map( ( part ) => part[ 0 ] ).join( '' )}\n${formatCompactNumber( region.lifeExpectancyChange, { maximumFractionDigits: 1 } )}`,
-            fixedWidth: 86,
-            minWidth: 86,
-            maxTextWidth: 70,
+            fixedWidth: rankingConfig.barLabelWidth ?? 86,
+            minWidth: rankingConfig.barLabelWidth ?? 86,
+            maxTextWidth: rankingConfig.barLabelMaxTextWidth ?? 70,
             textColor: state.highlighted ? '#fff6dd' : '#dcecf5',
           },
-          getChartPosition( x, charts.bottom - 0.06, workspace.contentZ + 0.044 ),
+          getChartPosition( x, rankingConfig.tickLabelY ?? rankingBounds.bottom - 0.06, workspace.contentZ + 0.044 ),
           { name: `demo3-ranking-${region.regionId}-label`, renderOrder: panelStyle.renderOrderBase + 12 },
         );
+        panel.datumVisuals.push( {
+          region,
+          viewId: panel.viewId,
+          mark: bar,
+          material: bar.material,
+          baseOpacity: 0.92,
+          baseScale: bar.scale.clone(),
+          hoverScaleMultiplier: 1.08,
+          scaleMode: 'x',
+          outline,
+          labelAlwaysVisible: true,
+          baseRenderOrder: panelStyle.renderOrderBase + 8,
+        } );
+        applyDatumVisualRecord( panel.datumVisuals.at( - 1 ) );
 
       } );
 
@@ -1518,13 +1941,27 @@ export const demo3SceneDefinition = Object.freeze( {
         const state = getRegionVisualState( region, panel.viewId );
         const radius = charts.markRadius * THREE.MathUtils.lerp( 0.85, 1.85, Math.sqrt( Math.max( 0.02, region.latestPopulation / maxPopulation ) ) );
 
-        createCircleMesh(
+        const dot = createCircleMesh(
           panel.dynamicEntries,
           panel.contentRoot,
-          state.highlighted ? radius * 1.2 : radius,
+          radius,
           getStyledRegionMaterial( region, panel.viewId ),
           getChartPosition( x, y, workspace.contentZ + 0.035 ),
           { name: `demo3-comparison-${region.regionId}-dot`, renderOrder: panelStyle.renderOrderBase + 9 },
+        );
+        const outline = createRingMesh(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          radius * 1.35,
+          radius * 1.75,
+          createMaterial( {
+            color: charts.selectedOutlineColor,
+            opacity: charts.selectedOutlineOpacity,
+            transparent: true,
+            depthWrite: false,
+          } ),
+          getChartPosition( x, y, workspace.contentZ + 0.047 ),
+          { name: `demo3-comparison-${region.regionId}-selected-ring`, renderOrder: panelStyle.renderOrderBase + 15 },
         );
         createRegionProxy(
           panel,
@@ -1533,28 +1970,38 @@ export const demo3SceneDefinition = Object.freeze( {
           getChartPosition( x, y, workspace.contentZ + 0.064 ),
         );
 
-        if ( state.highlighted || dataset.regionList.length <= 7 ) {
-
-          createTrackedTextPlane(
-            panel.dynamicEntries,
-            panel.contentRoot,
-            {
-              ...text.chartLabel,
-              text: truncateLabel( region.regionName, 14 ),
-              fixedWidth: 104,
-              minWidth: 104,
-              maxTextWidth: 82,
-              textColor: state.highlighted ? '#fff6dd' : '#dcecf5',
-            },
-            getChartPosition(
-              THREE.MathUtils.clamp( x, charts.left + 0.05, charts.right - 0.05 ),
-              THREE.MathUtils.clamp( y + 0.045, charts.bottom + 0.035, charts.top - 0.015 ),
-              workspace.contentZ + 0.052,
-            ),
-            { name: `demo3-comparison-${region.regionId}-label`, renderOrder: panelStyle.renderOrderBase + 12 },
-          );
-
-        }
+        const labelController = createTrackedTextPlane(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          {
+            ...text.chartLabel,
+            text: truncateLabel( region.regionName, 14 ),
+            fixedWidth: 104,
+            minWidth: 104,
+            maxTextWidth: 82,
+            textColor: state.highlighted ? '#fff6dd' : '#dcecf5',
+          },
+          getChartPosition(
+            THREE.MathUtils.clamp( x, charts.left + 0.05, charts.right - 0.05 ),
+            THREE.MathUtils.clamp( y + 0.045, charts.bottom + 0.035, charts.top - 0.015 ),
+            workspace.contentZ + 0.052,
+          ),
+          { name: `demo3-comparison-${region.regionId}-label`, renderOrder: panelStyle.renderOrderBase + 12 },
+        );
+        panel.datumVisuals.push( {
+          region,
+          viewId: panel.viewId,
+          mark: dot,
+          material: dot.material,
+          baseOpacity: 0.9,
+          baseScale: dot.scale.clone(),
+          hoverScaleMultiplier: 1.2,
+          outline,
+          labelController,
+          labelAlwaysVisible: dataset.regionList.length <= 7,
+          baseRenderOrder: panelStyle.renderOrderBase + 9,
+        } );
+        applyDatumVisualRecord( panel.datumVisuals.at( - 1 ) );
 
       } );
 
@@ -1653,13 +2100,14 @@ export const demo3SceneDefinition = Object.freeze( {
 
     function renderSummaryView( panel ) {
 
-      createTrackedTextPlane(
+      panel.summaryTextController = createTrackedTextPlane(
         panel.dynamicEntries,
         panel.contentRoot,
         { ...text.summaryBody, text: buildSummaryText() },
         getChartPosition( 0, 0.035, workspace.contentZ + 0.035 ),
         { name: 'demo3-summary-body', renderOrder: panelStyle.renderOrderBase + 10 },
       );
+      lastSummaryActiveDatumId = getSummaryActiveDatumId();
 
       renderSummaryButton( panel, 'layout', `Layout\n${formatLayoutLabel( currentSceneState.layoutMode )}`, 0, 0, ( payload ) => cycleLayoutMode( payload.source || 'xr-summary-layout-button' ) );
       renderSummaryButton( panel, 'linked', `Linked\n${currentSceneState.linkedHighlightEnabled ? 'On' : 'Off'}`, 1, 0, ( payload ) => toggleLinkedHighlighting( payload.source || 'xr-summary-linked-button' ) );
@@ -1671,6 +2119,7 @@ export const demo3SceneDefinition = Object.freeze( {
 
     function renderAllPanelContent() {
 
+      cancelPendingDatumVisualRefresh();
       panelByViewId.forEach( ( panel ) => {
 
         clearPanelDynamicObjects( panel );
@@ -1698,6 +2147,48 @@ export const demo3SceneDefinition = Object.freeze( {
 
     }
 
+    function attachPanelXYMoveHandle( panel ) {
+
+      if ( ! isPanelXYMoveBarEnabled( panel.viewId ) ) {
+
+        return null;
+
+      }
+
+      const handle = createXYMoveHandle( context, {
+        parent: root,
+        name: `demo3-${panel.viewId}-xy-move-handle`,
+        ...xyMoveHandle,
+        getTargetPosition: () => panel.root.position,
+        setTargetPosition( nextPosition ) {
+
+          movePanelWithXYHandle( panel.viewId, nextPosition );
+
+        },
+        onDragStart( payload ) {
+
+          beginPanelXYMove( panel.viewId, payload );
+
+        },
+        onDragMove() {},
+        onDragEnd( payload, _finalPosition, didMove ) {
+
+          endPanelXYMove( panel.viewId, payload, didMove );
+
+        },
+      } );
+      staticEntries.push( {
+        object3D: handle.root,
+        dispose() {
+
+          handle.dispose();
+
+        },
+      } );
+      return handle;
+
+    }
+
     function createWorkspacePanel( viewId ) {
 
       const panelRoot = new THREE.Group();
@@ -1706,6 +2197,7 @@ export const demo3SceneDefinition = Object.freeze( {
       const height = workspace.panelHeight;
       const titleY = height * 0.5 - workspace.titleBarHeight * 0.5;
       const dynamicEntries = [];
+      const datumVisuals = [];
       const hoverSources = new Set();
       const backgroundMaterial = createMaterial( { color: panelStyle.backgroundColor, opacity: panelStyle.backgroundOpacity } );
       const bodyMaterial = createMaterial( { color: panelStyle.bodyColor, opacity: panelStyle.bodyOpacity } );
@@ -1790,13 +2282,17 @@ export const demo3SceneDefinition = Object.freeze( {
         root: panelRoot,
         contentRoot,
         dynamicEntries,
+        datumVisuals,
         hoverSources,
         backgroundMaterial,
         titleMaterial,
         edgeMaterial: edge.material,
         titleController,
+        summaryTextController: null,
+        xyMoveHandle: null,
       };
       panelByViewId.set( viewId, panel );
+      panel.xyMoveHandle = attachPanelXYMoveHandle( panel );
       return panel;
 
     }
@@ -1836,6 +2332,7 @@ export const demo3SceneDefinition = Object.freeze( {
       if ( source === 'replay-scene' ) {
 
         activePanelDrag = null;
+        activePanelHandleDrag = null;
 
       }
 
@@ -2120,6 +2617,8 @@ export const demo3SceneDefinition = Object.freeze( {
       dispose() {
 
         activePanelDrag = null;
+        activePanelHandleDrag = null;
+        cancelPendingDatumVisualRefresh();
         clearHoverState();
         clearAllPanelDynamicObjects();
         disposeStaticEntries();
@@ -2176,6 +2675,7 @@ export const demo3SceneDefinition = Object.freeze( {
       onPresentationModeChange() {
 
         activePanelDrag = null;
+        activePanelHandleDrag = null;
         clearHoverState();
         updatePanelShellVisuals();
         renderAllPanelContent();

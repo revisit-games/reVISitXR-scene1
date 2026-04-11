@@ -5,6 +5,7 @@ import { createTextSprite } from '../scenes/core/textSprite.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
 import { createFloatingOrbitPanelShell } from '../scenes/core/floatingOrbitPanelShell.js';
+import { createXYMoveHandle } from '../scenes/core/xyMoveHandle.js';
 import { loadDemo2Dataset } from './demo2Data.js';
 import { demo2VisualConfig } from './demo2VisualConfig.js';
 import { demo2LoggingConfig } from './demo2LoggingConfig.js';
@@ -30,6 +31,51 @@ import { getDemo2Task } from './demo2Tasks.js';
 function isFiniteNumber( value ) {
 
   return typeof value === 'number' && Number.isFinite( value );
+
+}
+
+function pickNumber( value, fallback ) {
+
+  return isFiniteNumber( value ) ? value : fallback;
+
+}
+
+function pickColor( value, fallback ) {
+
+  return typeof value === 'number' || typeof value === 'string' ? value : fallback;
+
+}
+
+function resolveDemo2GlobeMoveHandleConfig( globe = {} ) {
+
+  const nested = globe.xyMoveHandle || {};
+
+  return {
+    withXYMoveBar: nested.withXYMoveBar !== false,
+    floorY: pickNumber( nested.floorY, pickNumber( globe.handleFloorY, 0.035 ) ),
+    lineRadius: pickNumber( nested.lineRadius, pickNumber( globe.handleLineRadius, 0.01 ) ),
+    ringRadius: pickNumber( nested.ringRadius, pickNumber( globe.handleRingRadius, 0.17 ) ),
+    ringTubeRadius: pickNumber( nested.ringTubeRadius, pickNumber( globe.handleRingTubeRadius, 0.012 ) ),
+    discRadius: pickNumber( nested.discRadius, pickNumber( globe.handleDiscRadius, 0.14 ) ),
+    discHeight: pickNumber( nested.discHeight, 0.012 ),
+    showDisc: nested.showDisc !== false,
+    arrowOffset: pickNumber( nested.arrowOffset, pickNumber( globe.handleArrowOffset, 0.17 ) ),
+    arrowLift: pickNumber( nested.arrowLift, pickNumber( globe.handleArrowLift, 0.065 ) ),
+    interactiveRadius: pickNumber( nested.interactiveRadius, pickNumber( globe.handleInteractiveRadius, 0.2 ) ),
+    interactiveHeight: pickNumber( nested.interactiveHeight, 0.14 ),
+    minMoveDistance: pickNumber( nested.minMoveDistance, 0.005 ),
+    lineColor: pickColor( nested.lineColor, 0x88c9f3 ),
+    lineEmissive: pickColor( nested.lineEmissive, 0x133349 ),
+    lineOpacity: pickNumber( nested.lineOpacity, 0.8 ),
+    ringColor: pickColor( nested.ringColor, 0x7fc9ff ),
+    ringEmissive: pickColor( nested.ringEmissive, 0x17364a ),
+    ringOpacity: pickNumber( nested.ringOpacity, 0.82 ),
+    discColor: pickColor( nested.discColor, 0x2c4860 ),
+    discOpacity: pickNumber( nested.discOpacity, 0.26 ),
+    arrowColor: pickColor( nested.arrowColor, 0xbfe7ff ),
+    arrowEmissive: pickColor( nested.arrowEmissive, 0x1b4760 ),
+    arrowOpacity: pickNumber( nested.arrowOpacity, 0.86 ),
+  };
 
 }
 
@@ -377,17 +423,15 @@ export const demo2SceneDefinition = Object.freeze( {
     const defaultGlobeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
       globe.anchorDefaultPosition || globe.rootPosition,
     );
-    const handleLocalFloorY = globe.handleFloorY - defaultGlobeAnchorPosition[ 1 ];
+    const globeMoveHandleConfig = resolveDemo2GlobeMoveHandleConfig( globe );
     const lastLoggedPanelPosition = new THREE.Vector3();
     const lastLoggedPanelQuaternion = new THREE.Quaternion();
     const lastLoggedGlobeAnchorPosition = new THREE.Vector3().fromArray( defaultGlobeAnchorPosition );
     const globeInteractionSphere = new THREE.Sphere( new THREE.Vector3(), globe.interactionRadius );
-    const globeHandleDragPlane = new THREE.Plane( new THREE.Vector3( 0, 1, 0 ), - globe.handleFloorY );
     const tempGlobeWorldCenter = new THREE.Vector3();
     const tempGlobeWorldHit = new THREE.Vector3();
     const tempGlobeLocalHit = new THREE.Vector3();
     const tempGlobeRay = new THREE.Ray();
-    const tempGlobeHandleHit = new THREE.Vector3();
     const tempGlobeAnchorPosition = new THREE.Vector3();
     const tempResolverRay = new THREE.Ray();
     const tempResolverNodeWorldCenter = new THREE.Vector3();
@@ -417,6 +461,7 @@ export const demo2SceneDefinition = Object.freeze( {
     let currentFlatBoundaryLines = null;
     let activeGlobeDrag = null;
     let activeGlobeMove = null;
+    let globeMoveHandle = null;
     let lastLoggedGlobeYawDeg = currentSceneState.globeYawDeg;
     let lastGlobeYawLogAt = 0;
     let lastGlobeAnchorLogAt = 0;
@@ -429,8 +474,6 @@ export const demo2SceneDefinition = Object.freeze( {
     globeRoot.position.fromArray( defaultGlobeAnchorPosition );
     flatMapRoot.position.fromArray( flatMap.position || [ 0, 0, 0 ] );
     globeRoot.add( globeYawRoot );
-    const globeHandleRoot = new THREE.Group();
-    globeRoot.add( globeHandleRoot );
     globeYawRoot.add( globeBoundaryRoot );
     globeYawRoot.add( globeArcRoot );
     globeYawRoot.add( globeNodeRoot );
@@ -1436,114 +1479,40 @@ export const demo2SceneDefinition = Object.freeze( {
     );
     flatMapBorder.renderOrder = 2;
 
-    const handleLineHeight = Math.max( 0.05, Math.abs( handleLocalFloorY ) );
-    const globeHandleLine = createTrackedMesh(
-      staticObjects,
-      globeHandleRoot,
-      new THREE.CylinderGeometry( globe.handleLineRadius, globe.handleLineRadius, handleLineHeight, 18 ),
-      new THREE.MeshStandardMaterial( {
-        color: 0x88c9f3,
-        emissive: 0x133349,
-        transparent: true,
-        opacity: 0.8,
-        roughness: 0.38,
-        metalness: 0.16,
-      } ),
-    );
-    globeHandleLine.position.set( 0, handleLocalFloorY * 0.5, 0 );
+    if ( globeMoveHandleConfig.withXYMoveBar ) {
 
-    const globeHandleRing = createTrackedMesh(
-      staticObjects,
-      globeHandleRoot,
-      new THREE.TorusGeometry( globe.handleRingRadius, globe.handleRingTubeRadius, 20, 64 ),
-      new THREE.MeshStandardMaterial( {
-        color: 0x7fc9ff,
-        emissive: 0x17364a,
-        transparent: true,
-        opacity: 0.82,
-        roughness: 0.34,
-        metalness: 0.18,
-      } ),
-    );
-    globeHandleRing.position.set( 0, handleLocalFloorY + globe.handleRingTubeRadius, 0 );
-    globeHandleRing.rotation.x = Math.PI * 0.5;
+      const globeHandleTargetId = buildDemo2TargetId( demo2RaycastRoles.GLOBE_HANDLE, demo2RaycastRoles.GLOBE_HANDLE );
+      const globeHandleTargetRecord = registerDemo2TargetRecord( {
+        targetId: globeHandleTargetId,
+        kind: demo2RaycastRoles.GLOBE_HANDLE,
+        role: demo2RaycastRoles.GLOBE_HANDLE,
+        id: demo2RaycastRoles.GLOBE_HANDLE,
+        priority: 4,
+      } );
 
-    const globeHandleDisc = createTrackedMesh(
-      staticObjects,
-      globeHandleRoot,
-      new THREE.CylinderGeometry( globe.handleDiscRadius, globe.handleDiscRadius, 0.012, 48 ),
-      new THREE.MeshBasicMaterial( {
-        color: 0x2c4860,
-        transparent: true,
-        opacity: 0.26,
-        depthWrite: false,
-        toneMapped: false,
-      } ),
-    );
-    globeHandleDisc.position.set( 0, handleLocalFloorY + 0.006, 0 );
-    globeHandleDisc.renderOrder = 1;
+      globeMoveHandle = createXYMoveHandle( context, {
+        parent: root,
+        name: 'demo2-globe-xy-move-handle',
+        ...globeMoveHandleConfig,
+        getTargetPosition: () => globeRoot.position,
+        setTargetPosition( nextPosition ) {
 
-    const arrowDirections = [
-      { position: [ globe.handleArrowOffset, handleLocalFloorY + globe.handleArrowLift, 0 ], rotation: [ 0, 0, - Math.PI * 0.5 ] },
-      { position: [ - globe.handleArrowOffset, handleLocalFloorY + globe.handleArrowLift, 0 ], rotation: [ 0, 0, Math.PI * 0.5 ] },
-      { position: [ 0, handleLocalFloorY + globe.handleArrowLift, globe.handleArrowOffset ], rotation: [ Math.PI * 0.5, 0, 0 ] },
-      { position: [ 0, handleLocalFloorY + globe.handleArrowLift, - globe.handleArrowOffset ], rotation: [ - Math.PI * 0.5, 0, 0 ] },
-    ];
-    arrowDirections.forEach( ( arrowConfig ) => {
+          currentSceneState.globeAnchorPosition = normalizeDemo2GlobeAnchorPosition(
+            [
+              nextPosition.x,
+              defaultGlobeAnchorPosition[ 1 ],
+              nextPosition.z,
+            ],
+            defaultGlobeAnchorPosition,
+          );
+          applyGlobeAnchorPosition();
 
-      const arrow = createTrackedMesh(
-        staticObjects,
-        globeHandleRoot,
-        new THREE.ConeGeometry( 0.028, 0.05, 12 ),
-        new THREE.MeshStandardMaterial( {
-          color: 0xbfe7ff,
-          emissive: 0x1b4760,
-          transparent: true,
-          opacity: 0.86,
-          roughness: 0.26,
-          metalness: 0.12,
-        } ),
-      );
-      arrow.position.fromArray( arrowConfig.position );
-      arrow.rotation.set( arrowConfig.rotation[ 0 ], arrowConfig.rotation[ 1 ], arrowConfig.rotation[ 2 ] );
-
-    } );
-
-    const globeHandleInteraction = createInteractiveTrackedMesh(
-      staticObjects,
-      globeHandleRoot,
-      new THREE.CylinderGeometry( globe.handleInteractiveRadius, globe.handleInteractiveRadius, 0.14, 48 ),
-      new THREE.MeshBasicMaterial( {
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        toneMapped: false,
-      } ),
-      {
-        onSelectStart( payload ) {
-
-          if ( context.getInteractionPolicy?.()?.canInteract === false ) {
-
-            return;
-
-          }
+        },
+        onDragStart( payload ) {
 
           beginLocalXrInteraction( payload.source );
-
-          const startPoint = resolveGlobeHandlePoint( payload.rayOrigin, payload.rayDirection );
-
-          if ( startPoint === null ) {
-
-            return;
-
-          }
-
           activeGlobeMove = {
             source: payload.source,
-            startAnchorPosition: globeRoot.position.clone(),
-            dragOffsetX: globeRoot.position.x - startPoint.x,
-            dragOffsetZ: globeRoot.position.z - startPoint.z,
             hasMoved: false,
           };
           clearHoverState( {
@@ -1552,54 +1521,20 @@ export const demo2SceneDefinition = Object.freeze( {
           } );
 
         },
-        onSelectMove( payload ) {
+        onDragMove( payload ) {
 
-          if ( activeGlobeMove?.source !== payload.source ) {
+          if ( activeGlobeMove?.source === payload.source ) {
 
-            return;
-
-          }
-
-          const nextPoint = resolveGlobeHandlePoint( payload.rayOrigin, payload.rayDirection );
-
-          if ( nextPoint === null ) {
-
-            return;
+            activeGlobeMove.hasMoved = true;
 
           }
 
-          const nextAnchorPosition = normalizeDemo2GlobeAnchorPosition(
-            [
-              nextPoint.x + activeGlobeMove.dragOffsetX,
-              defaultGlobeAnchorPosition[ 1 ],
-              nextPoint.z + activeGlobeMove.dragOffsetZ,
-            ],
-            defaultGlobeAnchorPosition,
-          );
-
-          tempGlobeAnchorPosition.fromArray( nextAnchorPosition );
-
-          if ( tempGlobeAnchorPosition.distanceTo( globeRoot.position ) <= 0.005 ) {
-
-            return;
-
-          }
-
-          activeGlobeMove.hasMoved = true;
-          currentSceneState.globeAnchorPosition = nextAnchorPosition;
-          applyGlobeAnchorPosition();
           recordGlobeAnchorIfNeeded( `${payload.source}-globe-handle-drag` );
 
         },
-        onSelectEnd( payload ) {
+        onDragEnd( payload, _finalPosition, didMove ) {
 
-          if ( activeGlobeMove?.source !== payload.source ) {
-
-            return;
-
-          }
-
-          const shouldFlush = activeGlobeMove.hasMoved === true;
+          const shouldFlush = activeGlobeMove?.hasMoved === true || didMove === true;
           activeGlobeMove = null;
 
           if ( shouldFlush ) {
@@ -1612,22 +1547,29 @@ export const demo2SceneDefinition = Object.freeze( {
           }
 
         },
-      },
-    );
-    attachDemo2TargetToObject(
-      globeHandleInteraction,
-      registerDemo2TargetRecord( {
-        targetId: buildDemo2TargetId( demo2RaycastRoles.GLOBE_HANDLE, demo2RaycastRoles.GLOBE_HANDLE ),
-        kind: demo2RaycastRoles.GLOBE_HANDLE,
-        role: demo2RaycastRoles.GLOBE_HANDLE,
-        id: demo2RaycastRoles.GLOBE_HANDLE,
-        priority: 4,
-      } ),
-      demo2RaycastRoles.GLOBE_HANDLE,
-      demo2MapSpaces.GLOBE,
-    );
-    globeHandleInteraction.position.set( 0, handleLocalFloorY + 0.07, 0 );
-    globeHandleInteraction.renderOrder = 1;
+        decorateHitMesh( mesh ) {
+
+          attachDemo2TargetToObject(
+            mesh,
+            globeHandleTargetRecord,
+            demo2RaycastRoles.GLOBE_HANDLE,
+            demo2MapSpaces.GLOBE,
+          );
+
+        },
+      } );
+      staticObjects.push( {
+        object3D: globeMoveHandle.root,
+        dispose() {
+
+          unregisterDemo2MapRaycastObject( globeMoveHandle.hitMesh );
+          unregisterDemo2TargetRecord( globeHandleTargetId );
+          globeMoveHandle.dispose();
+
+        },
+      } );
+
+    }
 
     const focusHalo = createTrackedMesh(
       staticObjects,
@@ -1828,6 +1770,7 @@ export const demo2SceneDefinition = Object.freeze( {
         defaultGlobeAnchorPosition,
       );
       globeRoot.position.fromArray( currentSceneState.globeAnchorPosition );
+      globeMoveHandle?.syncFromTarget();
 
     }
 
@@ -1863,21 +1806,6 @@ export const demo2SceneDefinition = Object.freeze( {
       }
 
       return THREE.MathUtils.radToDeg( Math.atan2( tempGlobeLocalHit.x, tempGlobeLocalHit.z ) );
-
-    }
-
-    function resolveGlobeHandlePoint( rayOrigin, rayDirection ) {
-
-      tempGlobeRay.origin.copy( rayOrigin );
-      tempGlobeRay.direction.copy( rayDirection ).normalize();
-
-      if ( tempGlobeRay.intersectPlane( globeHandleDragPlane, tempGlobeHandleHit ) === null ) {
-
-        return null;
-
-      }
-
-      return tempGlobeHandleHit;
 
     }
 

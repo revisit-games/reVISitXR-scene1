@@ -17,23 +17,23 @@ export const demo3LoggingConfig = Object.freeze( {
   } ),
   pointer: Object.freeze( {
     hover: Object.freeze( {
-      minIntervalMs: 420,
-      positionEpsilon: 0.05,
-      rayLengthEpsilon: 0.05,
+      minIntervalMs: 900,
+      positionEpsilon: 0.08,
+      rayLengthEpsilon: 0.08,
     } ),
     grabbing: Object.freeze( {
       behavior: POINTER_SAMPLING_BEHAVIORS.STATE_ONLY,
-      minIntervalMs: 420,
-      positionEpsilon: 0.05,
-      rayLengthEpsilon: 0.05,
+      minIntervalMs: 650,
+      positionEpsilon: 0.08,
+      rayLengthEpsilon: 0.08,
     } ),
     logImmediateSemanticTransitions: true,
   } ),
   outboundSync: Object.freeze( {
-    minIntervalMs: 850,
+    minIntervalMs: 1200,
   } ),
   sceneState: Object.freeze( {
-    minIntervalMs: 280,
+    minIntervalMs: 750,
     positionEpsilon: 0.035,
     quaternionAngleThresholdDeg: 3.5,
     flushOnLayoutModeChange: true,
