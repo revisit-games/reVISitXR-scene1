@@ -7,8 +7,10 @@ import {
   DEMO4_LAYER_MODES,
   DEMO4_PLACEMENT_SOURCES,
   DEMO4_PLACEMENT_MODES,
+  DEMO4_PLACEMENT_DRIVERS,
   normalizeDemo4InteractionModality,
   normalizeDemo4MetricId,
+  normalizeDemo4PlacementControllerSource,
   normalizeDemo4PlacementSource,
   normalizeDemo4SceneState,
   normalizeDemo4SiteId,
@@ -31,9 +33,13 @@ import { demo4LoggingConfig } from './demo4LoggingConfig.js';
 import { demo4VisualConfig } from './demo4VisualConfig.js';
 
 const HALF_PI = Math.PI * 0.5;
+const WORLD_UP = new THREE.Vector3( 0, 1, 0 );
 const gazeRaycaster = new THREE.Raycaster();
 const tempCameraWorldPosition = new THREE.Vector3();
 const tempCameraWorldDirection = new THREE.Vector3();
+const tempPlacementPosition = new THREE.Vector3();
+const tempPlacementQuaternion = new THREE.Quaternion();
+const tempSurfaceNormal = new THREE.Vector3();
 
 function isFiniteNumber( value ) {
 
@@ -56,6 +62,24 @@ function vector3FromArray( value, fallback = [ 0, 0, 0 ] ) {
   }
 
   return vector3FromArray( fallback, [ 0, 0, 0 ] );
+
+}
+
+function quaternionFromArray( value, fallback = [ 0, 0, 0, 1 ] ) {
+
+  if ( value?.isQuaternion ) {
+
+    return value.clone();
+
+  }
+
+  if ( Array.isArray( value ) && value.length === 4 && value.every( isFiniteNumber ) ) {
+
+    return new THREE.Quaternion( value[ 0 ], value[ 1 ], value[ 2 ], value[ 3 ] ).normalize();
+
+  }
+
+  return quaternionFromArray( fallback, [ 0, 0, 0, 1 ] );
 
 }
 
@@ -304,6 +328,16 @@ function getNormalizedReadingRatio( value, range ) {
 
 }
 
+function getAnchorSurfaceHeightFromPosition( position ) {
+
+  const anchorPosition = vector3FromArray( position, demo4VisualConfig.placement.defaultPreviewPosition );
+  return Math.max(
+    0,
+    anchorPosition.y - demo4VisualConfig.placement.floorY - demo4VisualConfig.placement.overlayLift,
+  );
+
+}
+
 function buildAnchorTransformFromState( sceneState ) {
 
   return {
@@ -312,6 +346,9 @@ function buildAnchorTransformFromState( sceneState ) {
     scale: sceneState.arScaleFactor,
     placementSource: sceneState.placementSource,
     surfaceDetected: sceneState.surfaceDetected,
+    surfaceHeight: sceneState.arAnchorSurfaceHeight,
+    placementDriver: sceneState.placementDriver,
+    placementControllerSource: sceneState.placementControllerSource,
   };
 
 }
@@ -371,14 +408,28 @@ export const demo4SceneDefinition = Object.freeze( {
     let placementAnchor = null;
     let controlPanelRoot = null;
     let detailRoot = null;
-    let panelBodyText = null;
+    let panelTaskText = null;
+    let panelPlacementText = null;
+    let panelStateText = null;
+    let panelInteractionHelpText = null;
     let detailText = null;
     let placementPromptText = null;
+    let supportPedestalMesh = null;
     let dwellProgressRing = null;
     let dwellTargetSiteId = null;
     let dwellElapsedMs = 0;
     let dwellActivatedSiteId = null;
     let unsupportedImmersiveMode = null;
+    let placementPreviewStatus = 'lost';
+    let placementPreviewSourceLabel = null;
+    const placementStabilizer = {
+      hasSmoothedPose: false,
+      smoothedPosition: new THREE.Vector3(),
+      smoothedQuaternion: new THREE.Quaternion(),
+      lastAcceptedPosition: new THREE.Vector3(),
+      stableFrameCount: 0,
+      lastAcceptedAt: 0,
+    };
 
     root.name = 'demo4-situated-overlay-root';
     context.sceneContentRoot?.add( root );
@@ -417,6 +468,130 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function getPlacementControllerSource( payload = {} ) {
+
+      if ( payload.handedness === 'left' ) {
+
+        return 'left';
+
+      }
+
+      const interactor = payload.interactor || payload.source;
+
+      if ( interactor === 'controller-0' || payload.controllerIndex === 0 ) {
+
+        return 'controller-0';
+
+      }
+
+      if ( interactor === 'controller-1' || payload.controllerIndex === 1 ) {
+
+        return 'controller-1';
+
+      }
+
+      return null;
+
+    }
+
+    function isAcceptedPlacementSource( payload = {} ) {
+
+      const presentationMode = context.getPresentationMode?.();
+
+      if ( presentationMode === 'desktop' ) {
+
+        return payload.source === 'desktop-pointer' || payload.pointerType === 'desktop';
+
+      }
+
+      if ( presentationMode !== 'immersive-ar' ) {
+
+        return false;
+
+      }
+
+      if ( payload.handedness === 'left' ) {
+
+        return true;
+
+      }
+
+      if ( payload.handedness === 'right' ) {
+
+        return false;
+
+      }
+
+      const interactor = payload.interactor || payload.source;
+      return (
+        ( interactor === demo4VisualConfig.placement.fallbackControllerSource || payload.controllerIndex === 0 ) &&
+        ! payload.handedness
+      );
+
+    }
+
+    function getPlacementStatusText() {
+
+      if ( currentSceneState.arPlacementConfirmed ) {
+
+        return `Placed via ${currentSceneState.placementSource}.`;
+
+      }
+
+      if ( context.getPresentationMode?.() === 'desktop' ) {
+
+        return 'Desktop fallback: confirm the default footprint or enter AR.';
+
+      }
+
+      if ( placementPreviewStatus === 'ready' ) {
+
+        return placementPreviewSourceLabel === 'controller-0-fallback'
+          ? 'Surface ready: left trigger to place (controller-0 fallback)'
+          : 'Surface ready: left trigger to place';
+
+      }
+
+      if ( placementPreviewStatus === 'stabilizing' ) {
+
+        return placementPreviewSourceLabel === 'controller-0-fallback'
+          ? 'Surface detected: stabilizing... (controller-0 fallback)'
+          : 'Surface detected: stabilizing...';
+
+      }
+
+      if ( placementPreviewStatus === 'fallback-controller' ) {
+
+        return 'Using controller-0 fallback because handedness is unavailable.';
+
+      }
+
+      return 'Surface lost: keep aiming at the real surface';
+
+    }
+
+    function getPlacementPromptText() {
+
+      if ( currentSceneState.arPlacementConfirmed ) {
+
+        return 'Overlay placed.';
+
+      }
+
+      if ( context.getPresentationMode?.() === 'desktop' ) {
+
+        return 'Desktop fallback: confirm the default footprint in the side panel.';
+
+      }
+
+      return [
+        'Use the LEFT controller to choose a real-world surface.',
+        'Pull the trigger to place the overlay.',
+        getPlacementStatusText(),
+      ].join( '\n' );
+
+    }
+
     function getActivationSequence() {
 
       return currentSceneState.gazeDwellCount + currentSceneState.handSelectCount + 1;
@@ -437,22 +612,7 @@ export const demo4SceneDefinition = Object.freeze( {
 
       }
 
-      if ( context.getPresentationMode?.() === 'desktop' ) {
-
-        return 'Desktop fallback: confirm the default footprint or enter AR.';
-
-      }
-
-      if (
-        currentSceneState.placementSource === DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST &&
-        currentSceneState.surfaceDetected
-      ) {
-
-        return 'Aim at a real surface and select to place.';
-
-      }
-
-      return 'Real surface hit-test unavailable; using fallback placement plane.';
+      return getPlacementStatusText();
 
     }
 
@@ -544,6 +704,9 @@ export const demo4SceneDefinition = Object.freeze( {
         `Task: ${task.prompt}`,
         `Placement: ${placementText}`,
         `Source: ${currentSceneState.placementSource}`,
+        `Driver: ${currentSceneState.placementDriver}`,
+        `Controller: ${currentSceneState.placementControllerSource || 'none'}`,
+        `Surface height: ${currentSceneState.arAnchorSurfaceHeight.toFixed( 2 )} m`,
         `Surface detected: ${currentSceneState.surfaceDetected ? 'Yes' : 'No'}`,
         `Metric: ${metric?.label || currentSceneState.metricId}`,
         `Time: ${timeSlice?.label || currentSceneState.timeIndex}`,
@@ -557,7 +720,33 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
-    function updateAnchorStateFromTransform( transform ) {
+    function getPanelStateText() {
+
+      const metric = getCurrentMetric();
+      const timeSlice = getCurrentTimeSlice();
+      const modeLabel = currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL
+        ? 'Gaze'
+        : 'Hand';
+      const layerLabel = currentSceneState.layerMode === DEMO4_LAYER_MODES.ALERTS
+        ? 'Alerts'
+        : 'All';
+
+      return [
+        `Metric: ${metric?.label || currentSceneState.metricId}`,
+        `Time: ${timeSlice?.label || currentSceneState.timeIndex}`,
+        `Layer: ${layerLabel}`,
+        `Mode: ${modeLabel}`,
+      ].join( ' | ' );
+
+    }
+
+    function getPanelInteractionHelpText() {
+
+      return 'Gaze mode: look at a site for 0.9s to select. Hand mode: aim and trigger.';
+
+    }
+
+    function updateAnchorStateFromTransform( transform, payload = null ) {
 
       currentSceneState.arAnchorPosition = Array.isArray( transform?.position )
         ? [ ...transform.position ]
@@ -575,11 +764,18 @@ export const demo4SceneDefinition = Object.freeze( {
       currentSceneState.surfaceDetected = typeof transform?.surfaceDetected === 'boolean'
         ? transform.surfaceDetected
         : currentSceneState.surfaceDetected;
+      currentSceneState.placementDriver = demo4VisualConfig.placement.driver || DEMO4_PLACEMENT_DRIVERS.LEFT_CONTROLLER;
+      currentSceneState.placementControllerSource = normalizeDemo4PlacementControllerSource(
+        getPlacementControllerSource( payload || transform || {} ),
+        currentSceneState.placementControllerSource,
+      );
+      currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
 
     }
 
     function applyPlacementStateToAnchor() {
 
+      currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
       const transform = buildAnchorTransformFromState( currentSceneState );
 
       if ( currentSceneState.arPlacementConfirmed ) {
@@ -598,7 +794,7 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
-    function confirmPlacement( source, transform = null ) {
+    function confirmPlacement( sourceOrPayload, transform = null ) {
 
       if ( placementConfirmInProgress || isBlockedVRMode() ) {
 
@@ -606,7 +802,29 @@ export const demo4SceneDefinition = Object.freeze( {
 
       }
 
+      const placementPayload = sourceOrPayload && typeof sourceOrPayload === 'object'
+        ? sourceOrPayload
+        : null;
+
+      if ( placementPayload && ! isAcceptedPlacementSource( placementPayload ) ) {
+
+        return;
+
+      }
+
+      if (
+        placementPayload &&
+        context.getPresentationMode?.() === 'immersive-ar' &&
+        placementAnchor?.getPlacementStatus?.().source === DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST &&
+        placementPreviewStatus !== 'ready'
+      ) {
+
+        return;
+
+      }
+
       placementConfirmInProgress = true;
+      const source = placementPayload?.source || sourceOrPayload;
       const fallbackPlacementSource = context.getPresentationMode?.() === 'desktop'
         ? DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT
         : currentSceneState.placementSource;
@@ -614,10 +832,18 @@ export const demo4SceneDefinition = Object.freeze( {
         placementSource: fallbackPlacementSource,
         surfaceDetected: currentSceneState.surfaceDetected,
       } );
-      updateAnchorStateFromTransform( finalTransform );
+      updateAnchorStateFromTransform( finalTransform, placementPayload );
+
+      if ( context.getPresentationMode?.() === 'desktop' ) {
+
+        currentSceneState.placementControllerSource = null;
+
+      }
+
       currentSceneState.arPlacementConfirmed = true;
       currentSceneState.placementMode = DEMO4_PLACEMENT_MODES.ANCHORED;
       currentSceneState.placementCount += 1;
+      placementPreviewStatus = 'placed';
       hoveredSiteBySource.clear();
       currentSceneState.focusedSiteId = currentSceneState.selectedSiteId;
       syncVisuals();
@@ -641,6 +867,9 @@ export const demo4SceneDefinition = Object.freeze( {
       currentSceneState.placementMode = DEMO4_PLACEMENT_MODES.PREVIEW;
       updateAnchorStateFromTransform( previewTransform );
       currentSceneState.focusedSiteId = null;
+      placementPreviewStatus = 'lost';
+      placementPreviewSourceLabel = null;
+      resetPlacementStabilizer( { clearPose: true } );
       hoveredSiteBySource.clear();
       applyPlacementStateToAnchor();
       syncVisuals();
@@ -875,6 +1104,27 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function createSupportPedestalVisual() {
+
+      const { footprint, supportPedestal } = demo4VisualConfig;
+      supportPedestalMesh = createTrackedMesh(
+        disposables,
+        placementAnchor.anchorRoot,
+        new THREE.BoxGeometry( 1, 1, 1 ),
+        createBasicMaterial( {
+          color: supportPedestal.color,
+          opacity: supportPedestal.opacity,
+          depthWrite: false,
+        } ),
+        {
+          name: 'demo4-analysis-support-pedestal',
+          renderOrder: footprint.renderOrder - 1,
+        },
+      );
+      supportPedestalMesh.visible = false;
+
+    }
+
     function createPlacementVisuals() {
 
       createFootprintVisuals( placementAnchor.previewRoot, { preview: true } );
@@ -883,12 +1133,12 @@ export const demo4SceneDefinition = Object.freeze( {
         placementAnchor.previewRoot,
         {
           ...demo4VisualConfig.text.label,
-          text: 'Select floor to place overlay',
-          worldHeight: 0.085,
-          fixedWidth: 260,
-          maxTextWidth: 230,
+          text: getPlacementPromptText(),
+          worldHeight: 0.105,
+          fixedWidth: 430,
+          maxTextWidth: 390,
         },
-        [ 0, 0.18, 0 ],
+        [ 0, 0.22, 0 ],
         { name: 'demo4-placement-prompt', renderOrder: 20 },
       );
 
@@ -1023,8 +1273,16 @@ export const demo4SceneDefinition = Object.freeze( {
 
         record.textController.setText(
           currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL
-            ? 'Gaze'
-            : 'Hand',
+            ? 'Mode: Gaze'
+            : 'Mode: Hand',
+        );
+
+      } else if ( record.key === 'layer' ) {
+
+        record.textController.setText(
+          currentSceneState.layerMode === DEMO4_LAYER_MODES.ALERTS
+            ? 'Layer: Alerts'
+            : 'Layer: All',
         );
 
       }
@@ -1032,8 +1290,8 @@ export const demo4SceneDefinition = Object.freeze( {
     }
 
     function createControlButton( key, label, position, onPress, {
-      width = 0.15,
-      height = 0.064,
+      width = demo4VisualConfig.panel.buttonWidth,
+      height = demo4VisualConfig.panel.buttonHeight,
       isActive = () => false,
       isEnabled = () => true,
     } = {} ) {
@@ -1100,6 +1358,7 @@ export const demo4SceneDefinition = Object.freeze( {
     function createControlPanel() {
 
       const { panel } = demo4VisualConfig;
+      const metricButtonOrder = [ 'co2', 'noise', 'occupancy' ].filter( ( metricId ) => DEMO4_METRIC_IDS.includes( metricId ) );
       controlPanelRoot = new THREE.Group();
       controlPanelRoot.name = 'demo4-control-panel-root';
       controlPanelRoot.position.copy( vector3FromArray( panel.position ) );
@@ -1127,27 +1386,62 @@ export const demo4SceneDefinition = Object.freeze( {
         disposables,
         controlPanelRoot,
         { ...demo4VisualConfig.text.panelTitle, text: 'Campus Commons' },
-        [ 0, 0.205, 0.022 ],
+        [ - 0.215, 0.32, 0.022 ],
         { name: 'demo4-panel-title', renderOrder: 17 },
       );
-      panelBodyText = createTrackedTextPlane(
+      panelTaskText = createTrackedTextPlane(
         disposables,
         controlPanelRoot,
-        { ...demo4VisualConfig.text.panelBody, text: '' },
-        [ 0, 0.078, 0.022 ],
-        { name: 'demo4-panel-body', renderOrder: 17 },
+        {
+          ...demo4VisualConfig.text.panelBody,
+          text: `Task: ${task.prompt}`,
+          planeHeight: 0.08,
+        },
+        [ 0, 0.235, 0.022 ],
+        { name: 'demo4-panel-task', renderOrder: 17 },
+      );
+      panelPlacementText = createTrackedTextPlane(
+        disposables,
+        controlPanelRoot,
+        {
+          ...demo4VisualConfig.text.panelHelp,
+          text: 'Placement: use LEFT controller on a real surface.',
+        },
+        [ 0, 0.16, 0.022 ],
+        { name: 'demo4-panel-placement-help', renderOrder: 17 },
+      );
+      panelStateText = createTrackedTextPlane(
+        disposables,
+        controlPanelRoot,
+        {
+          ...demo4VisualConfig.text.panelBody,
+          text: '',
+          planeHeight: 0.065,
+          fontSize: 28,
+        },
+        [ 0, 0.085, 0.022 ],
+        { name: 'demo4-panel-state', renderOrder: 17 },
+      );
+      panelInteractionHelpText = createTrackedTextPlane(
+        disposables,
+        controlPanelRoot,
+        {
+          ...demo4VisualConfig.text.panelHelp,
+          text: getPanelInteractionHelpText(),
+        },
+        [ 0, 0.018, 0.022 ],
+        { name: 'demo4-panel-interaction-help', renderOrder: 17 },
       );
 
-      DEMO4_METRIC_IDS.forEach( ( metricId, index ) => {
+      metricButtonOrder.forEach( ( metricId, index ) => {
 
         const metric = getDemo4Metric( metricId );
         createControlButton(
           `metric-${metricId}`,
           metric?.label || metricId,
-          [ - 0.22 + index * 0.22, - 0.08 ],
+          [ - 0.21 + index * 0.21, - 0.105 ],
           ( source ) => setMetric( metricId, source ),
           {
-            width: 0.19,
             isActive: () => currentSceneState.metricId === metricId,
           },
         );
@@ -1159,37 +1453,29 @@ export const demo4SceneDefinition = Object.freeze( {
         createControlButton(
           `time-${timeSlice.id}`,
           timeSlice.label,
-          [ - 0.22 + index * 0.22, - 0.155 ],
+          [ - 0.21 + index * 0.21, - 0.18 ],
           ( source ) => setTimeIndex( timeSlice.index, source ),
           {
-            width: 0.19,
             isActive: () => currentSceneState.timeIndex === timeSlice.index,
           },
         );
 
       } );
 
-      createControlButton( 'modality', 'Mode', [ 0.255, - 0.005 ], ( source ) => toggleInteractionModality( source ), {
-        width: 0.13,
+      createControlButton( 'modality', 'Mode: Gaze', [ - 0.38, - 0.285 ], ( source ) => toggleInteractionModality( source ), {
         isActive: () => currentSceneState.interactionModality === DEMO4_INTERACTION_MODALITIES.GAZE_DWELL,
       } );
-      createControlButton( 'layer', 'Layer', [ - 0.255, - 0.23 ], ( source ) => toggleLayerMode( source ), {
-        width: 0.13,
+      createControlButton( 'layer', 'Layer: All', [ - 0.228, - 0.285 ], ( source ) => toggleLayerMode( source ), {
         isActive: () => currentSceneState.layerMode === DEMO4_LAYER_MODES.ALERTS,
       } );
-      createControlButton( 'labels', 'Labels', [ - 0.105, - 0.23 ], ( source ) => toggleLabels( source ), {
-        width: 0.13,
+      createControlButton( 'labels', 'Labels', [ - 0.076, - 0.285 ], ( source ) => toggleLabels( source ), {
         isActive: () => currentSceneState.labelsVisible,
       } );
-      createControlButton( 'detail', 'Detail', [ 0.045, - 0.23 ], ( source ) => toggleDetail( source ), {
-        width: 0.13,
+      createControlButton( 'detail', 'Detail', [ 0.076, - 0.285 ], ( source ) => toggleDetail( source ), {
         isActive: () => currentSceneState.detailExpanded,
       } );
-      createControlButton( 'reset', 'Reset', [ 0.195, - 0.23 ], ( source ) => resetPlacement( source ), {
-        width: 0.13,
-      } );
-      createControlButton( 'submit', 'Submit', [ 0.325, - 0.23 ], ( source ) => submitTask( source ), {
-        width: 0.11,
+      createControlButton( 'reset', 'Reset', [ 0.228, - 0.285 ], ( source ) => resetPlacement( source ) );
+      createControlButton( 'submit', 'Submit', [ 0.38, - 0.285 ], ( source ) => submitTask( source ), {
         isActive: () => currentSceneState.taskSubmitted,
         isEnabled: () => Boolean( currentSceneState.taskAnswer ),
       } );
@@ -1265,6 +1551,7 @@ export const demo4SceneDefinition = Object.freeze( {
     function createAnchoredOverlayVisuals() {
 
       createFootprintVisuals( placementAnchor.anchorRoot );
+      createSupportPedestalVisual();
       dataset.sites.forEach( createMarker );
       createControlPanel();
       createDetailCard();
@@ -1361,6 +1648,45 @@ export const demo4SceneDefinition = Object.freeze( {
 
     }
 
+    function syncSupportPedestalVisual() {
+
+      if ( ! supportPedestalMesh ) {
+
+        return;
+
+      }
+
+      const policy = context.getInteractionPolicy?.() || null;
+      const surfaceHeight = Math.max( 0, currentSceneState.arAnchorSurfaceHeight || 0 );
+      const visible = (
+        currentSceneState.arPlacementConfirmed &&
+        surfaceHeight > demo4VisualConfig.supportPedestal.minVisibleHeight &&
+        policy?.isAnalysisSession === true &&
+        policy?.hasReceivedReplayState === true &&
+        context.getPresentationMode?.() !== 'immersive-ar'
+      );
+
+      supportPedestalMesh.visible = visible;
+
+      if ( ! visible ) {
+
+        return;
+
+      }
+
+      supportPedestalMesh.scale.set(
+        demo4VisualConfig.footprint.width,
+        surfaceHeight,
+        demo4VisualConfig.footprint.depth,
+      );
+      supportPedestalMesh.position.set(
+        0,
+        - demo4VisualConfig.placement.overlayLift - surfaceHeight * 0.5,
+        0,
+      );
+
+    }
+
     function syncControlPanel() {
 
       if ( ! controlPanelRoot ) {
@@ -1370,7 +1696,10 @@ export const demo4SceneDefinition = Object.freeze( {
       }
 
       controlPanelRoot.visible = currentSceneState.arPlacementConfirmed;
-      panelBodyText?.setText( getPanelStatusText() );
+      panelTaskText?.setText( `Task: ${task.prompt}` );
+      panelPlacementText?.setText( 'Placement: use LEFT controller on a real surface.' );
+      panelStateText?.setText( getPanelStateText() );
+      panelInteractionHelpText?.setText( getPanelInteractionHelpText() );
       buttonRecords.forEach( updateButtonVisualState );
 
     }
@@ -1437,12 +1766,129 @@ export const demo4SceneDefinition = Object.freeze( {
 
       syncDerivedVisibleSiteIds();
       applyPlacementStateToAnchor();
-      placementPromptText?.setText( getPlacementInstructionText() );
+      placementPromptText?.setText( getPlacementPromptText() );
       syncMarkerVisuals();
       syncDwellProgressVisual();
+      syncSupportPedestalVisual();
       syncControlPanel();
       syncDetailCard();
       syncDesktopPanel();
+
+    }
+
+    function resetPlacementStabilizer( { clearPose = false } = {} ) {
+
+      placementStabilizer.stableFrameCount = 0;
+      placementStabilizer.lastAcceptedAt = 0;
+
+      if ( clearPose ) {
+
+        placementStabilizer.hasSmoothedPose = false;
+
+      }
+
+    }
+
+    function getPlacementPreviewSourceLabel( payload = {} ) {
+
+      return (
+        ! payload.handedness &&
+        ( payload.interactor === demo4VisualConfig.placement.fallbackControllerSource || payload.controllerIndex === 0 )
+      )
+        ? 'controller-0-fallback'
+        : null;
+
+    }
+
+    function updatePlacementPrompt() {
+
+      placementPromptText?.setText( getPlacementPromptText() );
+
+    }
+
+    function applyTransientFallbackPreviewStatus( payload = {} ) {
+
+      placementPreviewStatus = payload?.source === 'desktop-pointer'
+        ? 'lost'
+        : 'fallback-controller';
+      placementPreviewSourceLabel = getPlacementPreviewSourceLabel( payload );
+      updatePlacementPrompt();
+
+    }
+
+    function getSurfaceTiltDeg( quaternion ) {
+
+      tempSurfaceNormal.set( 0, 1, 0 ).applyQuaternion( quaternion ).normalize();
+      return THREE.MathUtils.radToDeg( tempSurfaceNormal.angleTo( WORLD_UP ) );
+
+    }
+
+    function updatePlacementPreviewFromHitTest( hitTest ) {
+
+      const placementConfig = demo4VisualConfig.placement;
+      const now = performance.now();
+      const elapsedSinceAccepted = placementStabilizer.lastAcceptedAt > 0
+        ? now - placementStabilizer.lastAcceptedAt
+        : Number.POSITIVE_INFINITY;
+
+      tempPlacementPosition.copy( vector3FromArray( hitTest.position, placementConfig.defaultPreviewPosition ) );
+      tempPlacementQuaternion.copy( quaternionFromArray( hitTest.quaternion, placementConfig.defaultPreviewQuaternion ) );
+
+      if ( getSurfaceTiltDeg( tempPlacementQuaternion ) > placementConfig.maxSurfaceTiltDeg ) {
+
+        placementPreviewStatus = 'lost';
+        placementPreviewSourceLabel = getPlacementPreviewSourceLabel( hitTest );
+        updatePlacementPrompt();
+        return null;
+
+      }
+
+      if (
+        placementStabilizer.hasSmoothedPose &&
+        placementStabilizer.lastAcceptedPosition.distanceTo( tempPlacementPosition ) > placementConfig.maxFrameJumpMeters &&
+        elapsedSinceAccepted <= placementConfig.staleHitHoldMs
+      ) {
+
+        placementPreviewStatus = 'stabilizing';
+        placementPreviewSourceLabel = getPlacementPreviewSourceLabel( hitTest );
+        updatePlacementPrompt();
+        return null;
+
+      }
+
+      if ( placementStabilizer.hasSmoothedPose ) {
+
+        placementStabilizer.smoothedPosition.lerp( tempPlacementPosition, placementConfig.hitTestSmoothingAlpha );
+        placementStabilizer.smoothedQuaternion.slerp(
+          tempPlacementQuaternion,
+          placementConfig.hitTestRotationSmoothingAlpha,
+        );
+
+      } else {
+
+        placementStabilizer.smoothedPosition.copy( tempPlacementPosition );
+        placementStabilizer.smoothedQuaternion.copy( tempPlacementQuaternion );
+        placementStabilizer.hasSmoothedPose = true;
+
+      }
+
+      placementStabilizer.lastAcceptedPosition.copy( tempPlacementPosition );
+      placementStabilizer.stableFrameCount += 1;
+      placementStabilizer.lastAcceptedAt = now;
+      placementPreviewStatus = placementStabilizer.stableFrameCount >= placementConfig.requiredStableFrames
+        ? 'ready'
+        : 'stabilizing';
+      placementPreviewSourceLabel = getPlacementPreviewSourceLabel( hitTest );
+
+      const transform = placementAnchor.setPreviewFromPlacementPose( {
+        position: vector3ToArray( placementStabilizer.smoothedPosition ),
+        quaternion: quaternionToArray( placementStabilizer.smoothedQuaternion ),
+        source: DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST,
+        surfaceDetected: true,
+      } );
+
+      updatePlacementPrompt();
+      return transform;
 
     }
 
@@ -1459,42 +1905,32 @@ export const demo4SceneDefinition = Object.freeze( {
       if (
         presentationMode === 'immersive-ar' &&
         runtime.xrHitTest?.surfaceDetected &&
-        Array.isArray( runtime.xrHitTest.position )
+        Array.isArray( runtime.xrHitTest.position ) &&
+        isAcceptedPlacementSource( runtime.xrHitTest )
       ) {
 
-        updateAnchorStateFromTransform(
-          placementAnchor.setPreviewFromPlacementPose( {
-            position: runtime.xrHitTest.position,
-            quaternion: runtime.xrHitTest.quaternion,
-            source: DEMO4_PLACEMENT_SOURCES.XR_HIT_TEST,
-            surfaceDetected: true,
-          } ),
-        );
-        syncVisuals();
+        updatePlacementPreviewFromHitTest( runtime.xrHitTest );
         return;
 
       }
 
       if ( presentationMode === 'immersive-ar' ) {
 
-        context.camera.getWorldPosition( tempCameraWorldPosition );
-        context.camera.getWorldDirection( tempCameraWorldDirection );
-        const transform = placementAnchor.setPreviewFromRay(
-          tempCameraWorldPosition,
-          tempCameraWorldDirection,
-          {
-            source: DEMO4_PLACEMENT_SOURCES.FLOOR_PLANE_FALLBACK,
-            surfaceDetected: false,
-          },
-        );
+        const elapsedSinceAccepted = placementStabilizer.lastAcceptedAt > 0
+          ? performance.now() - placementStabilizer.lastAcceptedAt
+          : Number.POSITIVE_INFINITY;
+        placementPreviewStatus = elapsedSinceAccepted <= demo4VisualConfig.placement.staleHitHoldMs
+          ? 'stabilizing'
+          : 'lost';
+        placementPreviewSourceLabel = null;
 
-        if ( transform ) {
+        if ( placementPreviewStatus === 'lost' ) {
 
-          updateAnchorStateFromTransform( transform );
-          syncVisuals();
+          resetPlacementStabilizer( { clearPose: true } );
 
         }
 
+        updatePlacementPrompt();
         return;
 
       }
@@ -1503,6 +1939,10 @@ export const demo4SceneDefinition = Object.freeze( {
 
         currentSceneState.placementSource = DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT;
         currentSceneState.surfaceDetected = false;
+        currentSceneState.placementControllerSource = null;
+        resetPlacementStabilizer( { clearPose: true } );
+        placementPreviewStatus = 'lost';
+        placementPreviewSourceLabel = null;
         syncVisuals();
 
       }
@@ -1621,9 +2061,12 @@ export const demo4SceneDefinition = Object.freeze( {
         placementMode: currentSceneState.placementMode,
         placementCount: currentSceneState.placementCount,
         placementSource: currentSceneState.placementSource,
+        placementDriver: currentSceneState.placementDriver,
+        placementControllerSource: currentSceneState.placementControllerSource,
         surfaceDetected: currentSceneState.surfaceDetected,
         arAnchorPosition: [ ...currentSceneState.arAnchorPosition ],
         arAnchorQuaternion: [ ...currentSceneState.arAnchorQuaternion ],
+        arAnchorSurfaceHeight: currentSceneState.arAnchorSurfaceHeight,
         arScaleFactor: currentSceneState.arScaleFactor,
         metricId: currentSceneState.metricId,
         timeIndex: currentSceneState.timeIndex,
@@ -1652,6 +2095,9 @@ export const demo4SceneDefinition = Object.freeze( {
         position: state.arAnchorPosition,
         quaternion: state.arAnchorQuaternion,
         scale: state.arScaleFactor,
+        surfaceHeight: state.arAnchorSurfaceHeight,
+        placementDriver: state.placementDriver,
+        placementControllerSource: state.placementControllerSource,
       };
 
       return {
@@ -1820,9 +2266,16 @@ export const demo4SceneDefinition = Object.freeze( {
       defaultPreviewPosition: demo4VisualConfig.placement.defaultPreviewPosition,
       defaultPreviewQuaternion: demo4VisualConfig.placement.defaultPreviewQuaternion,
       defaultScale: demo4VisualConfig.placement.defaultScale,
+      preservePlacementPoseY: true,
+      shouldAcceptPlacementPayload: isAcceptedPlacementSource,
+      onPreviewMove( payload ) {
+
+        applyTransientFallbackPreviewStatus( payload );
+
+      },
       onConfirmPlacement( payload, transform ) {
 
-        confirmPlacement( payload?.source || 'demo4-placement-surface', transform );
+        confirmPlacement( payload || 'demo4-placement-surface', transform );
 
       },
     } );
@@ -1855,6 +2308,7 @@ export const demo4SceneDefinition = Object.freeze( {
       applySceneStateFromReplay( sceneState ) {
 
         currentSceneState = normalizeDemo4SceneState( sceneState, currentSceneState );
+        currentSceneState.arAnchorSurfaceHeight = getAnchorSurfaceHeightFromPosition( currentSceneState.arAnchorPosition );
 
         if ( ! sceneState?.placementSource ) {
 
@@ -1871,6 +2325,7 @@ export const demo4SceneDefinition = Object.freeze( {
 
         updatePlacementPreviewFromRuntime( runtime );
         updateGazeDwell( deltaSeconds, runtime );
+        syncSupportPedestalVisual();
 
       },
       getAnswerSummary() {
@@ -1908,7 +2363,11 @@ export const demo4SceneDefinition = Object.freeze( {
           title: 'Demo 4 Situated AR Overlay',
           body: isPlaced
             ? `Inspect the anchored campus overlay in ${modeLabel}. Switch metric/time, select a site, then submit your answer.`
-            : `Place the campus overlay on the floor preview in ${modeLabel}. Desktop can use the side panel confirm button.`,
+            : (
+              presentationMode === 'immersive-ar'
+                ? getPlacementPromptText()
+                : `Place the campus overlay on the default preview in ${modeLabel}. Desktop can use the side panel confirm button.`
+            ),
           note: 'Placement, metric, time slice, layer, labels, site selection, detail state, and answer submission are stored as semantic replay state.',
         };
 
@@ -1923,6 +2382,9 @@ export const demo4SceneDefinition = Object.freeze( {
         unsupportedImmersiveMode = presentationMode === 'immersive-vr'
           ? 'immersive-vr'
           : null;
+        placementPreviewStatus = 'lost';
+        placementPreviewSourceLabel = null;
+        resetPlacementStabilizer( { clearPose: true } );
         resetGazeDwell( { keepFocus: true } );
         syncVisuals();
 

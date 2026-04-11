@@ -121,6 +121,8 @@ export function createSituatedAnchor( context, {
   defaultScale = 1,
   onPreviewMove = null,
   onConfirmPlacement = null,
+  shouldAcceptPlacementPayload = null,
+  preservePlacementPoseY = false,
 } = {} ) {
 
   const root = new THREE.Group();
@@ -172,6 +174,42 @@ export function createSituatedAnchor( context, {
   previewRoot.position.y = floorY + overlayLift;
   previewRoot.visible = true;
 
+  function getTransformPlacementSource( transform = {} ) {
+
+    return transform.placementSource || transform.source || placementStatus.source;
+
+  }
+
+  function shouldPreserveTransformY( transform = {} ) {
+
+    if ( preservePlacementPoseY !== true ) {
+
+      return false;
+
+    }
+
+    const source = getTransformPlacementSource( transform );
+    return (
+      source === SITUATED_PLACEMENT_SOURCES.XR_HIT_TEST ||
+      source === SITUATED_PLACEMENT_SOURCES.REPLAY
+    );
+
+  }
+
+  function getPlacementY( point, transform = {} ) {
+
+    return shouldPreserveTransformY( transform )
+      ? point.y + overlayLift
+      : floorY + overlayLift;
+
+  }
+
+  function isPlacementPayloadAccepted( payload ) {
+
+    return typeof shouldAcceptPlacementPayload !== 'function' || shouldAcceptPlacementPayload( payload ) === true;
+
+  }
+
   function buildPlacementTransformFromPoint( point, {
     quaternion = previewRoot.quaternion,
     scale = previewRoot.scale.x,
@@ -180,7 +218,7 @@ export function createSituatedAnchor( context, {
   } = {} ) {
 
     return {
-      position: [ point.x, floorY + overlayLift, point.z ],
+      position: [ point.x, getPlacementY( point, { source } ), point.z ],
       quaternion: quaternionToArray( quaternion ),
       scale,
       placementSource: source,
@@ -197,7 +235,12 @@ export function createSituatedAnchor( context, {
       yawRad: transform.yawRad,
       scale: transform.scale,
     } );
-    previewRoot.position.y = floorY + overlayLift;
+
+    if ( ! shouldPreserveTransformY( transform ) ) {
+
+      previewRoot.position.y = floorY + overlayLift;
+
+    }
 
     if ( typeof transform.placementSource === 'string' || typeof transform.source === 'string' ) {
 
@@ -267,7 +310,7 @@ export function createSituatedAnchor( context, {
 
     const point = vector3FromValue( position, defaultPreviewPosition );
     return setPreviewTransform( {
-      position: [ point.x, floorY + overlayLift, point.z ],
+      position: [ point.x, getPlacementY( point, { source } ), point.z ],
       quaternion,
       scale,
       placementSource: source,
@@ -284,7 +327,12 @@ export function createSituatedAnchor( context, {
       yawRad: transform.yawRad,
       scale: transform.scale,
     } );
-    anchorRoot.position.y = floorY + overlayLift;
+
+    if ( ! shouldPreserveTransformY( transform ) ) {
+
+      anchorRoot.position.y = floorY + overlayLift;
+
+    }
 
     if ( typeof transform.placementSource === 'string' || typeof transform.source === 'string' ) {
 
@@ -314,7 +362,11 @@ export function createSituatedAnchor( context, {
 
     }
 
-    const nextTransform = setAnchorTransform( getTransformSnapshot( previewRoot ) );
+    const nextTransform = setAnchorTransform( {
+      ...getTransformSnapshot( previewRoot ),
+      placementSource: placementStatus.source,
+      surfaceDetected: placementStatus.surfaceDetected,
+    } );
     anchorRoot.visible = true;
     previewRoot.visible = false;
     setPlacementEnabled( false );
@@ -360,7 +412,7 @@ export function createSituatedAnchor( context, {
   const placementSurfaceHandlers = {
     onHoverChange( payload ) {
 
-      if ( ! placementEnabled || payload?.isHovered !== true ) {
+      if ( ! placementEnabled || payload?.isHovered !== true || ! isPlacementPayloadAccepted( payload ) ) {
 
         return;
 
@@ -377,13 +429,21 @@ export function createSituatedAnchor( context, {
     },
     onSelectStart( payload ) {
 
-      if ( ! placementEnabled ) {
+      if ( ! placementEnabled || ! isPlacementPayloadAccepted( payload ) ) {
 
         return;
 
       }
 
-      updatePreviewFromPayload( payload );
+      if (
+        placementStatus.source !== SITUATED_PLACEMENT_SOURCES.XR_HIT_TEST ||
+        placementStatus.surfaceDetected !== true
+      ) {
+
+        updatePreviewFromPayload( payload );
+
+      }
+
       const transform = confirmPlacement();
       onConfirmPlacement?.( payload, transform );
 

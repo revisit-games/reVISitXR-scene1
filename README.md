@@ -277,7 +277,7 @@ The optional `runtimeContext` passed into `update()` currently includes:
 - `interactionPolicy`
 - `xrHitTest`
 
-`xrHitTest` is a compact WebXR hit-test payload with `available`, `surfaceDetected`, `position`, and `quaternion`. Scenes should treat it as live placement assistance only. Replay should hydrate from semantic scene state instead of depending on a live hit-test source.
+`xrHitTest` is a compact WebXR hit-test payload with `available`, `surfaceDetected`, `position`, and `quaternion`, plus optional source metadata: `source`, `controllerIndex`, `handedness`, and `interactor`. Scenes should treat it as live placement assistance only. Replay should hydrate from semantic scene state instead of depending on a live hit-test source.
 
 ## Default Template Scene
 
@@ -525,7 +525,7 @@ Because these surfaces use the same `registerRaycastTarget()` path as the rest o
 - a confirmed anchor root
 - an invisible horizontal placement surface registered through the shared raycast layer
 
-The helper projects desktop or controller rays onto a deterministic horizontal floor plane, keeps the preview transform separate from semantic scene state, and copies the preview transform into the anchor root only when placement is confirmed. Scene code still owns task data, labels, controls, provenance labels, replay state, and answer summaries.
+The helper projects desktop or controller rays onto a deterministic horizontal floor plane, keeps the preview transform separate from semantic scene state, and copies the preview transform into the anchor root only when placement is confirmed. Scenes can filter placement hover/select payloads before they move or confirm the footprint, and can opt into preserving real/replayed placement Y for `xr-hit-test` and `replay` transforms. Scene code still owns task data, labels, controls, provenance labels, replay state, and answer summaries.
 
 Demo 4 uses this helper for its AR-first placement flow. It logs placement confirmation and reset/reposition commits, not dense preview motion.
 

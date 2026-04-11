@@ -41,7 +41,9 @@ Demo 4 uses the shared `scenes/core/situatedAnchor.js` helper. The helper owns a
 
 Replay may also hydrate `placementSource: 'replay'` for older snapshots without a source field. Replay never requires a live hit-test source because the anchor transform is stored semantically.
 
-Demo 4 does not claim real plane detection when WebXR hit-test is unavailable. In AR it tells the participant whether real hit-test placement is active or whether the fallback plane is being used.
+Demo 4 placement is driven by the left controller before the overlay is confirmed. Gaze/head ray placement is intentionally ignored, and the right controller cannot move or confirm the footprint. If WebXR does not expose handedness, `controller-0` is accepted as a fallback and the prompt/HUD calls that out. Desktop remains deterministic: reviewers can confirm the default footprint from the side panel.
+
+Demo 4 does not claim real plane detection when WebXR hit-test is unavailable. In AR it tells the participant whether real hit-test placement is stabilizing, ready, or lost. Preview motion is smoothed and spike-filtered, but the raw preview path is not logged.
 
 The scene stores placement as semantic state:
 
@@ -49,12 +51,17 @@ The scene stores placement as semantic state:
 - `placementMode`
 - `placementCount`
 - `placementSource`
+- `placementDriver`
+- `placementControllerSource`
 - `surfaceDetected`
 - `arAnchorPosition`
 - `arAnchorQuaternion`
+- `arAnchorSurfaceHeight`
 - `arScaleFactor`
 
 Preview motion is intentionally not logged. Only placement confirmation and reset/reposition commits create semantic scene-state nodes.
+
+Real `xr-hit-test` placement preserves the hit pose's world Y value through confirmation and replay. Floor-plane fallback and desktop default placement still use `floorY + overlayLift`. During desktop analysis replay, anchors above the virtual floor show a translucent light-gray support cuboid under the footprint so tabletop/bed placements remain interpretable without appearing in live AR.
 
 ## Situated Interaction
 
@@ -116,5 +123,7 @@ The scene-specific answer summary exposes:
 - `xrArVisibleSiteCount`
 - `xrArAnchorTransformJson`
 - `xrStateSummaryJson`
+
+New placement implementation fields such as `placementDriver`, `placementControllerSource`, and `arAnchorSurfaceHeight` stay inside `xrStateSummaryJson`. `xrArAnchorTransformJson` also includes compact anchor height/source metadata under the existing reactive id; no new Repo B sidebar reactive ids are required.
 
 The existing global replay avatar and ghost controller rays are managed by `main.js` and are not changed by Demo 4.

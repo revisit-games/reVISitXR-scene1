@@ -41,6 +41,14 @@ export const DEMO4_PLACEMENT_SOURCE_LIST = Object.freeze( [
   DEMO4_PLACEMENT_SOURCES.REPLAY,
 ] );
 
+export const DEMO4_PLACEMENT_DRIVERS = Object.freeze( {
+  LEFT_CONTROLLER: 'left-controller',
+} );
+
+export const DEMO4_PLACEMENT_DRIVER_LIST = Object.freeze( [
+  DEMO4_PLACEMENT_DRIVERS.LEFT_CONTROLLER,
+] );
+
 export const DEMO4_INTERACTION_MODALITIES = Object.freeze( {
   GAZE_DWELL: 'gaze-dwell',
   HAND_RAY: 'hand-ray',
@@ -59,6 +67,7 @@ export const DEMO4_DEFAULT_ANCHOR_POSITION = Object.freeze( [ 0, 0.053, - 1.45 ]
 export const DEMO4_DEFAULT_ANCHOR_QUATERNION = Object.freeze( [ 0, 0, 0, 1 ] );
 export const DEMO4_DEFAULT_SCALE_FACTOR = 1;
 export const DEMO4_DEFAULT_PLACEMENT_SOURCE = DEMO4_PLACEMENT_SOURCES.DESKTOP_DEFAULT;
+export const DEMO4_DEFAULT_PLACEMENT_DRIVER = DEMO4_PLACEMENT_DRIVERS.LEFT_CONTROLLER;
 export const DEMO4_DEFAULT_INTERACTION_MODALITY = DEMO4_INTERACTION_MODALITIES.GAZE_DWELL;
 
 function isFiniteNumber( value ) {
@@ -134,6 +143,26 @@ export function normalizeDemo4LayerMode( value, fallbackValue = DEMO4_DEFAULT_LA
 export function normalizeDemo4PlacementSource( value, fallbackValue = DEMO4_DEFAULT_PLACEMENT_SOURCE ) {
 
   return DEMO4_PLACEMENT_SOURCE_LIST.includes( value ) ? value : fallbackValue;
+
+}
+
+export function normalizeDemo4PlacementDriver( value, fallbackValue = DEMO4_DEFAULT_PLACEMENT_DRIVER ) {
+
+  return DEMO4_PLACEMENT_DRIVER_LIST.includes( value ) ? value : fallbackValue;
+
+}
+
+export function normalizeDemo4PlacementControllerSource( value, fallbackValue = null ) {
+
+  if ( value === 'controller-0' || value === 'controller-1' || value === 'left' ) {
+
+    return value;
+
+  }
+
+  return fallbackValue === 'controller-0' || fallbackValue === 'controller-1' || fallbackValue === 'left'
+    ? fallbackValue
+    : null;
 
 }
 
@@ -248,9 +277,12 @@ export function parseDemo4Conditions( search = window.location.search, {
     placementMode: DEMO4_PLACEMENT_MODES.PREVIEW,
     placementCount: 0,
     placementSource: DEMO4_DEFAULT_PLACEMENT_SOURCE,
+    placementDriver: DEMO4_DEFAULT_PLACEMENT_DRIVER,
+    placementControllerSource: null,
     surfaceDetected: false,
     arAnchorPosition: [ ...DEMO4_DEFAULT_ANCHOR_POSITION ],
     arAnchorQuaternion: [ ...DEMO4_DEFAULT_ANCHOR_QUATERNION ],
+    arAnchorSurfaceHeight: 0,
     arScaleFactor: DEMO4_DEFAULT_SCALE_FACTOR,
     metricId: defaultMetricId,
     timeIndex: defaultTimeIndex,
@@ -302,11 +334,25 @@ export function normalizeDemo4SceneState( candidateState, fallbackState = null, 
       candidateState?.placementSource,
       normalizeDemo4PlacementSource( fallback.placementSource, DEMO4_DEFAULT_PLACEMENT_SOURCE ),
     ),
+    placementDriver: normalizeDemo4PlacementDriver(
+      candidateState?.placementDriver,
+      normalizeDemo4PlacementDriver( fallback.placementDriver, DEMO4_DEFAULT_PLACEMENT_DRIVER ),
+    ),
+    placementControllerSource: normalizeDemo4PlacementControllerSource(
+      candidateState?.placementControllerSource,
+      normalizeDemo4PlacementControllerSource( fallback.placementControllerSource, null ),
+    ),
     surfaceDetected: typeof candidateState?.surfaceDetected === 'boolean'
       ? candidateState.surfaceDetected
       : Boolean( fallback.surfaceDetected ),
     arAnchorPosition: normalizeDemo4Vector3( candidateState?.arAnchorPosition, normalizeDemo4Vector3( fallback.arAnchorPosition ) ),
     arAnchorQuaternion: normalizeDemo4Quaternion( candidateState?.arAnchorQuaternion, normalizeDemo4Quaternion( fallback.arAnchorQuaternion ) ),
+    arAnchorSurfaceHeight: Math.max(
+      0,
+      isFiniteNumber( candidateState?.arAnchorSurfaceHeight )
+        ? candidateState.arAnchorSurfaceHeight
+        : ( isFiniteNumber( fallback.arAnchorSurfaceHeight ) ? fallback.arAnchorSurfaceHeight : 0 ),
+    ),
     arScaleFactor: Math.max(
       0.25,
       isFiniteNumber( candidateState?.arScaleFactor )

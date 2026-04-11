@@ -197,6 +197,7 @@ let xrHitTestViewerSpace = null;
 let xrHitTestSource = null;
 let xrHitTestAvailable = false;
 let xrHitTestSetupPending = false;
+const xrControllerHitTestStates = new Map();
 
 const replayPointerVisuals = {};
 const replayCameraPose = {
@@ -610,6 +611,8 @@ function getSceneInteractionDebugState( source ) {
     source,
     phase: baseState?.phase ?? null,
     pointerType: baseState?.pointerType ?? null,
+    controllerIndex: Number.isInteger( controller?.userData?.index ) ? controller.userData.index : null,
+    handedness: typeof controller?.userData?.handedness === 'string' ? controller.userData.handedness : null,
     rawFirstSceneHit: baseState?.rawFirstSceneHit ?? null,
     resolvedSceneHit: baseState?.resolvedSceneHit ?? null,
     hoveredSceneEntry: cloneSceneInteractionDebugEntry( hoveredSceneEntry ),
@@ -632,6 +635,9 @@ function getSceneInteractorState( source ) {
     source,
     interactor: source === INTERACTORS.DESKTOP_POINTER ? INTERACTORS.DESKTOP_POINTER : ( controller ? getControllerInteractorId( controller ) : source ),
     pointerType: source === INTERACTORS.DESKTOP_POINTER ? 'desktop' : 'xr',
+    controllerIndex: Number.isInteger( controller?.userData?.index ) ? controller.userData.index : null,
+    handedness: typeof controller?.userData?.handedness === 'string' ? controller.userData.handedness : null,
+    inputSource: controller?.userData?.inputSource || null,
     hoveredSceneEntry,
     sceneSelection,
   };
@@ -646,9 +652,15 @@ function buildSceneInteractionPayload( {
   previousHit = null,
 } ) {
 
+  const interactor = controller ? getControllerInteractorId( controller ) : source;
+
   return {
     source,
-    interactor: controller ? getControllerInteractorId( controller ) : source,
+    interactor,
+    pointerType: source === INTERACTORS.DESKTOP_POINTER ? 'desktop' : ( controller ? 'xr' : null ),
+    controllerIndex: Number.isInteger( controller?.userData?.index ) ? controller.userData.index : null,
+    handedness: typeof controller?.userData?.handedness === 'string' ? controller.userData.handedness : null,
+    inputSource: controller?.userData?.inputSource || null,
     controller,
     object: hit?.object ?? null,
     instanceId: Number.isInteger( hit?.instanceId ) ? hit.instanceId : null,
@@ -1627,26 +1639,170 @@ function resetCameraForXRSession() {
 
 }
 
-function resetXRHitTestState() {
+function cancelXRHitTestSource( source, label = 'AR hit-test source' ) {
 
-  if ( xrHitTestSource?.cancel ) {
+  if ( ! source?.cancel ) {
 
-    try {
+    return;
 
-      xrHitTestSource.cancel();
+  }
 
-    } catch ( error ) {
+  try {
 
-      console.warn( 'Unable to cancel AR hit-test source.', error );
+    source.cancel();
+
+  } catch ( error ) {
+
+    console.warn( `Unable to cancel ${label}.`, error );
+
+  }
+
+}
+
+function getControllerHitTestState( controller ) {
+
+  const index = controller?.userData?.index;
+
+  if ( ! Number.isInteger( index ) ) {
+
+    return null;
+
+  }
+
+  if ( ! xrControllerHitTestStates.has( index ) ) {
+
+    xrControllerHitTestStates.set( index, {
+      source: null,
+      available: false,
+      setupPending: false,
+      setupToken: 0,
+      handedness: null,
+      inputSource: null,
+    } );
+
+  }
+
+  return xrControllerHitTestStates.get( index );
+
+}
+
+function resetControllerHitTestState( controller, { clearInputSource = false } = {} ) {
+
+  const state = getControllerHitTestState( controller );
+
+  if ( ! state ) {
+
+    return;
+
+  }
+
+  state.setupToken += 1;
+  cancelXRHitTestSource( state.source, `controller-${controller.userData.index} AR hit-test source` );
+  state.source = null;
+  state.available = false;
+  state.setupPending = false;
+
+  if ( clearInputSource ) {
+
+    state.handedness = null;
+    state.inputSource = null;
+    controller.userData.handedness = null;
+    controller.userData.inputSource = null;
+
+  }
+
+}
+
+function resetAllControllerHitTestStates() {
+
+  for ( const controller of controllers ) {
+
+    resetControllerHitTestState( controller, { clearInputSource: true } );
+
+  }
+
+  xrControllerHitTestStates.clear();
+
+}
+
+async function setupControllerHitTestSource( controller, inputSource = controller?.userData?.inputSource || null ) {
+
+  const state = getControllerHitTestState( controller );
+  const session = renderer.xr.getSession();
+
+  if ( ! state ) {
+
+    return;
+
+  }
+
+  state.setupToken += 1;
+  const setupToken = state.setupToken;
+  state.handedness = typeof inputSource?.handedness === 'string' ? inputSource.handedness : null;
+  state.inputSource = inputSource || null;
+  resetControllerHitTestState( controller );
+  state.setupToken = setupToken;
+  state.handedness = typeof inputSource?.handedness === 'string' ? inputSource.handedness : null;
+  state.inputSource = inputSource || null;
+
+  if (
+    currentMode !== PRESENTATION_MODES.IMMERSIVE_AR ||
+    ! session ||
+    typeof session.requestHitTestSource !== 'function' ||
+    ! inputSource?.targetRaySpace
+  ) {
+
+    return;
+
+  }
+
+  state.setupPending = true;
+
+  try {
+
+    const source = await session.requestHitTestSource( { space: inputSource.targetRaySpace } );
+
+    if ( state.setupToken !== setupToken ) {
+
+      cancelXRHitTestSource( source, `stale controller-${controller.userData.index} AR hit-test source` );
+      return;
+
+    }
+
+    state.source = source;
+    state.available = true;
+
+  } catch ( error ) {
+
+    if ( state.setupToken === setupToken ) {
+
+      state.source = null;
+      state.available = false;
+      console.warn( `Controller ${controller.userData.index} AR hit-test unavailable.`, error );
+
+    }
+
+  } finally {
+
+    if ( state.setupToken === setupToken ) {
+
+      state.setupPending = false;
 
     }
 
   }
 
+}
+
+function resetXRHitTestState() {
+
+  cancelXRHitTestSource( xrHitTestSource, 'viewer AR hit-test source' );
+
   xrHitTestViewerSpace = null;
   xrHitTestSource = null;
   xrHitTestAvailable = false;
   xrHitTestSetupPending = false;
+  resetAllControllerHitTestStates();
 
 }
 
@@ -1688,17 +1844,23 @@ async function setupARHitTestSource( session ) {
 
 function getCompactXRHitTestState( xrFrame ) {
 
+  const controllerHitTestAvailable = [ ...xrControllerHitTestStates.values() ].some( ( controllerState ) => (
+    controllerState.available === true || controllerState.setupPending === true
+  ) );
   const state = {
-    available: xrHitTestAvailable === true || xrHitTestSetupPending === true,
+    available: xrHitTestAvailable === true || xrHitTestSetupPending === true || controllerHitTestAvailable,
     surfaceDetected: false,
     position: null,
     quaternion: null,
+    source: null,
+    controllerIndex: null,
+    handedness: null,
+    interactor: null,
   };
 
   if (
     currentMode !== PRESENTATION_MODES.IMMERSIVE_AR ||
     ! xrFrame ||
-    ! xrHitTestSource ||
     typeof xrFrame.getHitTestResults !== 'function'
   ) {
 
@@ -1714,32 +1876,107 @@ function getCompactXRHitTestState( xrFrame ) {
 
   }
 
-  const hitTestResults = xrFrame.getHitTestResults( xrHitTestSource );
-  const hitTestResult = hitTestResults[ 0 ] || null;
-  const hitPose = hitTestResult?.getPose?.( referenceSpace ) || null;
+  function readHitTestPose( source ) {
 
-  if ( ! hitPose?.transform ) {
+    try {
+
+      const hitTestResults = xrFrame.getHitTestResults( source );
+      const hitTestResult = hitTestResults[ 0 ] || null;
+      const hitPose = hitTestResult?.getPose?.( referenceSpace ) || null;
+
+      if ( ! hitPose?.transform ) {
+
+        return null;
+
+      }
+
+      tempXRHitTestPosition.set(
+        hitPose.transform.position.x,
+        hitPose.transform.position.y,
+        hitPose.transform.position.z,
+      );
+      tempXRHitTestQuaternion.set(
+        hitPose.transform.orientation.x,
+        hitPose.transform.orientation.y,
+        hitPose.transform.orientation.z,
+        hitPose.transform.orientation.w,
+      );
+
+      return {
+        position: vector3ToArray( tempXRHitTestPosition ),
+        quaternion: quaternionToArray( tempXRHitTestQuaternion ),
+      };
+
+    } catch ( error ) {
+
+      console.warn( 'Unable to read AR hit-test result.', error );
+      return null;
+
+    }
+
+  }
+
+  function applyHitTestPose( pose, metadata ) {
+
+    state.surfaceDetected = true;
+    state.position = pose.position;
+    state.quaternion = pose.quaternion;
+    state.source = metadata.source;
+    state.controllerIndex = metadata.controllerIndex;
+    state.handedness = metadata.handedness;
+    state.interactor = metadata.interactor;
+    return state;
+
+  }
+
+  const controllerEntries = controllers
+    .map( ( controller ) => ( {
+      controller,
+      controllerState: xrControllerHitTestStates.get( controller.userData.index ) || null,
+    } ) )
+    .filter( ( entry ) => entry.controllerState?.source );
+  const preferredControllerEntries = [
+    ...controllerEntries.filter( ( entry ) => entry.controllerState.handedness === 'left' ),
+    ...controllerEntries.filter( ( entry ) => entry.controller.userData.index === 0 && ! entry.controllerState.handedness ),
+  ];
+
+  for ( const entry of preferredControllerEntries ) {
+
+    const pose = readHitTestPose( entry.controllerState.source );
+
+    if ( pose ) {
+
+      return applyHitTestPose( pose, {
+        source: 'controller-target-ray',
+        controllerIndex: entry.controller.userData.index,
+        handedness: entry.controllerState.handedness,
+        interactor: getControllerInteractorId( entry.controller ),
+      } );
+
+    }
+
+  }
+
+  if ( ! xrHitTestSource ) {
 
     return state;
 
   }
 
-  tempXRHitTestPosition.set(
-    hitPose.transform.position.x,
-    hitPose.transform.position.y,
-    hitPose.transform.position.z,
-  );
-  tempXRHitTestQuaternion.set(
-    hitPose.transform.orientation.x,
-    hitPose.transform.orientation.y,
-    hitPose.transform.orientation.z,
-    hitPose.transform.orientation.w,
-  );
+  const viewerPose = readHitTestPose( xrHitTestSource );
 
-  state.surfaceDetected = true;
-  state.position = vector3ToArray( tempXRHitTestPosition );
-  state.quaternion = quaternionToArray( tempXRHitTestQuaternion );
-  return state;
+  if ( ! viewerPose ) {
+
+    return state;
+
+  }
+
+  return applyHitTestPose( viewerPose, {
+    source: 'viewer',
+    controllerIndex: null,
+    handedness: null,
+    interactor: 'xr-camera',
+  } );
 
 }
 
@@ -1891,10 +2128,15 @@ function buildSceneRaycastResolverContext( {
   pointerType,
 } ) {
 
+  const controller = getControllerByInteractorId( source );
+
   return {
     phase,
     source,
     pointerType,
+    controllerIndex: Number.isInteger( controller?.userData?.index ) ? controller.userData.index : null,
+    handedness: typeof controller?.userData?.handedness === 'string' ? controller.userData.handedness : null,
+    inputSource: controller?.userData?.inputSource || null,
     presentationMode: currentMode,
     rayOrigin: raycaster.ray.origin.clone(),
     rayDirection: raycaster.ray.direction.clone(),
@@ -2504,7 +2746,21 @@ function buildController( index ) {
   controller.userData.hoveredSceneEntry = null;
   controller.userData.sceneSelection = null;
   controller.userData.pointerTarget = null;
-  controller.addEventListener( 'disconnected', () => releaseControllerAction( controller ) );
+  controller.userData.handedness = null;
+  controller.userData.inputSource = null;
+  controller.addEventListener( 'connected', ( event ) => {
+
+    controller.userData.handedness = event.data?.handedness || null;
+    controller.userData.inputSource = event.data || null;
+    void setupControllerHitTestSource( controller, event.data || null );
+
+  } );
+  controller.addEventListener( 'disconnected', () => {
+
+    releaseControllerAction( controller );
+    resetControllerHitTestState( controller, { clearInputSource: true } );
+
+  } );
 
   controller.addEventListener( 'selectstart', onSelectStart );
   controller.addEventListener( 'selectend', onSelectEnd );
@@ -3001,6 +3257,16 @@ renderer.xr.addEventListener( 'sessionstart', () => {
 
     void alignARViewToFloor();
     void setupARHitTestSource( session );
+
+    for ( const controller of controllers ) {
+
+      if ( controller.userData.inputSource ) {
+
+        void setupControllerHitTestSource( controller, controller.userData.inputSource );
+
+      }
+
+    }
 
   }
 
