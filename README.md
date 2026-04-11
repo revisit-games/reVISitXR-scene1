@@ -458,7 +458,9 @@ Scenes provide `getTargetPosition()` and `setTargetPosition(nextPosition)` plus 
 
 The visual attachment point can be distinct from the moved target center. By default the handle anchors at `getTargetPosition()`. For rectangular panels or other off-center affordances, pass `getAnchorWorldPosition()` or pass `targetObject` with `anchorLocalPosition` / `attachmentLocalPosition`; the helper uses that anchor for the root, vertical line, floor ring/disc/arrows, and hit surfaces while still moving the target through `setTargetPosition()`.
 
-Rotation remains opt-in. With `allowedRotate: true`, scenes should provide `getTargetQuaternion()` and `setTargetQuaternion(nextQuaternion)` plus optional `onRotateStart`, `onRotateMove`, and `onRotateEnd` callbacks. The helper computes floor-plane angle deltas around the anchor and applies yaw around world `Y`; it does not implement pitch or roll.
+Rotation remains opt-in. With `allowedRotate: true`, scenes should provide `getTargetQuaternion()` and `setTargetQuaternion(nextQuaternion)` plus optional `onRotateStart`, `onRotateMove`, and `onRotateEnd` callbacks. The helper computes floor-plane angle deltas around the anchor and applies yaw around world `Y`; it does not implement pitch or roll. Use `rotateDirection` (`-1` or `1`) to flip drag direction without changing the scene's quaternion plumbing.
+
+The helper also owns generic hover and active visual feedback. Move-ring feedback is configured with `moveHover*` and `moveActive*` color/emissive/opacity values. Rotation-arrow feedback is configured with `rotateHover*` and `rotateActive*` values; the shared defaults use purple rotation arrows with pale purple/white active feedback.
 
 Recommended scene config pattern:
 
@@ -474,10 +476,13 @@ xyMoveHandle: {
   ringRadius: 0.14,
   interactiveRadius: 0.17,
   allowedRotate: false,
+  rotateDirection: -1,
 }
 ```
 
 Use per-view flags such as `withXYMoveBar` or scene defaults such as `withXYMoveBarDefault` to decide which objects receive the helper. The helper owns only visual/raycast behavior. Semantic state, provenance labels, replay snapshots, and flush policy remain scene-owned so replay stores compact scene state rather than dense drag samples.
+
+For dense charts, selected styling should not rely only on mutating a base material. Demo 3 uses selected white overlays above the original line/bar/dot plus gold outline/halo elements so selected marks remain visible even when many marks overlap.
 
 ## Demo 1 Dataset Layout
 

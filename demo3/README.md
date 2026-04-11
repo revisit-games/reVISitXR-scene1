@@ -60,7 +60,9 @@ All four workspace panels opt into the shared `scenes/core/xyMoveHandle.js` help
 
 The user-facing XY move bars sit on the floor as siblings of the panels under the workspace root. Their vertical line uses a bottom-center attachment point just below each rectangular panel, while movement still targets the panel root/center. Dragging a handle moves only that panel's root in Three.js world `X/Z`, keeps the panel's `Y` unchanged, switches the workspace to `free`, and commits the compact `panelLayouts[viewId]` transform only on drag end.
 
-Demo 3 also enables the helper's optional rotation arrows with `demo3VisualConfig.xyMoveHandle.allowedRotate`. The green outer arrows use the helper's `rotateRing*`, `rotateArrow*`, and `rotateInteractive*` knobs, and their separate torus hit target yaws the panel horizontally around Three.js world `Y`. Rotation updates `panel.root.quaternion` during drag and commits the existing `panelLayouts[viewId].quaternion` value on drag end.
+Demo 3 also enables the helper's optional rotation arrows with `demo3VisualConfig.xyMoveHandle.allowedRotate`. The purple outer arrows use the helper's `rotateRing*`, `rotateArrow*`, `rotateHover*`, `rotateActive*`, and `rotateInteractive*` knobs, and their separate torus hit target yaws the panel horizontally around Three.js world `Y`. Rotation updates `panel.root.quaternion` during drag and commits the existing `panelLayouts[viewId].quaternion` value on drag end. `rotateDirection` flips the floor-plane drag direction while keeping rotation yaw-only.
+
+The same shared helper owns move and rotate hover/active feedback. The cyan move ring brightens during hover/drag, while the purple rotation arrows brighten to pale purple/white during hover/drag. Demo 2 keeps rotation disabled.
 
 ## Layout Modes
 
@@ -75,13 +77,13 @@ index.html?scene=3&layout=free
 
 Default layout is `compare`.
 
-Preset transforms live in `demo3VisualConfig.js` under `layouts.compare`, `layouts.focus`, and `layouts.surround`. Future packages can adjust panel positions, yaw, scale, sizes, colors, mark sizes, button sizes, and chart margins in `demo3VisualConfig.js` without editing scene logic.
+Preset transforms live in `demo3VisualConfig.js` under `layouts.compare`, `layouts.focus`, and `layouts.surround`. The side-panel yaw signs face panels inward by default: left panels yaw right and right panels yaw left, while center/front panels remain at zero yaw. Future packages can adjust panel positions, yaw, scale, sizes, colors, mark sizes, button sizes, and chart margins in `demo3VisualConfig.js` without editing scene logic.
 
 ## Linked Highlighting
 
 All views use shared semantic datum ids such as `region:africa`. When linked highlighting is enabled, selecting or hovering a region in any view highlights the same region across the other views. When disabled, hover is local to the active view while `selectedDatumId` remains available to the summary panel and task submission.
 
-Selected datum highlighting is tuned in `demo3VisualConfig.charts` with `selectedColor`, `selectedDimmedOpacity`, `selectedScaleMultiplier`, `selectedOutlineColor`, and `selectedOutlineOpacity`. The selected region uses a white fill with a gold outline/halo across the trend, ranking, comparison, and linked-highlighted views, while non-selected marks dim instead of disappearing.
+Selected datum highlighting is tuned in `demo3VisualConfig.charts` with `selectedColor`, `selectedDimmedOpacity`, `selectedScaleMultiplier`, `selectedOutlineColor`, and `selectedOutlineOpacity`. The selected region uses a white fill plus explicit white selected overlays and a gold outline/halo across the trend, ranking, comparison, and linked-highlighted views, while non-selected marks dim instead of disappearing. The trend view includes a selected line overlay so the selected data line stays visible even when several region lines overlap.
 
 ## Performance Strategy
 

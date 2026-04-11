@@ -288,7 +288,7 @@ function createLineMaterial( { color = 0xffffff, opacity = 1 } = {} ) {
 
   return new THREE.LineBasicMaterial( {
     color,
-    transparent: opacity < 1,
+    transparent: true,
     opacity,
     depthWrite: false,
     toneMapped: false,
@@ -916,6 +916,8 @@ export const demo3SceneDefinition = Object.freeze( {
       if ( line ) {
 
         material.depthWrite = false;
+        material.transparent = true;
+        material.needsUpdate = true;
 
       }
 
@@ -1049,6 +1051,24 @@ export const demo3SceneDefinition = Object.freeze( {
       if ( record.outline ) {
 
         record.outline.visible = state.selected;
+
+      }
+
+      if ( record.selectedOverlay ) {
+
+        record.selectedOverlay.visible = state.selected;
+        record.selectedOverlay.material?.color?.set?.( charts.selectedColor );
+        updateMaterialOpacity( record.selectedOverlay.material, 1 );
+
+      }
+
+      if ( record.selectedLineOverlay ) {
+
+        record.selectedLineOverlay.visible = state.selected;
+        record.selectedLineOverlay.material?.color?.set?.( charts.selectedColor );
+        updateMaterialOpacity( record.selectedLineOverlay.material, 1 );
+        record.selectedLineOverlay.material.transparent = true;
+        record.selectedLineOverlay.material.depthWrite = false;
 
       }
 
@@ -1256,6 +1276,7 @@ export const demo3SceneDefinition = Object.freeze( {
       }
 
       renderAllPanelContent();
+      refreshDatumVisualsNow( { forceSummary: true } );
       updatePanelShellVisuals();
       syncDesktopPanel();
 
@@ -1849,6 +1870,17 @@ export const demo3SceneDefinition = Object.freeze( {
           lineMaterial,
           { name: `demo3-trend-${region.regionId}`, renderOrder: panelStyle.renderOrderBase + 5 },
         );
+        const selectedLineOverlay = createTrackedLine(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          points.map( ( point ) => point.clone().setZ( workspace.contentZ + 0.038 ) ),
+          createLineMaterial( {
+            color: charts.selectedColor,
+            opacity: 1,
+          } ),
+          { name: `demo3-trend-${region.regionId}-selected-line-overlay`, renderOrder: panelStyle.renderOrderBase + 16 },
+        );
+        selectedLineOverlay.visible = false;
 
         const endPoint = points.at( - 1 ) || new THREE.Vector3();
         const endpoint = createCircleMesh(
@@ -1859,6 +1891,20 @@ export const demo3SceneDefinition = Object.freeze( {
           endPoint.clone().setZ( workspace.contentZ + 0.032 ),
           { name: `demo3-trend-${region.regionId}-endpoint`, renderOrder: panelStyle.renderOrderBase + 10 },
         );
+        const selectedEndpointOverlay = createCircleMesh(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          charts.markRadius * 1.12,
+          createMaterial( {
+            color: charts.selectedColor,
+            opacity: 1,
+            transparent: true,
+            depthWrite: false,
+          } ),
+          endPoint.clone().setZ( workspace.contentZ + 0.048 ),
+          { name: `demo3-trend-${region.regionId}-selected-endpoint-overlay`, renderOrder: panelStyle.renderOrderBase + 17 },
+        );
+        selectedEndpointOverlay.visible = false;
         const outline = createRingMesh(
           panel.dynamicEntries,
           panel.contentRoot,
@@ -1870,8 +1916,8 @@ export const demo3SceneDefinition = Object.freeze( {
             transparent: true,
             depthWrite: false,
           } ),
-          endPoint.clone().setZ( workspace.contentZ + 0.041 ),
-          { name: `demo3-trend-${region.regionId}-selected-ring`, renderOrder: panelStyle.renderOrderBase + 15 },
+          endPoint.clone().setZ( workspace.contentZ + 0.052 ),
+          { name: `demo3-trend-${region.regionId}-selected-ring`, renderOrder: panelStyle.renderOrderBase + 18 },
         );
         createRegionProxy( panel, region, new THREE.CircleGeometry( charts.markProxyRadius, 24 ), endPoint.clone().setZ( workspace.contentZ + 0.06 ) );
 
@@ -1900,6 +1946,8 @@ export const demo3SceneDefinition = Object.freeze( {
           material: endpoint.material,
           lineMaterial,
           lineOpacity: charts.lineOpacity,
+          selectedLineOverlay,
+          selectedOverlay: selectedEndpointOverlay,
           baseOpacity: 0.9,
           baseScale: endpoint.scale.clone(),
           hoverScaleMultiplier: 1.55,
@@ -1969,6 +2017,21 @@ export const demo3SceneDefinition = Object.freeze( {
           getChartPosition( x, y, workspace.contentZ + 0.03 ),
           { name: `demo3-ranking-${region.regionId}-bar`, renderOrder: panelStyle.renderOrderBase + 8 },
         );
+        const selectedOverlay = createRectangleMesh(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          width,
+          barHeight,
+          createMaterial( {
+            color: charts.selectedColor,
+            opacity: 1,
+            transparent: true,
+            depthWrite: false,
+          } ),
+          getChartPosition( x, y, workspace.contentZ + 0.044 ),
+          { name: `demo3-ranking-${region.regionId}-selected-overlay`, renderOrder: panelStyle.renderOrderBase + 13 },
+        );
+        selectedOverlay.visible = false;
         createRegionProxy(
           panel,
           region,
@@ -1999,6 +2062,7 @@ export const demo3SceneDefinition = Object.freeze( {
           hoverScaleMultiplier: 1.08,
           scaleMode: 'x',
           outline,
+          selectedOverlay,
           labelAlwaysVisible: true,
           baseRenderOrder: panelStyle.renderOrderBase + 8,
         } );
@@ -2038,6 +2102,20 @@ export const demo3SceneDefinition = Object.freeze( {
           getChartPosition( x, y, workspace.contentZ + 0.035 ),
           { name: `demo3-comparison-${region.regionId}-dot`, renderOrder: panelStyle.renderOrderBase + 9 },
         );
+        const selectedOverlay = createCircleMesh(
+          panel.dynamicEntries,
+          panel.contentRoot,
+          radius,
+          createMaterial( {
+            color: charts.selectedColor,
+            opacity: 1,
+            transparent: true,
+            depthWrite: false,
+          } ),
+          getChartPosition( x, y, workspace.contentZ + 0.044 ),
+          { name: `demo3-comparison-${region.regionId}-selected-overlay`, renderOrder: panelStyle.renderOrderBase + 14 },
+        );
+        selectedOverlay.visible = false;
         const outline = createRingMesh(
           panel.dynamicEntries,
           panel.contentRoot,
@@ -2086,6 +2164,7 @@ export const demo3SceneDefinition = Object.freeze( {
           baseScale: dot.scale.clone(),
           hoverScaleMultiplier: 1.2,
           outline,
+          selectedOverlay,
           labelController,
           labelAlwaysVisible: dataset.regionList.length <= 7,
           baseRenderOrder: panelStyle.renderOrderBase + 9,

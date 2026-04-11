@@ -139,6 +139,12 @@ export function createXYMoveHandle( context, {
   arrowColor = 0xbfe7ff,
   arrowEmissive = 0x1b4760,
   arrowOpacity = 0.86,
+  moveHoverColor = 0xd6f5ff,
+  moveHoverEmissive = 0x2d6d8f,
+  moveHoverOpacity = 0.92,
+  moveActiveColor = 0xffffff,
+  moveActiveEmissive = 0x4aa3d8,
+  moveActiveOpacity = 1,
   hitColor = 0xffffff,
   hitOpacity = 0,
   renderOrder = 1,
@@ -151,12 +157,19 @@ export function createXYMoveHandle( context, {
   rotateRingTubeRadius = 0.01,
   rotateArrowRadius = 0.024,
   rotateArrowLength = 0.052,
-  rotateArrowColor = 0x8df7a4,
-  rotateArrowEmissive = 0x1d5a34,
+  rotateArrowColor = 0xb894ff,
+  rotateArrowEmissive = 0x3a1d66,
   rotateArrowOpacity = 0.88,
+  rotateHoverColor = 0xd9c6ff,
+  rotateHoverEmissive = 0x5b3290,
+  rotateHoverOpacity = 0.96,
+  rotateActiveColor = 0xf3eaff,
+  rotateActiveEmissive = 0x7350b0,
+  rotateActiveOpacity = 1,
   rotateInteractiveRadius = 0.255,
   rotateInteractiveTubeRadius = 0.034,
   minRotateAngleDeg = 1.25,
+  rotateDirection = - 1,
   getTargetPosition = () => new THREE.Vector3(),
   setTargetPosition = () => {},
   getTargetQuaternion = () => DEFAULT_QUATERNION,
@@ -185,6 +198,9 @@ export function createXYMoveHandle( context, {
   const tempParentLocal = new THREE.Vector3();
   const rotationVisuals = [];
   const rotationArrowUp = new THREE.Vector3( 0, 1, 0 );
+  const resolvedRotateDirection = numberOr( rotateDirection, - 1 ) < 0 ? - 1 : 1;
+  const moveHoverSources = new Set();
+  const rotateHoverSources = new Set();
   let activeDrag = null;
   let activeRotate = null;
   let enabled = true;
@@ -277,8 +293,8 @@ export function createXYMoveHandle( context, {
     const rotateRadius = Math.max( 0.001, rotateRingRadius );
     const rotateTube = Math.max( 0.001, rotateRingTubeRadius );
     const rotateMaterialOptions = {
-      color: colorOr( rotateArrowColor, 0x8df7a4 ),
-      emissive: colorOr( rotateArrowEmissive, 0x1d5a34 ),
+      color: colorOr( rotateArrowColor, 0xb894ff ),
+      emissive: colorOr( rotateArrowEmissive, 0x3a1d66 ),
       opacity: numberOr( rotateArrowOpacity, 0.88 ),
       roughness: 0.24,
       metalness: 0.1,
@@ -361,6 +377,12 @@ export function createXYMoveHandle( context, {
 
   decorateHitMesh?.( hitMesh );
   context?.registerRaycastTarget?.( hitMesh, {
+    onHoverChange( payload ) {
+
+      updateHoverSources( moveHoverSources, payload );
+      updateMoveVisualState();
+
+    },
     onSelectStart( payload ) {
 
       if ( ! enabled || context?.getInteractionPolicy?.()?.canInteract === false ) {
@@ -386,6 +408,7 @@ export function createXYMoveHandle( context, {
         offsetZ: startPosition.z - hitPoint.z,
         didMove: false,
       };
+      updateMoveVisualState();
       onDragStart?.( payload );
 
     },
@@ -436,6 +459,7 @@ export function createXYMoveHandle( context, {
       activeDrag = null;
       const finalPosition = readTargetPosition();
       syncFromTarget();
+      updateMoveVisualState();
       onDragEnd?.( payload, finalPosition.clone(), didMove );
 
     },
@@ -444,6 +468,12 @@ export function createXYMoveHandle( context, {
   if ( rotateHitMesh ) {
 
     context?.registerRaycastTarget?.( rotateHitMesh, {
+      onHoverChange( payload ) {
+
+        updateHoverSources( rotateHoverSources, payload );
+        updateRotateVisualState();
+
+      },
       onSelectStart( payload ) {
 
         if ( ! enabled || context?.getInteractionPolicy?.()?.canInteract === false ) {
@@ -469,6 +499,7 @@ export function createXYMoveHandle( context, {
           lastYaw: 0,
           didRotate: false,
         };
+        updateRotateVisualState();
         onRotateStart?.( payload );
 
       },
@@ -492,22 +523,23 @@ export function createXYMoveHandle( context, {
           hitPoint.z - activeRotate.anchorPosition.z,
           hitPoint.x - activeRotate.anchorPosition.x,
         );
-        const deltaYawRad = normalizeAngleRadians( currentAngle - activeRotate.startAngle );
+        const rawDeltaYaw = normalizeAngleRadians( currentAngle - activeRotate.startAngle );
+        const signedDeltaYaw = normalizeAngleRadians( rawDeltaYaw * resolvedRotateDirection );
         const minRotateAngleRad = THREE.MathUtils.degToRad( Math.max( 0, numberOr( minRotateAngleDeg, 1.25 ) ) );
 
-        if ( Math.abs( normalizeAngleRadians( deltaYawRad - activeRotate.lastYaw ) ) <= minRotateAngleRad ) {
+        if ( Math.abs( normalizeAngleRadians( signedDeltaYaw - activeRotate.lastYaw ) ) <= minRotateAngleRad ) {
 
           return;
 
         }
 
         activeRotate.didRotate = true;
-        activeRotate.lastYaw = deltaYawRad;
-        tempYawQuaternion.setFromAxisAngle( WORLD_UP, deltaYawRad );
+        activeRotate.lastYaw = signedDeltaYaw;
+        tempYawQuaternion.setFromAxisAngle( WORLD_UP, signedDeltaYaw );
         tempNextQuaternion.copy( activeRotate.startQuaternion ).premultiply( tempYawQuaternion );
         setTargetQuaternion( tempNextQuaternion.clone() );
         syncFromTarget();
-        onRotateMove?.( payload, tempNextQuaternion.clone(), deltaYawRad );
+        onRotateMove?.( payload, tempNextQuaternion.clone(), signedDeltaYaw );
 
       },
       onSelectEnd( payload ) {
@@ -522,6 +554,7 @@ export function createXYMoveHandle( context, {
         activeRotate = null;
         const finalQuaternion = readTargetQuaternion().clone();
         syncFromTarget();
+        updateRotateVisualState();
         onRotateEnd?.( payload, finalQuaternion, didRotate );
 
       },
@@ -591,6 +624,137 @@ export function createXYMoveHandle( context, {
 
   }
 
+  function updateHoverSources( hoverSources, payload ) {
+
+    const source = payload?.source || 'unknown';
+
+    if ( payload?.isHovered ) {
+
+      hoverSources.add( source );
+
+    } else {
+
+      hoverSources.delete( source );
+
+    }
+
+  }
+
+  function applyMaterialVisualState( material, {
+    color,
+    emissive = null,
+    opacity,
+  } ) {
+
+    if ( ! material ) {
+
+      return;
+
+    }
+
+    material.color?.set?.( color );
+
+    if ( emissive !== null ) {
+
+      material.emissive?.set?.( colorOr( emissive, 0x000000 ) );
+
+    }
+
+    if ( Number.isFinite( opacity ) ) {
+
+      material.opacity = opacity;
+      material.transparent = opacity < 1;
+
+    }
+
+    material.needsUpdate = true;
+
+  }
+
+  function updateMoveVisualState() {
+
+    const isActive = activeDrag !== null;
+    const isHovered = moveHoverSources.size > 0;
+    const stateColor = isActive
+      ? colorOr( moveActiveColor, 0xffffff )
+      : ( isHovered ? colorOr( moveHoverColor, 0xd6f5ff ) : null );
+    const stateEmissive = isActive
+      ? colorOr( moveActiveEmissive, 0x4aa3d8 )
+      : ( isHovered ? colorOr( moveHoverEmissive, 0x2d6d8f ) : null );
+    const stateOpacity = isActive
+      ? numberOr( moveActiveOpacity, 1 )
+      : ( isHovered ? numberOr( moveHoverOpacity, 0.92 ) : null );
+
+    applyMaterialVisualState( line.material, {
+      color: stateColor ?? colorOr( lineColor, 0x88c9f3 ),
+      emissive: stateEmissive ?? colorOr( lineEmissive, 0x133349 ),
+      opacity: stateOpacity ?? numberOr( lineOpacity, 0.8 ),
+    } );
+    applyMaterialVisualState( ring.material, {
+      color: stateColor ?? colorOr( ringColor, 0x7fc9ff ),
+      emissive: stateEmissive ?? colorOr( ringEmissive, 0x17364a ),
+      opacity: stateOpacity ?? numberOr( ringOpacity, 0.82 ),
+    } );
+    applyMaterialVisualState( disc.material, {
+      color: stateColor ?? colorOr( discColor, 0x2c4860 ),
+      opacity: stateOpacity ?? numberOr( discOpacity, 0.26 ),
+    } );
+    arrows.forEach( ( arrow ) => applyMaterialVisualState( arrow.material, {
+      color: stateColor ?? colorOr( arrowColor, 0xbfe7ff ),
+      emissive: stateEmissive ?? colorOr( arrowEmissive, 0x1b4760 ),
+      opacity: stateOpacity ?? numberOr( arrowOpacity, 0.86 ),
+    } ) );
+
+  }
+
+  function updateRotateVisualState() {
+
+    if ( ! canRotate ) {
+
+      return;
+
+    }
+
+    const isActive = activeRotate !== null;
+    const isHovered = rotateHoverSources.size > 0;
+    const stateColor = isActive
+      ? colorOr( rotateActiveColor, 0xf3eaff )
+      : ( isHovered ? colorOr( rotateHoverColor, 0xd9c6ff ) : colorOr( rotateArrowColor, 0xb894ff ) );
+    const stateEmissive = isActive
+      ? colorOr( rotateActiveEmissive, 0x7350b0 )
+      : ( isHovered ? colorOr( rotateHoverEmissive, 0x5b3290 ) : colorOr( rotateArrowEmissive, 0x3a1d66 ) );
+    const stateOpacity = isActive
+      ? numberOr( rotateActiveOpacity, 1 )
+      : ( isHovered ? numberOr( rotateHoverOpacity, 0.96 ) : numberOr( rotateArrowOpacity, 0.88 ) );
+
+    rotationVisuals.forEach( ( visual ) => {
+
+      applyMaterialVisualState( visual.arc.material, {
+        color: stateColor,
+        emissive: stateEmissive,
+        opacity: stateOpacity,
+      } );
+      applyMaterialVisualState( visual.head.material, {
+        color: stateColor,
+        emissive: stateEmissive,
+        opacity: stateOpacity,
+      } );
+
+    } );
+
+  }
+
+  function clearInteractionState() {
+
+    activeDrag = null;
+    activeRotate = null;
+    moveHoverSources.clear();
+    rotateHoverSources.clear();
+    updateMoveVisualState();
+    updateRotateVisualState();
+
+  }
+
   function syncFromTarget() {
 
     const anchorPosition = readAnchorWorldPosition().clone();
@@ -648,6 +812,13 @@ export function createXYMoveHandle( context, {
   function setVisible( isVisible ) {
 
     root.visible = Boolean( isVisible );
+
+    if ( ! root.visible ) {
+
+      clearInteractionState();
+
+    }
+
     hitMesh.visible = root.visible && enabled;
     if ( rotateHitMesh ) {
 
@@ -660,6 +831,13 @@ export function createXYMoveHandle( context, {
   function setEnabled( isEnabled ) {
 
     enabled = Boolean( isEnabled );
+
+    if ( ! enabled ) {
+
+      clearInteractionState();
+
+    }
+
     hitMesh.visible = root.visible && enabled;
     if ( rotateHitMesh ) {
 
@@ -670,6 +848,11 @@ export function createXYMoveHandle( context, {
   }
 
   function dispose() {
+
+    activeDrag = null;
+    activeRotate = null;
+    moveHoverSources.clear();
+    rotateHoverSources.clear();
 
     if ( rotateHitMesh ) {
 
