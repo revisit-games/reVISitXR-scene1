@@ -8,6 +8,8 @@ index.html?scene=5
 
 It is a VR-first landmark height comparison scene inspired by Lee et al., "Data Visceralization: Enabling Deeper Understanding of Data Using Virtual Reality." The scene emphasizes embodied scale comparison rather than chart reading: participants use authored viewpoints, human-scale references, shadow cues, ruler bands, and semantic replayable controls to answer which landmark is tallest.
 
+Demo 5 uses a scene-scoped clear-sky environment with a light ground plane. Its VR authored viewpoints reapply the Demo 5 background, fog, and camera projection after presentation-mode changes so the real-scale landmarks remain visible from base, far, overview, and high vantage points.
+
 ## Local Assets
 
 The scene loads GLB assets from the Repo A `models/` folder first and falls back to OBJ only when the matching GLB fails:
@@ -39,10 +41,19 @@ Semantic state includes:
 - selected landmark
 - comparison mode: `real-scale`, `distant-comparison`, or `miniature-comparison`
 - viewpoint preset: `base_near_selected`, `distant_comparison`, `elevated_overview`, or `high_vantage`
-- annotation, human-reference, shadow, ruler, and quantitative-label toggles
+- human-reference, shadow, ruler, and quantitative-label toggles
+- control panel position and yaw rotation
 - task answer and submission state
 
 Replay restores these semantic values directly. It does not replay raw animation frames or model transitions.
+
+## Controls
+
+The in-scene Control Panel provides landmark, scale mode, viewpoint, cue, reset, and submit buttons. Landmark name labels stay fixed-size; the selected landmark also gets a near-user readable label that is independent of building scale. The annotation visibility state is preserved for compatibility, but there is no longer an `Ann On` / `Ann Off` participant control.
+
+The Control Panel can be moved on the floor plane and yaw-rotated with the shared XY move handle. Demo 5 records the final panel transform only when a move or rotate interaction ends.
+
+Human references use `people1` and `people2` when available, with OBJ fallback only if GLB loading fails. They are placed on the user-facing side of each landmark footprint and remain controlled by the People toggle.
 
 ## Reactive Answers
 

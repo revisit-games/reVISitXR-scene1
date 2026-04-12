@@ -35,6 +35,14 @@ export const DEMO5_VIEWPOINT_PRESET_LIST = Object.freeze( [
 
 export const DEMO5_DEFAULT_COMPARISON_MODE = DEMO5_COMPARISON_MODES.REAL_SCALE;
 export const DEMO5_DEFAULT_VIEWPOINT_PRESET_ID = DEMO5_VIEWPOINT_PRESETS.BASE_NEAR_SELECTED;
+export const DEMO5_DEFAULT_CONTROL_PANEL_POSITION = Object.freeze( [ 1.24, 1.42, - 1.62 ] );
+export const DEMO5_DEFAULT_CONTROL_PANEL_QUATERNION = Object.freeze( [ 0, 0, 0, 1 ] );
+
+function isFiniteNumber( value ) {
+
+  return typeof value === 'number' && Number.isFinite( value );
+
+}
 
 function normalizeStringId( value, fallbackValue = null ) {
 
@@ -86,6 +94,34 @@ export function normalizeDemo5ViewpointPresetId( value, fallbackValue = DEMO5_DE
 
 }
 
+export function normalizeDemo5ControlPanelPosition( value, fallbackValue = DEMO5_DEFAULT_CONTROL_PANEL_POSITION ) {
+
+  if ( Array.isArray( value ) && value.length === 3 && value.every( isFiniteNumber ) ) {
+
+    return [ value[ 0 ], value[ 1 ], value[ 2 ] ];
+
+  }
+
+  return Array.isArray( fallbackValue ) && fallbackValue.length === 3
+    ? [ ...fallbackValue ]
+    : [ ...DEMO5_DEFAULT_CONTROL_PANEL_POSITION ];
+
+}
+
+export function normalizeDemo5ControlPanelQuaternion( value, fallbackValue = DEMO5_DEFAULT_CONTROL_PANEL_QUATERNION ) {
+
+  if ( Array.isArray( value ) && value.length === 4 && value.every( isFiniteNumber ) ) {
+
+    return [ value[ 0 ], value[ 1 ], value[ 2 ], value[ 3 ] ];
+
+  }
+
+  return Array.isArray( fallbackValue ) && fallbackValue.length === 4
+    ? [ ...fallbackValue ]
+    : [ ...DEMO5_DEFAULT_CONTROL_PANEL_QUATERNION ];
+
+}
+
 export function parseDemo5Conditions( search = window.location.search, {
   defaultTaskId = DEMO5_DEFAULT_TASK_ID,
 } = {} ) {
@@ -106,6 +142,8 @@ export function parseDemo5Conditions( search = window.location.search, {
     quantLabelsVisible: searchParams.get( 'quant' ) === '1',
     taskAnswer: null,
     taskSubmitted: false,
+    controlPanelPosition: [ ...DEMO5_DEFAULT_CONTROL_PANEL_POSITION ],
+    controlPanelQuaternion: [ ...DEMO5_DEFAULT_CONTROL_PANEL_QUATERNION ],
   };
 
 }
@@ -157,6 +195,14 @@ export function normalizeDemo5SceneState( candidateState, fallbackState = null, 
     taskSubmitted: typeof candidateState?.taskSubmitted === 'boolean'
       ? candidateState.taskSubmitted
       : Boolean( fallback.taskSubmitted ),
+    controlPanelPosition: normalizeDemo5ControlPanelPosition(
+      candidateState?.controlPanelPosition,
+      normalizeDemo5ControlPanelPosition( fallback.controlPanelPosition, DEMO5_DEFAULT_CONTROL_PANEL_POSITION ),
+    ),
+    controlPanelQuaternion: normalizeDemo5ControlPanelQuaternion(
+      candidateState?.controlPanelQuaternion,
+      normalizeDemo5ControlPanelQuaternion( fallback.controlPanelQuaternion, DEMO5_DEFAULT_CONTROL_PANEL_QUATERNION ),
+    ),
   };
 
 }

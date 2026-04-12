@@ -4,9 +4,12 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { PRESENTATION_MODES } from '../logging/xrLoggingSchema.js';
 import { createSceneUiSurface } from '../scenes/core/sceneUiSurface.js';
 import { createTextPlane } from '../scenes/core/textPlane.js';
+import { createXYMoveHandle } from '../scenes/core/xyMoveHandle.js';
 import {
   DEMO5_COMPARISON_MODES,
   DEMO5_VIEWPOINT_PRESETS,
+  normalizeDemo5ControlPanelPosition,
+  normalizeDemo5ControlPanelQuaternion,
   normalizeDemo5ComparisonMode,
   normalizeDemo5LandmarkId,
   normalizeDemo5SceneState,
@@ -618,6 +621,8 @@ export const demo5SceneDefinition = Object.freeze( {
     let loadStatus = 'loading';
     let loadError = null;
     let hoveredLandmarkId = null;
+    let controlPanelMoveHandle = null;
+    let selectedLabelController = null;
 
     const previousCameraSettings = {
       near: context.camera.near,
@@ -634,7 +639,8 @@ export const demo5SceneDefinition = Object.freeze( {
     landmarkRoot.name = 'demo5-landmark-root';
     annotationRoot.name = 'demo5-annotation-root';
     controlPanelRoot.name = 'demo5-control-panel-root';
-    controlPanelRoot.position.copy( vector3FromArray( demo5VisualConfig.panel.position ) );
+    controlPanelRoot.position.copy( vector3FromArray( currentSceneState.controlPanelPosition, demo5VisualConfig.panel.position ) );
+    controlPanelRoot.quaternion.copy( quaternionFromArray( currentSceneState.controlPanelQuaternion ) );
     root.add( worldRoot );
     root.add( controlPanelRoot );
     worldRoot.add( landmarkRoot );
@@ -778,8 +784,9 @@ export const demo5SceneDefinition = Object.freeze( {
 
       const group = new THREE.Group();
       group.name = `demo5-human-fallbacks-${record.landmark.id}`;
+      const spacing = Math.max( 0.4, demo5VisualConfig.people.spacingMeters );
 
-      [ - 0.45, 0.45 ].forEach( ( xOffset, index ) => {
+      [ - spacing * 0.5, spacing * 0.5 ].forEach( ( xOffset, index ) => {
 
         const person = new THREE.Group();
         person.name = `demo5-human-fallback-${record.landmark.id}-${index}`;
@@ -869,8 +876,11 @@ export const demo5SceneDefinition = Object.freeze( {
       record.shadow.scale.set( radius * 2.2, radius * 0.9, 1 );
       record.shadow.position.set( radius * 0.32, 0.018, - radius * 0.7 );
 
-      const peopleOffset = Math.max( radius + demo5VisualConfig.people.offsetMeters, 7 );
-      record.humanFallbackGroup.position.set( - peopleOffset, 0, - Math.max( radius * 0.65, 4.5 ) );
+      const peopleOffset = Math.max(
+        radius + demo5VisualConfig.people.frontClearanceMeters,
+        demo5VisualConfig.people.minFrontDistanceMeters,
+      );
+      record.humanFallbackGroup.position.set( 0, 0, peopleOffset );
       record.humanModelGroup.position.copy( record.humanFallbackGroup.position );
       rebuildRuler( record );
 
@@ -1125,6 +1135,18 @@ export const demo5SceneDefinition = Object.freeze( {
 
       } );
 
+      selectedLabelController = createTrackedTextPlane(
+        disposables,
+        root,
+        {
+          ...demo5VisualConfig.text.selectedLabel,
+          text: '',
+        },
+        [ 0, 1.4, - 1.75 ],
+        { name: 'demo5-selected-near-user-label', renderOrder: 42, depthTest: false },
+      );
+      selectedLabelController.mesh.visible = false;
+
     }
 
     function getLandmarkDisplayPosition( landmarkId ) {
@@ -1142,37 +1164,56 @@ export const demo5SceneDefinition = Object.freeze( {
 
     }
 
-    function getCurrentLayoutCenter() {
+    function getCurrentLayoutBounds() {
 
       const layout = getLayoutForMode( currentSceneState.comparisonMode );
       let minX = Infinity;
       let maxX = - Infinity;
       let minZ = Infinity;
       let maxZ = - Infinity;
+      let maxY = 0;
 
       getDemo5Landmarks().forEach( ( landmark ) => {
 
         const position = vector3FromArray( layout.positions[ landmark.id ], [ 0, 0, 0 ] );
         const record = landmarkRecords.get( landmark.id );
         const radius = Math.max( record?.footprintRadius || 0, 0 ) * layout.scale;
+        const displayHeight = landmark.heightMeters * layout.scale;
         minX = Math.min( minX, position.x - radius );
         maxX = Math.max( maxX, position.x + radius );
         minZ = Math.min( minZ, position.z - radius );
         maxZ = Math.max( maxZ, position.z + radius );
+        maxY = Math.max( maxY, displayHeight );
 
       } );
 
       if ( ! Number.isFinite( minX ) || ! Number.isFinite( maxX ) || ! Number.isFinite( minZ ) || ! Number.isFinite( maxZ ) ) {
 
-        return new THREE.Vector3();
+        return {
+          center: new THREE.Vector3(),
+          width: 0,
+          depth: 0,
+          height: 0,
+        };
 
       }
 
-      return new THREE.Vector3(
-        ( minX + maxX ) * 0.5,
-        0,
-        ( minZ + maxZ ) * 0.5,
-      );
+      return {
+        center: new THREE.Vector3(
+          ( minX + maxX ) * 0.5,
+          0,
+          ( minZ + maxZ ) * 0.5,
+        ),
+        width: maxX - minX,
+        depth: maxZ - minZ,
+        height: maxY,
+      };
+
+    }
+
+    function getCurrentLayoutCenter() {
+
+      return getCurrentLayoutBounds().center;
 
     }
 
@@ -1206,6 +1247,81 @@ export const demo5SceneDefinition = Object.freeze( {
       }
 
       return DEMO5_VIEWPOINT_PRESETS.DISTANT_COMPARISON;
+
+    }
+
+    function resolveVRViewPlacement( vrConfig, isMiniature, layoutBounds ) {
+
+      if ( isMiniature ) {
+
+        return {
+          distance: vrConfig.miniatureDistanceMeters,
+          height: vrConfig.miniatureHeightMeters,
+        };
+
+      }
+
+      const widthDistance = Math.max( 0, layoutBounds.width ) * ( vrConfig.realDistanceWidthFactor || 0 );
+      const heightDistance = Math.max( 0, layoutBounds.height ) * ( vrConfig.realDistanceHeightFactor || 0 );
+      const unclampedDistance = Math.max(
+        vrConfig.realMinDistanceMeters || 0,
+        widthDistance,
+        heightDistance,
+      );
+      const maxDistance = Number.isFinite( vrConfig.realMaxDistanceMeters )
+        ? vrConfig.realMaxDistanceMeters
+        : unclampedDistance;
+      const unclampedHeight = Math.max(
+        vrConfig.realMinHeightMeters || 0,
+        Math.max( 0, layoutBounds.height ) * ( vrConfig.realHeightFactor || 0 ),
+      );
+      const maxHeight = Number.isFinite( vrConfig.realMaxHeightMeters )
+        ? vrConfig.realMaxHeightMeters
+        : unclampedHeight;
+
+      return {
+        distance: THREE.MathUtils.clamp( unclampedDistance, 0, maxDistance ),
+        height: THREE.MathUtils.clamp( unclampedHeight, 0, maxHeight ),
+      };
+
+    }
+
+    function syncControlPanelTransformFromState() {
+
+      if ( controlPanelMoveHandle?.isDragging?.() || controlPanelMoveHandle?.isRotating?.() ) {
+
+        return;
+
+      }
+
+      const panelPosition = normalizeDemo5ControlPanelPosition(
+        currentSceneState.controlPanelPosition,
+        demo5VisualConfig.panel.position,
+      );
+      const panelQuaternion = normalizeDemo5ControlPanelQuaternion( currentSceneState.controlPanelQuaternion );
+      controlPanelRoot.position.copy( vector3FromArray( panelPosition, demo5VisualConfig.panel.position ) );
+      controlPanelRoot.quaternion.copy( quaternionFromArray( panelQuaternion ) );
+      controlPanelMoveHandle?.syncFromTarget?.();
+
+    }
+
+    function commitControlPanelTransform( source, { shouldLog = true } = {} ) {
+
+      currentSceneState.controlPanelPosition = normalizeDemo5ControlPanelPosition(
+        controlPanelRoot.position.toArray(),
+        demo5VisualConfig.panel.position,
+      );
+      currentSceneState.controlPanelQuaternion = normalizeDemo5ControlPanelQuaternion(
+        controlPanelRoot.quaternion.toArray(),
+      );
+
+      if ( shouldLog ) {
+
+        recordSceneChange( 'controlPanelTransform', source || 'demo5-control-panel-transform', {
+          flushImmediately: getSceneStateLoggingConfig().flushOnControlPanelTransformEnd === true,
+        } );
+
+      }
 
     }
 
@@ -1309,7 +1425,8 @@ export const demo5SceneDefinition = Object.freeze( {
         const position = getLandmarkDisplayPosition( landmark.id );
         const displayHeight = getDisplayHeight( landmark, currentSceneState.comparisonMode );
         const selected = landmark.id === currentSceneState.selectedLandmarkId;
-        labels.baseLabel.mesh.visible = currentSceneState.annotationsVisible;
+        const hideSelectedLocalLabel = selected && ! miniature;
+        labels.baseLabel.mesh.visible = currentSceneState.annotationsVisible && ! hideSelectedLocalLabel;
         labels.heightLabel.mesh.visible = currentSceneState.annotationsVisible && currentSceneState.quantLabelsVisible;
         labels.baseLabel.mesh.position.set(
           position.x,
@@ -1329,6 +1446,76 @@ export const demo5SceneDefinition = Object.freeze( {
         labels.heightLabel.mesh.scale.multiplyScalar( baseModeScale * ( selected ? labelConfig.selectedHeightScale : 1 ) );
 
       } );
+
+    }
+
+    function syncSelectedLandmarkLabel() {
+
+      if ( ! selectedLabelController ) {
+
+        return;
+
+      }
+
+      const selectedLandmark = getSelectedLandmark();
+
+      if ( ! selectedLandmark ) {
+
+        selectedLabelController.mesh.visible = false;
+        return;
+
+      }
+
+      const labelConfig = demo5VisualConfig.labels;
+      const selectedPosition = getLandmarkDisplayPosition( selectedLandmark.id );
+      const displayHeight = getDisplayHeight( selectedLandmark, currentSceneState.comparisonMode );
+      const selectedWorld = selectedPosition.clone();
+      selectedWorld.y = Math.min( Math.max( displayHeight * 0.04, 1.4 ), 4.2 );
+      worldRoot.updateMatrixWorld( true );
+      worldRoot.localToWorld( selectedWorld );
+
+      const cameraWorld = new THREE.Vector3();
+      context.camera.updateMatrixWorld( true );
+      context.camera.getWorldPosition( cameraWorld );
+
+      const forward = selectedWorld.clone().sub( cameraWorld );
+      forward.y = 0;
+
+      if ( forward.lengthSq() < 0.0001 ) {
+
+        context.camera.getWorldDirection( forward );
+        forward.y = 0;
+
+      }
+
+      if ( forward.lengthSq() < 0.0001 ) {
+
+        forward.set( 0, 0, - 1 );
+
+      }
+
+      forward.normalize();
+      const right = new THREE.Vector3().crossVectors( forward, WORLD_UP ).normalize();
+      const labelWorld = cameraWorld.clone()
+        .addScaledVector( forward, labelConfig.selectedNearDistanceMeters )
+        .addScaledVector( right, labelConfig.selectedNearLateralOffsetMeters );
+      labelWorld.y = Math.max(
+        labelConfig.selectedNearMinY,
+        cameraWorld.y + labelConfig.selectedNearEyeOffsetMeters,
+      );
+
+      root.updateMatrixWorld( true );
+      root.worldToLocal( labelWorld );
+      selectedLabelController.mesh.position.copy( labelWorld );
+
+      if ( selectedLabelController.mesh.userData.textContent !== selectedLandmark.label ) {
+
+        selectedLabelController.setText( selectedLandmark.label );
+
+      }
+
+      selectedLabelController.mesh.visible = true;
+      selectedLabelController.mesh.material.opacity = 1;
 
     }
 
@@ -1352,9 +1539,9 @@ export const demo5SceneDefinition = Object.freeze( {
 
       }
 
-      const layoutCenter = getCurrentLayoutCenter();
-      const distance = isMiniature ? vrConfig.miniatureDistanceMeters : vrConfig.realDistanceMeters;
-      const height = isMiniature ? vrConfig.miniatureHeightMeters : vrConfig.realHeightMeters;
+      const layoutBounds = getCurrentLayoutBounds();
+      const layoutCenter = layoutBounds.center;
+      const { distance, height } = resolveVRViewPlacement( vrConfig, isMiniature, layoutBounds );
       worldRoot.position.set(
         - layoutCenter.x,
         - height,
@@ -1429,12 +1616,22 @@ export const demo5SceneDefinition = Object.freeze( {
 
     function orientBillboards() {
 
+      const cameraWorld = new THREE.Vector3();
+      context.camera.updateMatrixWorld( true );
+      context.camera.getWorldPosition( cameraWorld );
+
       labelRecords.forEach( ( labels ) => {
 
-        labels.baseLabel.mesh.lookAt( context.camera.position );
-        labels.heightLabel.mesh.lookAt( context.camera.position );
+        labels.baseLabel.mesh.lookAt( cameraWorld );
+        labels.heightLabel.mesh.lookAt( cameraWorld );
 
       } );
+
+      if ( selectedLabelController?.mesh.visible ) {
+
+        selectedLabelController.mesh.lookAt( cameraWorld );
+
+      }
 
     }
 
@@ -1544,6 +1741,8 @@ export const demo5SceneDefinition = Object.freeze( {
       syncLandmarkVisuals();
       syncAnnotationLabels();
       syncViewpoint();
+      syncSelectedLandmarkLabel();
+      syncControlPanelTransformFromState();
       syncStatusText();
       syncButtons();
       orientBillboards();
@@ -1809,18 +2008,17 @@ export const demo5SceneDefinition = Object.freeze( {
 
       createPanelFrame();
       const panel = demo5VisualConfig.panel;
-      const landmarkColumns = [ - 0.45, 0.45 ];
+      const landmarkColumns = [ - 0.64, 0.64 ];
       const landmarkRows = [ panel.rowY.landmarksTop, panel.rowY.landmarksBottom ];
-      const columns4 = [ - 0.72, - 0.24, 0.24, 0.72 ];
-      const columns3 = [ - 0.5, 0, 0.5 ];
-      const columns5 = [ - 0.76, - 0.38, 0, 0.38, 0.76 ];
+      const columns4 = [ - 0.9, - 0.3, 0.3, 0.9 ];
+      const columns3 = [ - 0.62, 0, 0.62 ];
 
       getDemo5Landmarks().forEach( ( landmark, index ) => {
 
         createPanelButton( {
           key: `landmark-${landmark.id}`,
           label: landmark.label,
-          width: 0.82,
+          width: 1.18,
           position: [ landmarkColumns[ index % 2 ], landmarkRows[ Math.floor( index / 2 ) ] ],
           onPress: ( source ) => selectLandmark( landmark.id, source ),
           landmarkId: landmark.id,
@@ -1862,7 +2060,6 @@ export const demo5SceneDefinition = Object.freeze( {
       } );
 
       [
-        [ 'annotationsVisible', 'Ann', 'annotations', 'flushOnAnnotationToggle' ],
         [ 'humanReferenceVisible', 'People', 'humanReference', 'flushOnHumanReferenceToggle' ],
         [ 'shadowCueVisible', 'Shadow', 'shadowCue', 'flushOnShadowCueToggle' ],
         [ 'rulerCueVisible', 'Ruler', 'rulerCue', 'flushOnRulerCueToggle' ],
@@ -1872,8 +2069,8 @@ export const demo5SceneDefinition = Object.freeze( {
         createPanelButton( {
           key: `toggle-${key}`,
           label,
-          width: 0.36,
-          position: [ columns5[ index ], panel.rowY.cues ],
+          width: 0.68,
+          position: [ columns4[ index ], panel.rowY.cues ],
           onPress: ( source ) => toggleBooleanState( key, labelKey, source, flushKey ),
           toggleKey: key,
           getLabel: ( active ) => `${label} ${active ? 'On' : 'Off'}`,
@@ -1884,15 +2081,15 @@ export const demo5SceneDefinition = Object.freeze( {
       createPanelButton( {
         key: 'reset',
         label: 'Reset',
-        width: 0.52,
-        position: [ - 0.3, panel.rowY.actions ],
+        width: 0.72,
+        position: [ - 0.42, panel.rowY.actions ],
         onPress: ( source ) => resetScene( source ),
       } );
       createPanelButton( {
         key: 'submit',
         label: 'Submit',
-        width: 0.52,
-        position: [ 0.3, panel.rowY.actions ],
+        width: 0.72,
+        position: [ 0.42, panel.rowY.actions ],
         onPress: ( source ) => submitTask( source ),
       } );
 
@@ -1906,6 +2103,55 @@ export const demo5SceneDefinition = Object.freeze( {
         [ 0, panel.rowY.footer, 0.026 ],
         { name: 'demo5-panel-footer', renderOrder: 34, depthTest: false },
       );
+
+    }
+
+    function attachControlPanelMoveHandle() {
+
+      const panel = demo5VisualConfig.panel;
+      controlPanelMoveHandle = createXYMoveHandle( context, {
+        parent: root,
+        name: 'demo5-control-panel-xy-move-handle',
+        ...demo5VisualConfig.controlPanel.xyMoveHandle,
+        targetObject: controlPanelRoot,
+        anchorLocalPosition: [ 0, - panel.height * 0.5 - 0.06, 0 ],
+        getTargetPosition: () => controlPanelRoot.position,
+        setTargetPosition( nextPosition ) {
+
+          controlPanelRoot.position.set( nextPosition.x, controlPanelRoot.position.y, nextPosition.z );
+          controlPanelMoveHandle?.syncFromTarget?.();
+
+        },
+        getTargetQuaternion: () => controlPanelRoot.quaternion,
+        setTargetQuaternion( nextQuaternion ) {
+
+          controlPanelRoot.quaternion.copy( nextQuaternion );
+          controlPanelMoveHandle?.syncFromTarget?.();
+
+        },
+        onDragEnd( payload, _finalPosition, didMove ) {
+
+          commitControlPanelTransform( payload.source || 'demo5-control-panel-move-end', {
+            shouldLog: didMove === true,
+          } );
+
+        },
+        onRotateEnd( payload, _finalQuaternion, didRotate ) {
+
+          commitControlPanelTransform( payload.source || 'demo5-control-panel-rotate-end', {
+            shouldLog: didRotate === true,
+          } );
+
+        },
+      } );
+      disposables.push( {
+        dispose() {
+
+          controlPanelMoveHandle?.dispose?.();
+          controlPanelMoveHandle = null;
+
+        },
+      } );
 
     }
 
@@ -2002,7 +2248,6 @@ export const demo5SceneDefinition = Object.freeze( {
       cueRow.setAttribute( 'style', style.buttonRow );
       const toggleButtons = new Map();
       [
-        [ 'annotationsVisible', 'Annotations', 'annotations', 'flushOnAnnotationToggle' ],
         [ 'humanReferenceVisible', 'People', 'humanReference', 'flushOnHumanReferenceToggle' ],
         [ 'shadowCueVisible', 'Shadows', 'shadowCue', 'flushOnShadowCueToggle' ],
         [ 'rulerCueVisible', 'Ruler', 'rulerCue', 'flushOnRulerCueToggle' ],
@@ -2068,7 +2313,8 @@ export const demo5SceneDefinition = Object.freeze( {
         const clone = template.object.clone( true );
         clone.name = `demo5-human-reference-${record.landmark.id}-${template.id}`;
         clone.position.x = ( index - ( templates.length - 1 ) * 0.5 ) * demo5VisualConfig.people.spacingMeters;
-        clone.position.z = index % 2 === 0 ? 0 : - 0.85;
+        clone.position.y = 0;
+        clone.position.z = 0;
         clone.rotation.y = index % 2 === 0 ? THREE.MathUtils.degToRad( 18 ) : THREE.MathUtils.degToRad( - 16 );
         applyObjectRenderingDefaults( clone );
         record.humanModelGroup.add( clone );
@@ -2223,6 +2469,11 @@ export const demo5SceneDefinition = Object.freeze( {
         quantLabelsVisible: currentSceneState.quantLabelsVisible,
         taskAnswer: currentSceneState.taskAnswer,
         taskSubmitted: currentSceneState.taskSubmitted,
+        controlPanelPosition: normalizeDemo5ControlPanelPosition(
+          currentSceneState.controlPanelPosition,
+          demo5VisualConfig.panel.position,
+        ),
+        controlPanelQuaternion: normalizeDemo5ControlPanelQuaternion( currentSceneState.controlPanelQuaternion ),
       };
 
     }
@@ -2287,6 +2538,7 @@ export const demo5SceneDefinition = Object.freeze( {
     getDemo5Landmarks().forEach( createLandmarkRecord );
     createAnnotationRecords();
     buildInScenePanel();
+    attachControlPanelMoveHandle();
     createDesktopPanel();
     applySceneEnvironment();
     syncVisuals();
@@ -2295,6 +2547,7 @@ export const demo5SceneDefinition = Object.freeze( {
       activate() {
 
         context.sceneContentRoot.add( root );
+        applySceneEnvironment();
         loadAssets();
         syncVisuals();
 
@@ -2324,6 +2577,7 @@ export const demo5SceneDefinition = Object.freeze( {
       },
       update() {
 
+        syncSelectedLandmarkLabel();
         orientBillboards();
 
       },
@@ -2391,6 +2645,7 @@ export const demo5SceneDefinition = Object.freeze( {
         unsupportedImmersiveMode = presentationMode === PRESENTATION_MODES.IMMERSIVE_AR
           ? PRESENTATION_MODES.IMMERSIVE_AR
           : null;
+        applySceneEnvironment();
         syncVisuals();
 
       },
