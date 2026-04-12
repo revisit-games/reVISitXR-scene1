@@ -29,7 +29,7 @@ const domains = getLocalIPv4s();
 
 export default defineConfig( ( { command } ) => ( {
   // Use relative asset paths for production builds so the bundle can live under
-  // ReVISit's public/<study>/assets/... subdirectories without broken imports.
+  // nested study-asset directories without broken imports.
   base: command === 'build' ? './' : '/',
   plugins: [
     basicSsl( {

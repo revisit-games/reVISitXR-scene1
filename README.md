@@ -237,6 +237,8 @@ Scene selection is URL-driven:
   Loads Demo 3, the paper-facing immersive analytic workspace.
 - `index.html?scene=4`
   Loads Demo 4, an AR-first situated campus monitoring overlay.
+- `index.html?scene=5`
+  Loads Demo 5, a VR-first landmark scale visceralization.
 
 Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene definition provides:
 
@@ -660,7 +662,24 @@ The local dataset contains six deterministic campus sites, three time slices, an
 
 Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface. A separate live-AR-only instruction card stays above the stabilized placement footprint before the overlay is anchored; analysis replay hides that helper and uses a labeled gray support pedestal to show elevated real-world surface height. Replay free-camera inspection also disables gaze dwell so it cannot change marker focus or selection, while the recorded shared `user-gaze` replay pointer can show the `USER GAZE: GAZE DWELL` ray and hit point. The in-scene Control Panel defaults behind the site cylinders and its title strip supports height-only ray dragging, persisted as compact `controlPanelY` scene state.
 
-Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include an automatic copy or mirror command for moving that build into any study repo; deployment or study asset refresh remains an explicit external step.
+Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
+
+## Demo 5 Landmark Scale Layout
+
+Demo 5 keeps its landmark scale visceralization under `demo5/`:
+
+- `demo5/demo5Data.js`
+- `demo5/demo5Scene.js`
+- `demo5/demo5VisualConfig.js`
+- `demo5/demo5Conditions.js`
+- `demo5/demo5Tasks.js`
+- `demo5/demo5LoggingConfig.js`
+
+The scene uses local model files from `models/` with GLB-first loading and OBJ fallback. Landmark metadata stays centralized in `demo5/demo5Data.js`, including label, height in meters, source label, source URL, and Vite-resolved asset URLs. After each model loads, Demo 5 computes its bounding box, scales it uniformly to the intended height, moves the base to `y=0`, and centers the X/Z footprint so relative height is the primary visual contract.
+
+The default task asks "Which landmark is tallest?" and stores the submitted selected landmark id as semantic state. The expected answer is `burj_khalifa`. Replay restores the selected landmark, comparison mode, authored viewpoint, cue toggles, task answer, and submission state directly instead of replaying raw animation frames.
+
+Repo A builds Demo 5 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
 
 ## Example 1 Dataset Layout
 
@@ -791,7 +810,7 @@ Pointer tooltip customization:
 Replay user-head avatar:
 
 - the replay avatar is loaded from `headModelPath`, which defaults to `'/userhead.obj'`
-- the loader resolves that path relative to the current stimulus page, so the built package still works when copied under `public/<study>/assets/reVISitXR/`
+- the loader resolves that path relative to the current stimulus page, so the built package still works from nested study asset directories
 - the shipped head asset is OBJ only; no animation pipeline is required
 - `headScale` and `headRotationY` tune the imported model itself
 - `headOffsetBack` and `headOffsetDown` control where the avatar sits relative to the recorded replay camera pose
