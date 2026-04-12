@@ -685,6 +685,28 @@ export const demo5SceneDefinition = Object.freeze( {
     );
     ground.receiveShadow = true;
 
+    if ( demo5VisualConfig.environment.skyDomeEnabled === true ) {
+
+      const skyDome = createTrackedMesh(
+        disposables,
+        root,
+        new THREE.SphereGeometry( demo5VisualConfig.environment.skyDomeRadius, 48, 24 ),
+        createBasicMaterial( {
+          color: demo5VisualConfig.environment.skyDomeColor,
+          opacity: demo5VisualConfig.environment.skyDomeOpacity,
+          side: THREE.BackSide,
+          depthWrite: false,
+          depthTest: false,
+        } ),
+        {
+          name: 'demo5-clear-sky-dome',
+          renderOrder: - 100,
+        },
+      );
+      skyDome.frustumCulled = false;
+
+    }
+
     const ambientLight = new THREE.AmbientLight( 0xfff5df, 0.72 );
     ambientLight.name = 'demo5-ambient-light';
     root.add( ambientLight );
@@ -854,6 +876,105 @@ export const demo5SceneDefinition = Object.freeze( {
 
     }
 
+    function createLandmarkRaycastHandlers( record ) {
+
+      return {
+        onHoverChange( payload ) {
+
+          hoveredLandmarkId = payload.isHovered
+            ? record.landmark.id
+            : ( hoveredLandmarkId === record.landmark.id ? null : hoveredLandmarkId );
+          syncLandmarkVisuals();
+
+        },
+        onSelectStart( payload ) {
+
+          selectLandmark( record.landmark.id, payload.source || `demo5-landmark-${record.landmark.id}` );
+
+        },
+      };
+
+    }
+
+    function registerLandmarkRaycastTarget( record, target, kind ) {
+
+      if ( ! target || record.raycastTargets.has( target ) ) {
+
+        return;
+
+      }
+
+      target.userData.demo5LandmarkId = record.landmark.id;
+      target.userData.demo5RaycastTargetKind = kind;
+      context.registerRaycastTarget?.( target, record.raycastHandlers );
+      record.raycastTargets.add( target );
+
+      if ( kind === 'model' ) {
+
+        record.modelRaycastTargets.add( target );
+
+      }
+
+    }
+
+    function unregisterLandmarkRaycastTarget( record, target ) {
+
+      if ( ! target || ! record.raycastTargets.has( target ) ) {
+
+        return;
+
+      }
+
+      context.unregisterRaycastTarget?.( target );
+      record.raycastTargets.delete( target );
+      record.modelRaycastTargets.delete( target );
+
+      if ( target.userData.demo5LandmarkId === record.landmark.id ) {
+
+        delete target.userData.demo5LandmarkId;
+        delete target.userData.demo5RaycastTargetKind;
+
+      }
+
+    }
+
+    function unregisterLandmarkModelRaycastTargets( record ) {
+
+      [ ...record.modelRaycastTargets ].forEach( ( target ) => unregisterLandmarkRaycastTarget( record, target ) );
+      record.modelRaycastTargets.clear();
+
+    }
+
+    function unregisterAllLandmarkRaycastTargets( record ) {
+
+      [ ...record.raycastTargets ].forEach( ( target ) => unregisterLandmarkRaycastTarget( record, target ) );
+      record.raycastTargets.clear();
+      record.modelRaycastTargets.clear();
+
+    }
+
+    function refreshLandmarkModelRaycastTargets( record ) {
+
+      unregisterLandmarkModelRaycastTargets( record );
+
+      if ( ! record.loadedObject ) {
+
+        return;
+
+      }
+
+      record.loadedObject.traverse( ( child ) => {
+
+        if ( child.isMesh ) {
+
+          registerLandmarkRaycastTarget( record, child, 'model' );
+
+        }
+
+      } );
+
+    }
+
     function createLandmarkRecord( landmark ) {
 
       const group = new THREE.Group();
@@ -866,7 +987,7 @@ export const demo5SceneDefinition = Object.freeze( {
       modelHolder.add( fallback.group );
 
       const hitProxy = new THREE.Mesh(
-        new THREE.CylinderGeometry( 1, 1, 1, 32, 1, true ),
+        new THREE.CylinderGeometry( 1, 1, 1, 32, 1, false ),
         createBasicMaterial( {
           color: 0xffffff,
           opacity: 0,
@@ -945,35 +1066,24 @@ export const demo5SceneDefinition = Object.freeze( {
         loadError: null,
         footprintRadius: fallback.footprintRadius,
         rulerGroup: new THREE.Group(),
+        raycastHandlers: null,
+        raycastTargets: new Set(),
+        modelRaycastTargets: new Set(),
       };
+      record.raycastHandlers = createLandmarkRaycastHandlers( record );
       record.humanFallbackGroup = createHumanFallbacks( record );
       record.humanModelGroup.name = `demo5-human-models-${landmark.id}`;
       record.rulerGroup.name = `demo5-ruler-${landmark.id}`;
       group.add( record.humanFallbackGroup, record.humanModelGroup, record.rulerGroup );
       landmarkRoot.add( group );
-
-      context.registerRaycastTarget?.( hitProxy, {
-        onHoverChange( payload ) {
-
-          hoveredLandmarkId = payload.isHovered
-            ? landmark.id
-            : ( hoveredLandmarkId === landmark.id ? null : hoveredLandmarkId );
-          syncLandmarkVisuals();
-
-        },
-        onSelectStart( payload ) {
-
-          selectLandmark( landmark.id, payload.source || `demo5-landmark-${landmark.id}` );
-
-        },
-      } );
+      registerLandmarkRaycastTarget( record, hitProxy, 'proxy' );
 
       landmarkRecords.set( landmark.id, record );
       updateLandmarkAuxiliaryGeometry( record );
       disposables.push( {
         dispose() {
 
-          context.unregisterRaycastTarget?.( hitProxy );
+          unregisterAllLandmarkRaycastTargets( record );
           group.removeFromParent();
           disposeObjectTree( group );
 
@@ -1021,6 +1131,81 @@ export const demo5SceneDefinition = Object.freeze( {
 
       const layout = getLayoutForMode( currentSceneState.comparisonMode );
       return vector3FromArray( layout.positions[ landmarkId ], [ 0, 0, 0 ] );
+
+    }
+
+    function getLandmarkDisplayFootprintRadius( landmarkId ) {
+
+      const layout = getLayoutForMode( currentSceneState.comparisonMode );
+      const record = landmarkRecords.get( landmarkId );
+      return Math.max( record?.footprintRadius || 0, 0 ) * layout.scale;
+
+    }
+
+    function getCurrentLayoutCenter() {
+
+      const layout = getLayoutForMode( currentSceneState.comparisonMode );
+      let minX = Infinity;
+      let maxX = - Infinity;
+      let minZ = Infinity;
+      let maxZ = - Infinity;
+
+      getDemo5Landmarks().forEach( ( landmark ) => {
+
+        const position = vector3FromArray( layout.positions[ landmark.id ], [ 0, 0, 0 ] );
+        const record = landmarkRecords.get( landmark.id );
+        const radius = Math.max( record?.footprintRadius || 0, 0 ) * layout.scale;
+        minX = Math.min( minX, position.x - radius );
+        maxX = Math.max( maxX, position.x + radius );
+        minZ = Math.min( minZ, position.z - radius );
+        maxZ = Math.max( maxZ, position.z + radius );
+
+      } );
+
+      if ( ! Number.isFinite( minX ) || ! Number.isFinite( maxX ) || ! Number.isFinite( minZ ) || ! Number.isFinite( maxZ ) ) {
+
+        return new THREE.Vector3();
+
+      }
+
+      return new THREE.Vector3(
+        ( minX + maxX ) * 0.5,
+        0,
+        ( minZ + maxZ ) * 0.5,
+      );
+
+    }
+
+    function getBaseViewDistance( landmarkId ) {
+
+      const config = demo5VisualConfig.viewpoints.vr.base_near_selected;
+      const radius = getLandmarkDisplayFootprintRadius( landmarkId );
+
+      if ( currentSceneState.comparisonMode === DEMO5_COMPARISON_MODES.MINIATURE_COMPARISON ) {
+
+        return Math.max(
+          config.miniatureMinDistanceMeters,
+          radius + config.miniatureClearanceMeters,
+        );
+
+      }
+
+      return Math.max(
+        config.minDistanceMeters,
+        radius + config.clearanceMeters,
+      );
+
+    }
+
+    function getDefaultViewpointForComparisonMode( comparisonMode ) {
+
+      if ( comparisonMode === DEMO5_COMPARISON_MODES.REAL_SCALE ) {
+
+        return DEMO5_VIEWPOINT_PRESETS.BASE_NEAR_SELECTED;
+
+      }
+
+      return DEMO5_VIEWPOINT_PRESETS.DISTANT_COMPARISON;
 
     }
 
@@ -1099,10 +1284,17 @@ export const demo5SceneDefinition = Object.freeze( {
     function syncAnnotationLabels() {
 
       const miniature = currentSceneState.comparisonMode === DEMO5_COMPARISON_MODES.MINIATURE_COMPARISON;
-      const labelLift = miniature ? 0.12 : 10;
-      const baseLabelHeight = miniature ? 0.07 : 5.5;
-      const baseLabelScale = miniature ? 1 : 46;
-      const heightLabelScale = miniature ? 1 : 58;
+      const labelConfig = demo5VisualConfig.labels;
+      const labelLift = miniature ? labelConfig.miniatureHeightLiftMeters : labelConfig.realHeightLiftMeters;
+      const baseLabelHeight = miniature ? labelConfig.miniatureBaseLiftMeters : labelConfig.realBaseLiftMeters;
+      const baseLabelForward = miniature ? labelConfig.miniatureBaseForwardMeters : labelConfig.realBaseForwardMeters;
+      const baseModeScale = miniature
+        ? labelConfig.miniatureScale
+        : (
+          currentSceneState.comparisonMode === DEMO5_COMPARISON_MODES.DISTANT_COMPARISON
+            ? labelConfig.distantScale
+            : labelConfig.realScale
+        );
 
       getDemo5Landmarks().forEach( ( landmark ) => {
 
@@ -1121,8 +1313,8 @@ export const demo5SceneDefinition = Object.freeze( {
         labels.heightLabel.mesh.visible = currentSceneState.annotationsVisible && currentSceneState.quantLabelsVisible;
         labels.baseLabel.mesh.position.set(
           position.x,
-          Math.max( displayHeight * 0.05, baseLabelHeight ),
-          position.z + ( miniature ? 0.18 : 18 ),
+          baseLabelHeight,
+          position.z + baseLabelForward,
         );
         labels.heightLabel.mesh.position.set(
           position.x,
@@ -1133,8 +1325,8 @@ export const demo5SceneDefinition = Object.freeze( {
         labels.heightLabel.mesh.material.opacity = selected ? 1 : 0.88;
         labels.baseLabel.setText( landmark.label );
         labels.heightLabel.setText( `${formatHeight( landmark.heightMeters )}\n${miniature ? 'miniature scale' : 'real height'}` );
-        labels.baseLabel.mesh.scale.multiplyScalar( baseLabelScale * ( selected ? 1.12 : 1 ) );
-        labels.heightLabel.mesh.scale.multiplyScalar( heightLabelScale * ( selected ? 1.16 : 1 ) );
+        labels.baseLabel.mesh.scale.multiplyScalar( baseModeScale * ( selected ? labelConfig.selectedBaseScale : 1 ) );
+        labels.heightLabel.mesh.scale.multiplyScalar( baseModeScale * ( selected ? labelConfig.selectedHeightScale : 1 ) );
 
       } );
 
@@ -1150,14 +1342,23 @@ export const demo5SceneDefinition = Object.freeze( {
       if ( currentSceneState.viewpointPresetId === DEMO5_VIEWPOINT_PRESETS.BASE_NEAR_SELECTED ) {
 
         const selectedPosition = getLandmarkDisplayPosition( currentSceneState.selectedLandmarkId );
-        const anchor = vector3FromArray( vrConfig.selectedAnchor, demo5VisualConfig.layout.realScale.baseNearAnchor );
-        worldRoot.position.copy( anchor ).sub( selectedPosition );
+        const distance = getBaseViewDistance( currentSceneState.selectedLandmarkId );
+        worldRoot.position.set(
+          ( vrConfig.targetX || 0 ) - selectedPosition.x,
+          0,
+          - distance - selectedPosition.z,
+        );
         return;
 
       }
 
-      worldRoot.position.copy(
-        vector3FromArray( isMiniature ? vrConfig.miniaturePosition : vrConfig.realPosition, [ 0, 0, - 8 ] ),
+      const layoutCenter = getCurrentLayoutCenter();
+      const distance = isMiniature ? vrConfig.miniatureDistanceMeters : vrConfig.realDistanceMeters;
+      const height = isMiniature ? vrConfig.miniatureHeightMeters : vrConfig.realHeightMeters;
+      worldRoot.position.set(
+        - layoutCenter.x,
+        - height,
+        - distance - layoutCenter.z,
       );
 
     }
@@ -1184,7 +1385,9 @@ export const demo5SceneDefinition = Object.freeze( {
 
         } else {
 
-          cameraPosition = selectedPosition.clone().add( vector3FromArray( preset.selectedOffset ) );
+          const selectedOffset = vector3FromArray( preset.selectedOffset );
+          selectedOffset.z = Math.max( selectedOffset.z, getBaseViewDistance( selectedLandmark.id ) );
+          cameraPosition = selectedPosition.clone().add( selectedOffset );
           target = selectedPosition.clone().add( new THREE.Vector3(
             0,
             THREE.MathUtils.clamp(
@@ -1268,7 +1471,7 @@ export const demo5SceneDefinition = Object.freeze( {
 
         statusText.textController.setText( [
           `${modeLabel} | ${viewLabel}`,
-          selected ? `${selected.shortLabel}: ${formatHeight( selected.heightMeters )}` : 'No selection',
+          selected ? `${selected.label}: ${formatHeight( selected.heightMeters )}` : 'No selection',
           currentSceneState.taskSubmitted ? 'Answer submitted' : task.prompt,
         ].join( '\n' ) );
 
@@ -1375,14 +1578,19 @@ export const demo5SceneDefinition = Object.freeze( {
     function setComparisonMode( comparisonMode, source, { shouldLog = true } = {} ) {
 
       const nextMode = normalizeDemo5ComparisonMode( comparisonMode, currentSceneState.comparisonMode );
+      const nextViewpointId = getDefaultViewpointForComparisonMode( nextMode );
 
-      if ( nextMode === currentSceneState.comparisonMode ) {
+      if (
+        nextMode === currentSceneState.comparisonMode &&
+        nextViewpointId === currentSceneState.viewpointPresetId
+      ) {
 
         return;
 
       }
 
       currentSceneState.comparisonMode = nextMode;
+      currentSceneState.viewpointPresetId = nextViewpointId;
       syncVisuals();
 
       if ( shouldLog ) {
@@ -1485,7 +1693,7 @@ export const demo5SceneDefinition = Object.freeze( {
         controlPanelRoot,
         {
           ...demo5VisualConfig.text.panelTitle,
-          text: 'Landmark Scale',
+          text: 'Control Panel',
         },
         [ 0, panel.rowY.title, 0.025 ],
         { name: 'demo5-panel-title', renderOrder: 34, depthTest: false },
@@ -1601,16 +1809,19 @@ export const demo5SceneDefinition = Object.freeze( {
 
       createPanelFrame();
       const panel = demo5VisualConfig.panel;
-      const columns4 = [ - 0.49, - 0.165, 0.165, 0.49 ];
-      const columns3 = [ - 0.325, 0, 0.325 ];
-      const columns5 = [ - 0.52, - 0.26, 0, 0.26, 0.52 ];
+      const landmarkColumns = [ - 0.45, 0.45 ];
+      const landmarkRows = [ panel.rowY.landmarksTop, panel.rowY.landmarksBottom ];
+      const columns4 = [ - 0.72, - 0.24, 0.24, 0.72 ];
+      const columns3 = [ - 0.5, 0, 0.5 ];
+      const columns5 = [ - 0.76, - 0.38, 0, 0.38, 0.76 ];
 
       getDemo5Landmarks().forEach( ( landmark, index ) => {
 
         createPanelButton( {
           key: `landmark-${landmark.id}`,
-          label: landmark.shortLabel,
-          position: [ columns4[ index ], panel.rowY.landmarks ],
+          label: landmark.label,
+          width: 0.82,
+          position: [ landmarkColumns[ index % 2 ], landmarkRows[ Math.floor( index / 2 ) ] ],
           onPress: ( source ) => selectLandmark( landmark.id, source ),
           landmarkId: landmark.id,
         } );
@@ -1661,7 +1872,7 @@ export const demo5SceneDefinition = Object.freeze( {
         createPanelButton( {
           key: `toggle-${key}`,
           label,
-          width: 0.235,
+          width: 0.36,
           position: [ columns5[ index ], panel.rowY.cues ],
           onPress: ( source ) => toggleBooleanState( key, labelKey, source, flushKey ),
           toggleKey: key,
@@ -1673,15 +1884,15 @@ export const demo5SceneDefinition = Object.freeze( {
       createPanelButton( {
         key: 'reset',
         label: 'Reset',
-        width: 0.35,
-        position: [ - 0.2, panel.rowY.actions ],
+        width: 0.52,
+        position: [ - 0.3, panel.rowY.actions ],
         onPress: ( source ) => resetScene( source ),
       } );
       createPanelButton( {
         key: 'submit',
         label: 'Submit',
-        width: 0.35,
-        position: [ 0.2, panel.rowY.actions ],
+        width: 0.52,
+        position: [ 0.3, panel.rowY.actions ],
         onPress: ( source ) => submitTask( source ),
       } );
 
@@ -1689,9 +1900,7 @@ export const demo5SceneDefinition = Object.freeze( {
         disposables,
         controlPanelRoot,
         {
-          ...demo5VisualConfig.text.status,
-          planeHeight: 0.07,
-          fontSize: 17,
+          ...demo5VisualConfig.text.panelFooter,
           text: 'Use authored views. Select one landmark, then submit.',
         },
         [ 0, panel.rowY.footer, 0.026 ],
@@ -1918,6 +2127,7 @@ export const demo5SceneDefinition = Object.freeze( {
         applyObjectRenderingDefaults( object, {
           opacity: demo5VisualConfig.landmarks.modelOpacity,
         } );
+        unregisterLandmarkModelRaycastTargets( record );
         disposeChildren( record.modelHolder );
         record.modelHolder.add( object );
         record.loadedObject = object;
@@ -1926,6 +2136,7 @@ export const demo5SceneDefinition = Object.freeze( {
         record.loadError = null;
         record.footprintRadius = Math.max( normalized.footprintRadius, record.footprintRadius * 0.6 );
         updateLandmarkAuxiliaryGeometry( record );
+        refreshLandmarkModelRaycastTargets( record );
         updateLoadStatus();
         syncVisuals();
 
@@ -2045,11 +2256,20 @@ export const demo5SceneDefinition = Object.freeze( {
       context.camera.fov = demo5VisualConfig.camera.fov;
       context.camera.updateProjectionMatrix();
       context.scene.background = new THREE.Color( demo5VisualConfig.environment.backgroundColor );
-      context.scene.fog = new THREE.Fog(
-        demo5VisualConfig.environment.fogColor,
-        demo5VisualConfig.environment.fogNear,
-        demo5VisualConfig.environment.fogFar,
-      );
+
+      if ( demo5VisualConfig.environment.fogEnabled === false ) {
+
+        context.scene.fog = null;
+
+      } else {
+
+        context.scene.fog = new THREE.Fog(
+          demo5VisualConfig.environment.fogColor,
+          demo5VisualConfig.environment.fogNear,
+          demo5VisualConfig.environment.fogFar,
+        );
+
+      }
 
     }
 
@@ -2114,7 +2334,19 @@ export const demo5SceneDefinition = Object.freeze( {
       },
       resolveRaycastIntersection( intersections ) {
 
-        return intersections[ 0 ] || null;
+        const firstHit = intersections[ 0 ] || null;
+
+        if ( firstHit?.object?.userData?.demo5RaycastTargetKind !== 'proxy' ) {
+
+          return firstHit;
+
+        }
+
+        const proxyLandmarkId = firstHit.object.userData.demo5LandmarkId;
+        return intersections.find( ( hit ) => (
+          hit?.object?.userData?.demo5RaycastTargetKind === 'model' &&
+          hit.object.userData.demo5LandmarkId === proxyLandmarkId
+        ) ) || firstHit;
 
       },
       getHudContent( presentationMode ) {
