@@ -239,6 +239,8 @@ Scene selection is URL-driven:
   Loads Demo 4, an AR-first situated campus monitoring overlay.
 - `index.html?scene=5`
   Loads Demo 5, a VR-first landmark scale visceralization.
+- `index.html?scene=6`
+  Loads Demo 6, a VR-first Slice Rush mini-game replay baseline.
 
 Scene modules are resolved through `scenes/core/sceneRegistry.js`. Each scene definition provides:
 
@@ -680,6 +682,22 @@ The scene uses local model files from `models/` with GLB-first loading and OBJ f
 The default task asks "Which landmark is tallest?" and stores the submitted selected landmark id as semantic state. The expected answer is `burj_khalifa`. Replay restores the selected landmark, comparison mode, authored viewpoint, cue toggles, task answer, and submission state directly instead of replaying raw animation frames.
 
 Repo A builds Demo 5 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
+
+## Demo 6 Slice Rush Layout
+
+Demo 6 keeps its XR mini-game baseline under `demo6/`:
+
+- `demo6/demo6Scene.js`
+- `demo6/demo6VisualConfig.js`
+- `demo6/demo6Conditions.js`
+- `demo6/demo6Tasks.js`
+- `demo6/demo6LoggingConfig.js`
+
+Slice Rush uses procedural fruit, bombs, a play lane, controller/desktop blade trails, and HUD controls. The default task asks the participant to play one deterministic round and submit the final score. VR uses compact controller pose snapshots for local blade collision; desktop uses a large invisible slice plane for mouse-drag review and replay authoring.
+
+Replay stays semantic. Demo 6 reconstructs the spawn plan from `roundSeed`, `roundConfigId`, and round config, then restores elapsed time, score, target statuses, recent capped blade trails, and task submission state. It records target hits, bomb hits, misses, round start/end, reset, submit, and low-frequency clock samples instead of per-frame target transforms or raw controller pose streams.
+
+Repo A builds Demo 6 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
 
 ## Example 1 Dataset Layout
 

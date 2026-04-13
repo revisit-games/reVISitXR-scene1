@@ -4,6 +4,7 @@ import { demo2SceneDefinition } from '../../demo2/demo2Scene.js';
 import { demo3SceneDefinition } from '../../demo3/demo3Scene.js';
 import { demo4SceneDefinition } from '../../demo4/demo4Scene.js';
 import { demo5SceneDefinition } from '../../demo5/demo5Scene.js';
+import { demo6SceneDefinition } from '../../demo6/demo6Scene.js';
 import { example1SceneDefinition } from '../../example1/example1Scene.js';
 
 const sceneDefinitions = [
@@ -14,6 +15,7 @@ const sceneDefinitions = [
   demo3SceneDefinition,
   demo4SceneDefinition,
   demo5SceneDefinition,
+  demo6SceneDefinition,
 ];
 
 const sceneDefinitionByKey = new Map(

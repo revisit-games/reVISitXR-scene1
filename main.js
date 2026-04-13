@@ -645,6 +645,72 @@ function getSceneInteractorState( source ) {
 
 }
 
+function getSceneInteractorPoseSnapshot( source ) {
+
+  const controller = getControllerByInteractorId( source );
+  const isDesktop = source === INTERACTORS.DESKTOP_POINTER;
+
+  if ( ! controller && ! isDesktop ) {
+
+    return null;
+
+  }
+
+  if ( controller ) {
+
+    controller.updateMatrixWorld( true );
+    controller.getWorldPosition( tempWorldPosition );
+    controller.getWorldQuaternion( tempWorldQuaternion );
+    raycaster.setFromXRController( controller );
+
+    return {
+      source: getControllerInteractorId( controller ),
+      interactor: getControllerInteractorId( controller ),
+      pointerType: 'xr',
+      controllerIndex: Number.isInteger( controller.userData.index ) ? controller.userData.index : null,
+      handedness: typeof controller.userData.handedness === 'string' ? controller.userData.handedness : null,
+      position: vector3ToArray( tempWorldPosition ),
+      quaternion: quaternionToArray( tempWorldQuaternion ),
+      rayOrigin: vector3ToArray( raycaster.ray.origin ),
+      rayDirection: vector3ToArray( raycaster.ray.direction ),
+      pointerTarget: Array.isArray( controller.userData.pointerTarget ) ? [ ...controller.userData.pointerTarget ] : null,
+      isPresenting: renderer.xr.isPresenting,
+      isConnected: Boolean( controller.userData.inputSource ),
+    };
+
+  }
+
+  camera.updateMatrixWorld( true );
+  camera.getWorldPosition( tempWorldPosition );
+  camera.getWorldQuaternion( tempWorldQuaternion );
+  raycaster.setFromCamera( pointer, camera );
+
+  return {
+    source: INTERACTORS.DESKTOP_POINTER,
+    interactor: INTERACTORS.DESKTOP_POINTER,
+    pointerType: 'desktop',
+    controllerIndex: null,
+    handedness: null,
+    position: vector3ToArray( tempWorldPosition ),
+    quaternion: quaternionToArray( tempWorldQuaternion ),
+    rayOrigin: vector3ToArray( raycaster.ray.origin ),
+    rayDirection: vector3ToArray( raycaster.ray.direction ),
+    pointerTarget: null,
+    isPresenting: renderer.xr.isPresenting,
+    isConnected: true,
+  };
+
+}
+
+function getSceneInteractorPoseSnapshots() {
+
+  return [
+    getSceneInteractorPoseSnapshot( INTERACTORS.CONTROLLER_0 ),
+    getSceneInteractorPoseSnapshot( INTERACTORS.CONTROLLER_1 ),
+  ].filter( Boolean );
+
+}
+
 function buildSceneInteractionPayload( {
   source,
   hit = null,
@@ -896,6 +962,8 @@ function createSceneRuntimeContext() {
     getLoggingConfig: () => studyLogger?.getActiveLoggingConfig?.() ?? getActiveSceneLoggingConfig(),
     invalidateSceneHoverForSource,
     getSceneInteractorState,
+    getSceneInteractorPoseSnapshot,
+    getSceneInteractorPoseSnapshots,
     getSceneInteractionDebugState,
     recordSceneStateChange: ( payload ) => studyLogger?.recordSceneStateChange?.( payload ) ?? false,
   };
