@@ -173,6 +173,41 @@ function createBasicMaterial( {
 
 }
 
+function createSoftShadowMaterial() {
+
+  const canvas = document.createElement( 'canvas' );
+  canvas.width = 192;
+  canvas.height = 192;
+  const context = canvas.getContext( '2d' );
+  const gradient = context.createRadialGradient( 96, 96, 8, 96, 96, 94 );
+  gradient.addColorStop( 0, 'rgba(255, 255, 255, 0.88)' );
+  gradient.addColorStop( 0.38, 'rgba(255, 255, 255, 0.38)' );
+  gradient.addColorStop( 0.74, 'rgba(255, 255, 255, 0.08)' );
+  gradient.addColorStop( 1, 'rgba(255, 255, 255, 0)' );
+  context.clearRect( 0, 0, canvas.width, canvas.height );
+  context.fillStyle = gradient;
+  context.fillRect( 0, 0, canvas.width, canvas.height );
+
+  const texture = new THREE.CanvasTexture( canvas );
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+
+  return new THREE.MeshBasicMaterial( {
+    color: demo5VisualConfig.landmarks.shadowColor,
+    map: texture,
+    transparent: true,
+    opacity: demo5VisualConfig.landmarks.shadowOpacity,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    depthTest: true,
+    toneMapped: false,
+  } );
+
+}
+
 function disposeMaterial( material, disposedMaterials ) {
 
   if ( ! material || disposedMaterials.has( material ) ) {
@@ -369,7 +404,7 @@ function applyObjectRenderingDefaults( object, {
 
   object.traverse( ( child ) => {
 
-    if ( ! child.isMesh ) {
+    if ( ! child.isMesh || child.userData.demo5ExcludeTint === true ) {
 
       return;
 
@@ -444,6 +479,69 @@ function setObjectTintState( object, {
     } );
 
   } );
+
+}
+
+function cloneHumanMaterial( material ) {
+
+  if ( ! material ) {
+
+    return material;
+
+  }
+
+  const clone = material.clone();
+
+  if ( clone.color ) {
+
+    clone.color.setHex( demo5VisualConfig.people.color );
+
+  }
+
+  if ( clone.emissive ) {
+
+    clone.emissive.setHex( 0x000000 );
+
+  }
+
+  clone.transparent = false;
+  clone.opacity = 1;
+  clone.depthTest = true;
+  clone.depthWrite = true;
+  return clone;
+
+}
+
+function prepareHumanReferenceObject( object ) {
+
+  object.userData.demo5ExcludeTint = true;
+  object.traverse( ( child ) => {
+
+    child.userData.demo5ExcludeTint = true;
+
+    if ( ! child.isMesh ) {
+
+      return;
+
+    }
+
+    if ( Array.isArray( child.material ) ) {
+
+      child.material = child.material.map( cloneHumanMaterial );
+
+    } else {
+
+      child.material = cloneHumanMaterial( child.material );
+
+    }
+
+    child.castShadow = true;
+    child.receiveShadow = true;
+    child.renderOrder = Math.max( child.renderOrder || 0, demo5VisualConfig.people.renderOrder );
+
+  } );
+
+  return object;
 
 }
 
@@ -813,7 +911,7 @@ export const demo5SceneDefinition = Object.freeze( {
       } );
 
       applyObjectRenderingDefaults( group );
-      return group;
+      return prepareHumanReferenceObject( group );
 
     }
 
@@ -868,13 +966,27 @@ export const demo5SceneDefinition = Object.freeze( {
     function updateLandmarkAuxiliaryGeometry( record ) {
 
       const radius = Math.max( record.footprintRadius + 2, 4 );
+      const shadowConfig = demo5VisualConfig.landmarks;
+      const shadowLength = THREE.MathUtils.clamp(
+        radius * shadowConfig.shadowLengthFactor,
+        shadowConfig.shadowMinLength,
+        shadowConfig.shadowMaxLength,
+      );
+      const shadowWidth = THREE.MathUtils.clamp(
+        radius * shadowConfig.shadowWidthFactor,
+        shadowConfig.shadowMinWidth,
+        shadowConfig.shadowMaxWidth,
+      );
       record.hitProxy.position.y = record.landmark.heightMeters * 0.5;
       record.hitProxy.scale.set( radius + 5, record.landmark.heightMeters, radius + 5 );
       record.baseDisc.scale.set( radius, radius, 1 );
-      record.selectedRing.scale.setScalar( radius + 2 );
-      record.hoverRing.scale.setScalar( radius + 3.5 );
-      record.shadow.scale.set( radius * 2.2, radius * 0.9, 1 );
-      record.shadow.position.set( radius * 0.32, 0.018, - radius * 0.7 );
+      record.shadow.scale.set( shadowLength, shadowWidth, 1 );
+      record.shadow.rotation.z = THREE.MathUtils.degToRad( shadowConfig.shadowRotationDegrees );
+      record.shadow.position.set(
+        radius * shadowConfig.shadowOffsetXFactor,
+        0.012,
+        radius * shadowConfig.shadowOffsetZFactor,
+      );
 
       const peopleOffset = Math.max(
         radius + demo5VisualConfig.people.frontClearanceMeters,
@@ -1019,24 +1131,22 @@ export const demo5SceneDefinition = Object.freeze( {
       baseDisc.name = `demo5-base-disc-${landmark.id}`;
       baseDisc.rotation.x = - HALF_PI;
       baseDisc.position.y = 0.015;
+      baseDisc.renderOrder = 1;
       group.add( baseDisc );
 
       const shadow = new THREE.Mesh(
-        new THREE.CircleGeometry( 1, 56 ),
-        createBasicMaterial( {
-          color: demo5VisualConfig.landmarks.shadowColor,
-          opacity: demo5VisualConfig.landmarks.shadowOpacity,
-          depthWrite: false,
-        } ),
+        new THREE.PlaneGeometry( 1, 1 ),
+        createSoftShadowMaterial(),
       );
       shadow.name = `demo5-shadow-cue-${landmark.id}`;
       shadow.rotation.x = - HALF_PI;
-      shadow.rotation.z = THREE.MathUtils.degToRad( - 16 );
+      shadow.rotation.z = THREE.MathUtils.degToRad( demo5VisualConfig.landmarks.shadowRotationDegrees );
       shadow.position.set( 3, 0.018, - 7 );
+      shadow.renderOrder = 0;
       group.add( shadow );
 
       const selectedRing = new THREE.Mesh(
-        new THREE.TorusGeometry( 1, 0.045, 10, 72 ),
+        new THREE.TorusGeometry( 1, demo5VisualConfig.landmarks.selectedRingTubeRadius, 10, 72 ),
         createBasicMaterial( {
           color: demo5VisualConfig.landmarks.selectedRingColor,
           opacity: demo5VisualConfig.landmarks.selectedRingOpacity,
@@ -1045,10 +1155,11 @@ export const demo5SceneDefinition = Object.freeze( {
       selectedRing.name = `demo5-selected-ring-${landmark.id}`;
       selectedRing.rotation.x = HALF_PI;
       selectedRing.position.y = 0.08;
+      selectedRing.renderOrder = 2;
       group.add( selectedRing );
 
       const hoverRing = new THREE.Mesh(
-        new THREE.TorusGeometry( 1, 0.035, 8, 72 ),
+        new THREE.TorusGeometry( 1, demo5VisualConfig.landmarks.hoverRingTubeRadius, 8, 72 ),
         createBasicMaterial( {
           color: demo5VisualConfig.landmarks.hoverRingColor,
           opacity: demo5VisualConfig.landmarks.hoverRingOpacity,
@@ -1057,6 +1168,7 @@ export const demo5SceneDefinition = Object.freeze( {
       hoverRing.name = `demo5-hover-ring-${landmark.id}`;
       hoverRing.rotation.x = HALF_PI;
       hoverRing.position.y = 0.13;
+      hoverRing.renderOrder = 3;
       group.add( hoverRing );
 
       const record = {
@@ -1361,23 +1473,53 @@ export const demo5SceneDefinition = Object.freeze( {
 
     }
 
+    function getVisualRingRadius( record, {
+      factor,
+      minRadius,
+      maxRadius,
+      miniatureWorldRadius,
+      layoutScale,
+      isMiniature,
+    } ) {
+
+      const clampedRadius = THREE.MathUtils.clamp(
+        record.footprintRadius * factor,
+        minRadius,
+        maxRadius,
+      );
+      const miniatureMinimum = isMiniature && layoutScale > 0
+        ? miniatureWorldRadius / layoutScale
+        : 0;
+      return Math.max( clampedRadius, miniatureMinimum );
+
+    }
+
     function syncLandmarkVisuals() {
 
       const layoutScale = getLayoutForMode( currentSceneState.comparisonMode ).scale;
       const isMiniature = currentSceneState.comparisonMode === DEMO5_COMPARISON_MODES.MINIATURE_COMPARISON;
+      const ringConfig = demo5VisualConfig.landmarks;
 
       landmarkRecords.forEach( ( record, landmarkId ) => {
 
         const selected = currentSceneState.selectedLandmarkId === landmarkId;
         const hovered = hoveredLandmarkId === landmarkId;
-        const selectedRingRadius = Math.max(
-          record.footprintRadius + 2,
-          isMiniature ? 0.14 / layoutScale : 0,
-        );
-        const hoverRingRadius = Math.max(
-          record.footprintRadius + 3.5,
-          isMiniature ? 0.18 / layoutScale : 0,
-        );
+        const selectedRingRadius = getVisualRingRadius( record, {
+          factor: ringConfig.selectedRingRadiusFactor,
+          minRadius: ringConfig.selectedRingMinRadius,
+          maxRadius: ringConfig.selectedRingMaxRadius,
+          miniatureWorldRadius: ringConfig.selectedRingMiniatureWorldRadius,
+          layoutScale,
+          isMiniature,
+        } );
+        const hoverRingRadius = getVisualRingRadius( record, {
+          factor: ringConfig.hoverRingRadiusFactor,
+          minRadius: ringConfig.hoverRingMinRadius,
+          maxRadius: ringConfig.hoverRingMaxRadius,
+          miniatureWorldRadius: ringConfig.hoverRingMiniatureWorldRadius,
+          layoutScale,
+          isMiniature,
+        } );
         record.selectedRing.scale.setScalar( selectedRingRadius );
         record.hoverRing.scale.setScalar( hoverRingRadius );
         record.selectedRing.visible = selected;
@@ -1666,11 +1808,9 @@ export const demo5SceneDefinition = Object.freeze( {
 
       if ( statusText?.textController ) {
 
-        statusText.textController.setText( [
-          `${modeLabel} | ${viewLabel}`,
-          selected ? `${selected.label}: ${formatHeight( selected.heightMeters )}` : 'No selection',
-          currentSceneState.taskSubmitted ? 'Answer submitted' : task.prompt,
-        ].join( '\n' ) );
+        statusText.textController.setText(
+          selected ? `${selected.label}: ${formatHeight( selected.heightMeters )}` : 'Select a landmark',
+        );
 
       }
 
@@ -1901,10 +2041,10 @@ export const demo5SceneDefinition = Object.freeze( {
         disposables,
         controlPanelRoot,
         {
-          ...demo5VisualConfig.text.status,
+          ...demo5VisualConfig.text.selectedStatus,
           text: 'Loading landmark models...',
         },
-        [ - 0.34, panel.rowY.status, 0.025 ],
+        [ 0, panel.rowY.status, 0.025 ],
         { name: 'demo5-panel-status', renderOrder: 34, depthTest: false },
       );
       buttonRecords.set( 'status', {
@@ -2008,17 +2148,17 @@ export const demo5SceneDefinition = Object.freeze( {
 
       createPanelFrame();
       const panel = demo5VisualConfig.panel;
-      const landmarkColumns = [ - 0.64, 0.64 ];
+      const landmarkColumns = [ - 0.52, 0.52 ];
       const landmarkRows = [ panel.rowY.landmarksTop, panel.rowY.landmarksBottom ];
-      const columns4 = [ - 0.9, - 0.3, 0.3, 0.9 ];
-      const columns3 = [ - 0.62, 0, 0.62 ];
+      const columns4 = [ - 0.78, - 0.26, 0.26, 0.78 ];
+      const columns3 = [ - 0.58, 0, 0.58 ];
 
       getDemo5Landmarks().forEach( ( landmark, index ) => {
 
         createPanelButton( {
           key: `landmark-${landmark.id}`,
           label: landmark.label,
-          width: 1.18,
+          width: panel.landmarkButtonWidth,
           position: [ landmarkColumns[ index % 2 ], landmarkRows[ Math.floor( index / 2 ) ] ],
           onPress: ( source ) => selectLandmark( landmark.id, source ),
           landmarkId: landmark.id,
@@ -2035,6 +2175,7 @@ export const demo5SceneDefinition = Object.freeze( {
         createPanelButton( {
           key: `mode-${mode}`,
           label,
+          width: panel.modeButtonWidth,
           position: [ columns3[ index ], panel.rowY.modes ],
           onPress: ( source ) => setComparisonMode( mode, source ),
           comparisonMode: mode,
@@ -2052,6 +2193,7 @@ export const demo5SceneDefinition = Object.freeze( {
         createPanelButton( {
           key: `view-${viewpointId}`,
           label,
+          width: panel.viewButtonWidth,
           position: [ columns4[ index ], panel.rowY.views ],
           onPress: ( source ) => setViewpointPreset( viewpointId, source ),
           viewpointPresetId: viewpointId,
@@ -2069,7 +2211,7 @@ export const demo5SceneDefinition = Object.freeze( {
         createPanelButton( {
           key: `toggle-${key}`,
           label,
-          width: 0.68,
+          width: panel.cueButtonWidth,
           position: [ columns4[ index ], panel.rowY.cues ],
           onPress: ( source ) => toggleBooleanState( key, labelKey, source, flushKey ),
           toggleKey: key,
@@ -2081,15 +2223,15 @@ export const demo5SceneDefinition = Object.freeze( {
       createPanelButton( {
         key: 'reset',
         label: 'Reset',
-        width: 0.72,
-        position: [ - 0.42, panel.rowY.actions ],
+        width: panel.actionButtonWidth,
+        position: [ - 0.34, panel.rowY.actions ],
         onPress: ( source ) => resetScene( source ),
       } );
       createPanelButton( {
         key: 'submit',
         label: 'Submit',
-        width: 0.72,
-        position: [ 0.42, panel.rowY.actions ],
+        width: panel.actionButtonWidth,
+        position: [ 0.34, panel.rowY.actions ],
         onPress: ( source ) => submitTask( source ),
       } );
 
@@ -2098,7 +2240,7 @@ export const demo5SceneDefinition = Object.freeze( {
         controlPanelRoot,
         {
           ...demo5VisualConfig.text.panelFooter,
-          text: 'Use authored views. Select one landmark, then submit.',
+          text: 'Use authored views. Select the tallest landmark, then submit.',
         },
         [ 0, panel.rowY.footer, 0.026 ],
         { name: 'demo5-panel-footer', renderOrder: 34, depthTest: false },
@@ -2302,7 +2444,7 @@ export const demo5SceneDefinition = Object.freeze( {
 
     function rebuildHumanReferencesForRecord( record ) {
 
-      record.humanModelGroup.clear();
+      disposeChildren( record.humanModelGroup );
 
       const templates = demo5PeopleModels
         .map( ( person ) => loadedPeopleTemplates.get( person.id ) )
@@ -2317,7 +2459,7 @@ export const demo5SceneDefinition = Object.freeze( {
         clone.position.z = 0;
         clone.rotation.y = index % 2 === 0 ? THREE.MathUtils.degToRad( 18 ) : THREE.MathUtils.degToRad( - 16 );
         applyObjectRenderingDefaults( clone );
-        record.humanModelGroup.add( clone );
+        record.humanModelGroup.add( prepareHumanReferenceObject( clone ) );
 
       } );
 

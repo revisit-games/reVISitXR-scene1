@@ -49,11 +49,13 @@ Replay restores these semantic values directly. It does not replay raw animation
 
 ## Controls
 
-The in-scene Control Panel provides landmark, scale mode, viewpoint, cue, reset, and submit buttons. Landmark name labels stay fixed-size; the selected landmark also gets a near-user readable label that is independent of building scale. The annotation visibility state is preserved for compatibility, but there is no longer an `Ann On` / `Ann Off` participant control.
+The in-scene Control Panel provides landmark, scale mode, viewpoint, cue, reset, and submit buttons in a compact headset-readable layout. Its top status line shows only the selected landmark and height, while the footer carries the task instruction: use authored views, select the tallest landmark, then submit. Landmark name labels stay fixed-size; the selected landmark also gets a near-user readable label that is independent of building scale. The annotation visibility state is preserved for compatibility, but there is no longer an `Ann On` / `Ann Off` participant control.
 
 The Control Panel can be moved on the floor plane and yaw-rotated with the shared XY move handle. Demo 5 records the final panel transform only when a move or rotate interaction ends.
 
-Human references use `people1` and `people2` when available, with OBJ fallback only if GLB loading fails. They are placed on the user-facing side of each landmark footprint and remain controlled by the People toggle.
+Human references use `people1` and `people2` when available, with OBJ fallback only if GLB loading fails. They are placed on the user-facing side of each landmark footprint, use isolated neutral materials so selection tint cannot leak into them, and remain controlled by the People toggle.
+
+Selected and hovered landmarks use subtle visual-only base rings; the larger invisible hit proxies remain available for reliable controller and replay gaze selection. Shadow cues use soft transparent ground planes rather than hard circular blobs, and remain controlled by the Shadow toggle.
 
 ## Reactive Answers
 
