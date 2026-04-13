@@ -24,8 +24,7 @@ export const DEMO6_TARGET_STATUSES = Object.freeze( {
 
 export const DEMO6_DEFAULT_ROUND_CONFIG_ID = 'standard-v1';
 export const DEMO6_DEFAULT_SEED = 'slice-rush-v1';
-export const DEMO6_MAX_TARGET_RESULTS = 80;
-export const DEMO6_MAX_SWING_SEGMENTS = 80;
+export const DEMO6_MAX_TARGET_OUTCOMES = 80;
 
 export const DEMO6_ROUND_CONFIGS = Object.freeze( {
   [ DEMO6_DEFAULT_ROUND_CONFIG_ID ]: Object.freeze( {
@@ -114,29 +113,17 @@ export function normalizeDemo6RoundConfigId( value, fallbackValue = DEMO6_DEFAUL
 
 }
 
-function normalizeArray3( value, fallbackValue = [ 0, 0, 0 ] ) {
+function normalizeTargetOutcome( outcome ) {
 
-  if ( Array.isArray( value ) && value.length === 3 && value.every( isFiniteNumber ) ) {
-
-    return value.map( ( item ) => Number( item.toFixed( 4 ) ) );
-
-  }
-
-  return Array.isArray( fallbackValue ) ? [ ...fallbackValue ] : null;
-
-}
-
-function normalizeTargetResult( result ) {
-
-  if ( ! result || typeof result !== 'object' ) {
+  if ( ! outcome || typeof outcome !== 'object' ) {
 
     return null;
 
   }
 
-  const id = normalizeStringId( result.id, null );
-  const type = Object.values( DEMO6_TARGET_TYPES ).includes( result.type ) ? result.type : null;
-  const status = Object.values( DEMO6_TARGET_STATUSES ).includes( result.status ) ? result.status : null;
+  const id = normalizeStringId( outcome.id, null );
+  const type = Object.values( DEMO6_TARGET_TYPES ).includes( outcome.type ) ? outcome.type : null;
+  const status = Object.values( DEMO6_TARGET_STATUSES ).includes( outcome.status ) ? outcome.status : null;
 
   if ( ! id || ! type || ! status ) {
 
@@ -148,35 +135,10 @@ function normalizeTargetResult( result ) {
     id,
     type,
     status,
-    slicedAtMs: isFiniteNumber( result.slicedAtMs ) ? Math.max( 0, Math.round( result.slicedAtMs ) ) : null,
-    slicedByInteractor: normalizeStringId( result.slicedByInteractor, null ),
-  };
-
-}
-
-function normalizeSwingSegment( segment ) {
-
-  if ( ! segment || typeof segment !== 'object' ) {
-
-    return null;
-
-  }
-
-  const source = normalizeStringId( segment.source, null );
-  const from = normalizeArray3( segment.from, null );
-  const to = normalizeArray3( segment.to, null );
-
-  if ( ! source || ! from || ! to ) {
-
-    return null;
-
-  }
-
-  return {
-    source,
-    from,
-    to,
-    atMs: isFiniteNumber( segment.atMs ) ? Math.max( 0, Math.round( segment.atMs ) ) : 0,
+    atMs: isFiniteNumber( outcome.atMs )
+      ? Math.max( 0, Math.round( outcome.atMs ) )
+      : ( isFiniteNumber( outcome.slicedAtMs ) ? Math.max( 0, Math.round( outcome.slicedAtMs ) ) : null ),
+    source: normalizeStringId( outcome.source, normalizeStringId( outcome.slicedByInteractor, null ) ),
   };
 
 }
@@ -208,8 +170,7 @@ export function parseDemo6Conditions( search = window.location.search, {
     misses: 0,
     bombHits: 0,
     accuracy: 0,
-    targetResults: [],
-    recentSwingSegments: [],
+    targetOutcomes: [],
     lastEvent: 'idle',
     lastEventTargetId: null,
     lastEventAtMs: 0,
@@ -263,12 +224,21 @@ export function normalizeDemo6SceneState( candidateState, fallbackState = null, 
       0,
       1,
     ),
-    targetResults: Array.isArray( candidateState?.targetResults )
-      ? candidateState.targetResults.map( normalizeTargetResult ).filter( Boolean ).slice( 0, DEMO6_MAX_TARGET_RESULTS )
-      : ( Array.isArray( fallback.targetResults ) ? fallback.targetResults.map( normalizeTargetResult ).filter( Boolean ).slice( 0, DEMO6_MAX_TARGET_RESULTS ) : [] ),
-    recentSwingSegments: Array.isArray( candidateState?.recentSwingSegments )
-      ? candidateState.recentSwingSegments.map( normalizeSwingSegment ).filter( Boolean ).slice( - DEMO6_MAX_SWING_SEGMENTS )
-      : ( Array.isArray( fallback.recentSwingSegments ) ? fallback.recentSwingSegments.map( normalizeSwingSegment ).filter( Boolean ).slice( - DEMO6_MAX_SWING_SEGMENTS ) : [] ),
+    targetOutcomes: Array.isArray( candidateState?.targetOutcomes )
+      ? candidateState.targetOutcomes.map( normalizeTargetOutcome ).filter( Boolean ).slice( 0, DEMO6_MAX_TARGET_OUTCOMES )
+      : (
+          Array.isArray( candidateState?.targetResults )
+            ? candidateState.targetResults.map( normalizeTargetOutcome ).filter( Boolean ).slice( 0, DEMO6_MAX_TARGET_OUTCOMES )
+            : (
+                Array.isArray( fallback.targetOutcomes )
+                  ? fallback.targetOutcomes.map( normalizeTargetOutcome ).filter( Boolean ).slice( 0, DEMO6_MAX_TARGET_OUTCOMES )
+                  : (
+                      Array.isArray( fallback.targetResults )
+                        ? fallback.targetResults.map( normalizeTargetOutcome ).filter( Boolean ).slice( 0, DEMO6_MAX_TARGET_OUTCOMES )
+                        : []
+                    )
+              )
+        ),
     lastEvent: normalizeStringId( candidateState?.lastEvent, fallback.lastEvent || 'idle' ),
     lastEventTargetId: normalizeStringId( candidateState?.lastEventTargetId, fallback.lastEventTargetId || null ),
     lastEventAtMs: normalizeInteger( candidateState?.lastEventAtMs, normalizeInteger( fallback.lastEventAtMs, 0, 0, durationMs ), 0, durationMs ),

@@ -45,8 +45,7 @@ export const demo6LoggingConfig = Object.freeze( {
     flushOnTaskSubmit: true,
   } ),
   demo6: Object.freeze( {
-    clockSampleIntervalMs: 750,
-    trailSampleIntervalMs: 125,
+    clockSampleIntervalMs: 3500,
     stableLabels: Object.freeze( {
       startRound: 'Start Demo 6 Round',
       sliceTarget: 'Slice Target',

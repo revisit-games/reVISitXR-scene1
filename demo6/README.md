@@ -17,7 +17,7 @@ Participants slice flying fruit targets while avoiding bombs.
 - Missed fruit: miss count increment and combo reset.
 - Default round: `standard-v1`, 45 seconds, 52 deterministic procedural targets.
 
-Desktop mode supports authoring and replay review with mouse drag slicing over the play lane. VR mode is primary: both controllers produce blade tips and trails from compact controller pose snapshots.
+Desktop mode supports authoring and replay review with mouse drag slicing over the play lane. VR mode is primary: both controller rays act as blades, so touching a fruit or bomb with the ray is enough to slice or hit it. No trigger press is required.
 
 ## Deterministic Round State
 
@@ -34,7 +34,7 @@ Each target uses an analytic trajectory:
 position = start + velocity * t + gravity * t * t * 0.5
 ```
 
-Scene state stores compact target results only: id, type, status, hit time, and interactor. It does not store Three.js objects, target meshes, or per-frame target transforms.
+Scene state stores compact target outcomes only: id, type, status, event time, and interactor source. It does not store Three.js objects, target meshes, per-frame target transforms, blade trails, swing segments, or controller motion streams.
 
 ## Logging And Replay
 
@@ -48,7 +48,9 @@ Immediate semantic labels:
 - `Submit Demo 6 Task`
 - `Reset Demo 6 Scene`
 
-The scene also records low-frequency `Sample Demo 6 Round Clock` snapshots while a round is running. Recent blade trails are capped at 80 compact line segments and piggyback on semantic events or clock samples. Replay normalizes the saved state, rebuilds the target plan from the seed, restores elapsed time and target statuses, and renders ghost blade trails without starting new gameplay logs.
+The scene also records coarse, non-immediate `Sample Demo 6 Round Clock` snapshots while a round is running. Replay normalizes the saved state, rebuilds the target plan from the seed, restores elapsed time and target outcomes, and renders active unresolved targets only. Sliced fruit, hit bombs, and missed targets disappear immediately instead of remaining as reduced ghost objects.
+
+Blade afterimages are live-only visual feedback. They fade quickly, are not stored in scene state, are not emitted as reactive answers, and are not logged as provenance.
 
 ## Reactive Answers
 
@@ -67,13 +69,19 @@ The scene also records low-frequency `Sample Demo 6 Round Clock` snapshots while
 - `xrGameRoundState`
 - `xrGameElapsedMs`
 - `xrGameLastEvent`
-- `xrGameStateSummaryJson`
-- `xrStateSummaryJson`
+
+Large state-summary JSON reactive fields are intentionally omitted for Demo 6. The study sidebar receives scalar game answers, while replay uses compact semantic provenance.
 
 ## Configuration
 
-- `demo6VisualConfig.js`: play lane, target colors, HUD/buttons, blade thresholds, scoring, and desktop panel styling.
-- `demo6LoggingConfig.js`: pointer/camera sampling, scene-state throttling, immediate semantic flush flags, clock/trail sampling intervals, and stable labels.
-- `demo6Conditions.js`: round config, state normalization, caps for target results and swing segments.
+- `demo6VisualConfig.js`: play room walls, target colors, HUD/buttons, ray hit tuning, live afterimages, audio volume, scoring, and desktop panel styling.
+- `demo6LoggingConfig.js`: pointer/camera sampling, scene-state throttling, immediate semantic flush flags, coarse clock sampling, and stable labels.
+- `demo6Conditions.js`: round config, state normalization, and caps for compact target outcomes.
+
+Audio lives in `demo6/audio/` and is loaded with module-relative URLs:
+
+- `gamestart.wav` for round start
+- `fruit.wav` and `slicing.wav` for fruit slices
+- `bomb.wav` for bomb hits
 
 Future fruit or bomb GLB assets can be added behind Demo 6-local config, but v1 intentionally uses procedural primitives and no external downloads.
