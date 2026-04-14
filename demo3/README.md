@@ -1,6 +1,6 @@
 # Demo 3 Analytic Workspace
 
-Demo 3 is the paper-facing immersive analytic workspace for reVISit-XR. It keeps the public URL stable at:
+Demo 3 is the immersive analytic workspace for reVISit-XR. It keeps the public URL stable at:
 
 ```text
 index.html?scene=3
@@ -25,7 +25,7 @@ Demo 3 uses local OWID CSV and metadata files copied from Demo 1 into `demo3/dat
 
 `demo3Data.js` joins the files by ISO country code and year, keeps country rows with 3-letter ISO codes, uses `World region according to OWID` from the GDP file, and builds population-weighted regional aggregates. The current local data supports a `2000` to `2023` comparison window.
 
-No network download is required for the scene.
+See `../credits.md` for project-facing data attribution. The bundled OWID metadata files remain beside the local data files for detailed provenance.
 
 ## Semantic State
 
@@ -85,14 +85,6 @@ All views use shared semantic datum ids such as `region:africa`. When linked hig
 
 Selected datum highlighting is tuned in `demo3VisualConfig.charts` with `selectedColor`, `selectedDimmedOpacity`, `selectedScaleMultiplier`, `selectedOutlineColor`, and `selectedOutlineOpacity`. The selected region uses a white fill plus explicit white selected overlays and a gold outline/halo across the trend, ranking, comparison, and linked-highlighted views, while non-selected marks dim instead of disappearing. The trend view includes a selected line overlay so the selected data line stays visible even when several region lines overlap.
 
-## Performance Strategy
-
-Demo 3 keeps hover state transient. Hover changes update retained datum visuals, selected halos, mark opacity, scale, render order, and the summary text through a coalesced animation-frame refresh rather than clearing and rebuilding all panel dynamic objects or raycast targets.
-
-Semantic provenance remains event-based: layout mode changes, focus/selection changes, linked-highlighting toggles, panel drag ends, reset, and task submit are logged as scene state changes. Dense hover state and drag motion are not written into reactive answers or replay state.
-
-Ranking chart spacing is config-driven under `demo3VisualConfig.charts.ranking`, including `bottom`, `top`, `tickLabelY`, `xLabelY`, and bar-label width values so the region/value labels and the x-axis title remain separated.
-
 ## Reactive Answer Fields
 
 `getAnswerSummary()` exposes:
@@ -110,9 +102,3 @@ Ranking chart spacing is config-driven under `demo3VisualConfig.charts.ranking`,
 
 The shared runtime continues to provide generic fields such as `xrMode`, `xrInteractionPhase`, `xrGrabCount`, `xrSessionCount`, `xrLastEvent`, and `xrStateSummaryJson`.
 
-## Implementation Notes
-
-- The former `example3/` placeholder has been replaced by `demo3/`.
-- `scenes/core/sceneRegistry.js` maps `scene=3` to `demo3SceneDefinition`.
-- Demo 3 uses a scene-local panel helper so panels remain visible in desktop and immersive modes.
-- The scene does not modify shared `main.js`.

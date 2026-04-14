@@ -89,4 +89,4 @@ Audio lives in `demo6/audio/` and is loaded with module-relative URLs:
 - `fruit.wav` and `slicing.wav` for fruit slices
 - `bomb.wav` for bomb hits
 
-Future fruit or bomb GLB assets can be added behind Demo 6-local config, but v1 intentionally uses procedural primitives and no external downloads.
+Future fruit or bomb GLB assets can be added behind Demo 6-local config, but v1 intentionally uses procedural primitives.

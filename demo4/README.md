@@ -68,7 +68,7 @@ Real `xr-hit-test` placement preserves the hit pose's world Y value through conf
 
 ## Situated Interaction
 
-Demo 4 is inspired by situated interaction work such as Zhu et al.'s "Make Interaction Situated." It combines:
+Demo 4 combines:
 
 - a world-anchored overlay
 - real-surface placement when WebXR hit-test is available
@@ -132,6 +132,4 @@ The scene-specific answer summary exposes:
 - `xrArAnchorTransformJson`
 - `xrStateSummaryJson`
 
-New placement and panel implementation fields such as `placementDriver`, `placementControllerSource`, `arAnchorSurfaceHeight`, and `controlPanelY` stay inside `xrStateSummaryJson`. `xrArAnchorTransformJson` also includes compact anchor height/source metadata under the existing reactive id; no new Repo B sidebar reactive ids are required.
-
-The existing global replay avatar and ghost controller rays are managed by `main.js` and are not changed by Demo 4.
+New placement and panel implementation fields such as `placementDriver`, `placementControllerSource`, `arAnchorSurfaceHeight`, and `controlPanelY` stay inside `xrStateSummaryJson`. `xrArAnchorTransformJson` also includes compact anchor height/source metadata under the existing reactive id; no new study sidebar reactive ids are required.

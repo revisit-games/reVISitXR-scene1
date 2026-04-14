@@ -1,6 +1,6 @@
 # Demo 2 Migration Globe
 
-This folder now owns the paper-facing Demo 2 baseline for `index.html?scene=2`.
+This folder now owns the Demo 2 baseline for `index.html?scene=2`.
 
 ## Scene Pattern
 
@@ -23,7 +23,7 @@ Future demos should follow this scene-local pattern instead of pushing authored 
 
 ## Local Data Bundle
 
-Demo 2 uses only local files that ship with Repo A:
+Demo 2 uses only local files that ship with this repo:
 
 - generated runtime files:
   - `demo2/data/demo2Nodes.json`
@@ -84,7 +84,7 @@ The default XR-safe destination set is:
 
 Country metadata used to place nodes on the globe lives in `demo2/config/demo2CountryMetadata.mjs`.
 
-The local globe boundary asset is derived from `world-atlas` `countries-110m.json`, which in turn is built from Natural Earth public-domain data. Demo 2 loads that file through `demo2Data.js` and renders scene-local country outline linework without any runtime network fetch.
+Demo 2 loads the local globe boundary file through `demo2Data.js` and renders scene-local country outline linework without any runtime network fetch. See `../credits.md` and `demo2/data/geo/SOURCE.md` for attribution and upstream provenance.
 
 ## Globe Interaction
 
@@ -168,21 +168,9 @@ This keeps the paper-facing Demo 2 scene customizable without pushing scene-spec
 
 Hidden map targets are filtered scene-locally. Demo 2 marks raycastable map objects with `demo2MapSpace` (`globe` or `flat`), filters inactive spaces inside the Demo 2 resolver, and disables layer `0` for inactive map-space targets so hidden proxies cannot capture desktop or XR raycasts. Panel buttons are not map-space targets and remain interactive in every display mode.
 
-## Static Map Labels And Panel Details
+## Panel Details
 
-Demo 2 intentionally keeps only fixed in-scene map labels:
-
-- fixed country-name sprites are created from each node's `name`
-- `labelsVisible` controls whether fixed labels are shown on the visible globe and flat map views
-- hover, click, selection, replay, and route focus do not create or replace dynamic 3D tooltips
-- selected node and selected flow details belong to the desktop/XR panels
-
-The static-label policy is scene-local and lives in `demo2/demo2VisualConfig.js`:
-
-- `interaction.tooltipMode` defaults to `'static-labels-only'`
-- `interaction.flowSelectionAnnotationMode` defaults to `'none'`
-- fixed country-label card styling lives under `labelStyles.nodeLabel`
-- selected-node label tint, selected-label opacity, and selected-node halo strength live under `interaction.selectedLabelAccentColor`, `interaction.selectedLabelAccentStrength`, `interaction.selectedLabelOpacity`, and `interaction.selectedNodeHaloOpacity`
+Selected-node label tint, selected-label opacity, and selected-node halo strength live under `interaction.selectedLabelAccentColor`, `interaction.selectedLabelAccentStrength`, `interaction.selectedLabelOpacity`, and `interaction.selectedNodeHaloOpacity`
 
 Panel summary text is owned by `syncDesktopPanel()` and `syncXrPanel()` in `demo2/demo2Scene.js`. Those functions are the authoritative place for selected node, selected route, route year/value/destination, and task submission status.
 
@@ -208,4 +196,4 @@ Demo 2 restores semantic geo state instead of replaying dense arc animation:
 - `panelPosition`
 - `panelQuaternion`
 
-The shared logger and bridge then merge Demo 2's scene-local answer summary into the generic XR reactive fields that Repo B already expects.
+The shared logger and bridge then merge Demo 2's scene-local answer summary into the generic XR reactive fields that the study wrapper already expects.

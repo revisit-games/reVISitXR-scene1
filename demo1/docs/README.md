@@ -1,6 +1,6 @@
 # Demo 1 Local Notes
 
-Demo 1 is the paper-facing 3D scatterplot navigation baseline for reVISit-XR.
+Demo 1 is the 3D scatterplot navigation baseline for reVISit-XR.
 
 ## Local Data Bundle
 
@@ -17,8 +17,6 @@ Optional files:
 
 - `demo1/data/population-unwpp.csv`
 - `demo1/data/population-unwpp.metadata.json`
-
-The scene uses only local files. It does not fetch runtime data from OWID.
 
 ## Encodings
 

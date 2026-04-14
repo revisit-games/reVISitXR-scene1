@@ -1,6 +1,10 @@
 # reVISit-XR Stimulus Package
 
-This package is the standalone XR stimulus that can run by itself or inside a reVISit `website` iframe. It records semantic XR provenance with `@trrack/core@^1.4.0`, exports compact reactive answer summaries, and can hydrate recorded participant state during analysis replay.
+This package is the standalone XR stimulus that can run by itself or inside a reVISit `website` iframe (see [reVISit website](https://revisit.dev/)). It records semantic XR provenance with `@trrack/core@^1.4.0` (see [Trrack: A Library for Provenance-Tracking in Web-Based Visualizations](https://ieeexplore.ieee.org/abstract/document/9331264)), exports compact reactive answer summaries, and can hydrate recorded participant state during analysis replay.
+
+Data and external resource attribution is centralized in `credits.md`; upstream data-package readmes and metadata files remain bundled beside their source data for provenance.
+
+This package is part of [WPI VIEW Lab](https://wpivis.github.io/)'s broader reVISit-XR project.
 
 ## Files To Customize
 
@@ -19,7 +23,7 @@ This package is the standalone XR stimulus that can run by itself or inside a re
 
 ## Message Protocol
 
-Repo A does not depend on `public/revisitUtilities/revisit-communicate.js`. The bridge is local and optional.
+This repo (the reVISit-XR Stimulus Package) does not depend on `public/revisitUtilities/revisit-communicate.js`. The bridge is local and optional.
 
 If the URL includes `?id=<iframeId>`, the stimulus enables iframe messaging. If `id` is missing, the bridge becomes a no-op and the app runs standalone.
 
@@ -644,7 +648,7 @@ Demo 2 keeps its migration baseline under `demo2/`:
 - `demo2/demo2Tasks.js`
 - `demo2/demo2LoggingConfig.js`
 
-The current Demo 2 runtime bundle is intentionally an Afghanistan-centered outbound migration baseline because the provided OWID flow export is already scoped to emigration from Afghanistan. The scene-local data contract stays generalized around node and flow bundles so future demos can swap in broader OD datasets without changing the shared runtime. Demo 2 now also bundles a local Natural Earth-derived world boundary topology for subtle country linework on the globe, so there is still no runtime network fetch.
+The current Demo 2 runtime bundle is intentionally an Afghanistan-centered outbound migration baseline because the provided OWID flow export is already scoped to emigration from Afghanistan. The scene-local data contract stays generalized around node and flow bundles so future demos can swap in broader OD datasets without changing the shared runtime. Demo 2 now also bundles a local world boundary topology for subtle country linework on the globe, so there is still no runtime network fetch.
 
 Demo 2 uses the same scene-local answer-summary hook pattern as Demo 1. Its controller contributes compact geo state such as year, direction mode, threshold, focused country, selected route, visible-flow count, label visibility, and globe yaw while the generic XR answers still continue to provide `xrMode`, `xrInteractionPhase`, `xrGrabCount`, `xrSessionCount`, `xrLastEvent`, and `xrStateSummaryJson`. Globe interaction remains semantic and replay-safe because Demo 2 now keeps both `globeYawDeg` and `globeAnchorPosition` in scene-local state: direct globe dragging updates yaw, and a floor handle under the globe updates horizontal anchor placement without introducing dense animation logs.
 
@@ -664,7 +668,7 @@ The local dataset contains six deterministic campus sites, three time slices, an
 
 Live AR placement is left-controller-only before confirmation. The stabilized WebXR hit-test preview can be confirmed by the left trigger even when the controller ray does not hit the invisible fallback placement surface. A separate live-AR-only instruction card stays above the stabilized placement footprint before the overlay is anchored; analysis replay hides that helper and uses a labeled gray support pedestal to show elevated real-world surface height. Replay free-camera inspection also disables gaze dwell so it cannot change marker focus or selection, while the recorded shared `user-gaze` replay pointer can show the `USER GAZE: GAZE DWELL` ray and hit point. The in-scene Control Panel defaults behind the site cylinders and its title strip supports height-only ray dragging, persisted as compact `controlPanelY` scene state.
 
-Repo A builds Demo 4 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
+This repo builds Demo 4 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
 
 ## Demo 5 Landmark Scale Layout
 
@@ -681,7 +685,7 @@ The scene uses local model files from `models/` with GLB-first loading and OBJ f
 
 The default task asks "Which landmark is tallest?" and stores the submitted selected landmark id as semantic state. The expected answer is `burj_khalifa`. Replay restores the selected landmark, comparison mode, authored viewpoint, cue toggles, task answer, and submission state directly instead of replaying raw animation frames.
 
-Repo A builds Demo 5 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
+This repo builds Demo 5 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
 
 ## Demo 6 Slice Rush Layout
 
@@ -697,7 +701,7 @@ Slice Rush uses procedural fruit, bombs, a semi-enclosed play room, live-only bl
 
 Replay stays semantic. Demo 6 reconstructs the spawn plan from `roundSeed`, `roundConfigId`, and round config, then restores elapsed time, score, compact target outcomes, and task submission state. It records target hits, bomb hits, misses, round start/end, reset, submit, and coarse clock samples instead of per-frame target transforms, swing trails, or raw controller pose streams. Demo 6 reactive answers expose scalar game fields only; large sidebar JSON summaries are intentionally omitted.
 
-Repo A builds Demo 6 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
+This repo builds Demo 6 into the normal Vite `dist/` output. This package does not include any automatic study-asset refresh step; deployment or study asset refresh remains an explicit external responsibility.
 
 ## Example 1 Dataset Layout
 
