@@ -42,8 +42,8 @@ export const DEMO6_ROUND_CONFIGS = Object.freeze( {
     velocityXRange: Object.freeze( [ - 0.42, 0.42 ] ),
     velocityYRange: Object.freeze( [ 3.25, 4.45 ] ),
     velocityZRange: Object.freeze( [ - 0.18, 0.35 ] ),
-    fruitRadiusRange: Object.freeze( [ 0.16, 0.22 ] ),
-    bombRadius: 0.19,
+    fruitRadiusRange: Object.freeze( [ 0.12, 0.165 ] ),
+    bombRadius: 0.1425,
   } ),
 } );
 

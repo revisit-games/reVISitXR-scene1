@@ -175,6 +175,7 @@ export function createXRStudyLogger( {
   applyReplayState,
   getLoggingConfig = () => null,
   getSceneAnswerSummary = () => null,
+  getSceneAnswerConfig = () => null,
   normalizeSceneReplayState = ( sceneKey, sceneState, fallbackSceneState ) => (
     structuredClone( sceneState ?? fallbackSceneState ?? {} )
   ),
@@ -444,6 +445,13 @@ export function createXRStudyLogger( {
 
   }
 
+  function resolveSceneAnswerConfig() {
+
+    const answerConfig = getSceneAnswerConfig?.();
+    return answerConfig && typeof answerConfig === 'object' ? answerConfig : null;
+
+  }
+
   function cancelPendingOutboundSync() {
 
     if ( pendingOutboundSyncTimer !== null ) {
@@ -468,7 +476,7 @@ export function createXRStudyLogger( {
 
     cancelPendingOutboundSync();
     bridge.postProvenance( trrack.graph.backend );
-    bridge.postAnswers( buildAnswerPayload( currentState, resolveSceneAnswerSummary() ) );
+    bridge.postAnswers( buildAnswerPayload( currentState, resolveSceneAnswerSummary(), resolveSceneAnswerConfig() ) );
     lastOutboundSyncAt = performance.now();
     loggingStats.outboundSync.flushed += 1;
 
@@ -696,7 +704,7 @@ export function createXRStudyLogger( {
     },
     exportAnswers() {
 
-      return buildAnswerPayload( currentState, resolveSceneAnswerSummary() );
+      return buildAnswerPayload( currentState, resolveSceneAnswerSummary(), resolveSceneAnswerConfig() );
 
     },
     getLoggingStats() {

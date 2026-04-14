@@ -929,6 +929,12 @@ function getActiveSceneAnswerSummary() {
 
 }
 
+function getActiveSceneAnswerConfig() {
+
+  return activeSceneDefinition?.answerConfig || null;
+
+}
+
 function normalizeSceneStateForReplay( sceneKey, candidateSceneState, fallbackSceneState ) {
 
   return getSceneDefinitionByKey( sceneKey ).normalizeSceneState(
@@ -3238,7 +3244,9 @@ function applyReplayState( replayState ) {
   camera.scale.set( 1, 1, 1 );
 
   setPresentationMode( replayState.presentationMode );
-  activeSceneController?.applySceneStateFromReplay?.( replayState.sceneState );
+  activeSceneController?.applySceneStateFromReplay?.( replayState.sceneState, {
+    interactionPolicy: studyLogger?.getInteractionPolicy?.() ?? null,
+  } );
   applyReplayInteractionState( replayState );
   updateGhostReplayPointersFromState( replayState.replayPointers );
 
@@ -3477,6 +3485,7 @@ studyLogger = createXRStudyLogger( {
   applyReplayState,
   getLoggingConfig: getActiveSceneLoggingConfig,
   getSceneAnswerSummary: getActiveSceneAnswerSummary,
+  getSceneAnswerConfig: getActiveSceneAnswerConfig,
   normalizeSceneReplayState: normalizeSceneStateForReplay,
 } );
 

@@ -19,6 +19,8 @@ Participants slice flying fruit targets while avoiding bombs.
 
 Desktop mode supports authoring and replay review with mouse drag slicing over the play lane. VR mode is primary: both controller rays act as blades, so touching a fruit or bomb with the ray is enough to slice or hit it. No trigger press is required.
 
+VR controller blade afterimages are drawn from endpoint motion, not from full controller rays. When a ray touches an active target, the endpoint is the target contact point; otherwise it is the clipped endpoint on the play-room bounds. This keeps the headset trail closer to a Fruit Ninja-style slash arc.
+
 ## Deterministic Round State
 
 `demo6Conditions.js` defines the replayable state and `standard-v1` round config. The spawn plan is reconstructed from:
@@ -45,12 +47,15 @@ Immediate semantic labels:
 - `Miss Target`
 - `Hit Bomb`
 - `End Demo 6 Round`
+- `Sample Demo 6 Round Clock`
 - `Submit Demo 6 Task`
 - `Reset Demo 6 Scene`
 
 The scene also records coarse, non-immediate `Sample Demo 6 Round Clock` snapshots while a round is running. Replay normalizes the saved state, rebuilds the target plan from the seed, restores elapsed time and target outcomes, and renders active unresolved targets only. Sliced fruit, hit bombs, and missed targets disappear immediately instead of remaining as reduced ghost objects.
 
-Blade afterimages are live-only visual feedback. They fade quickly, are not stored in scene state, are not emitted as reactive answers, and are not logged as provenance.
+Blade afterimages and slice particles are live-only visual feedback. They fade quickly, are not stored in scene state, are not emitted as reactive answers, and are not logged as provenance.
+
+Replay audio is scene-local and lightweight. During replay hydration, Demo 6 compares compact target outcomes across safe forward time steps and plays fruit/slicing or bomb sounds only for crossed outcomes. Participant/trial changes, backward jumps, reset/idle states, round identity changes, and large scrubs reset the replay-audio cursor so replay does not emit a burst of old sounds.
 
 ## Reactive Answers
 
@@ -70,13 +75,13 @@ Blade afterimages are live-only visual feedback. They fade quickly, are not stor
 - `xrGameElapsedMs`
 - `xrGameLastEvent`
 
-Large state-summary JSON reactive fields are intentionally omitted for Demo 6. The study sidebar receives scalar game answers, while replay uses compact semantic provenance.
+Large state-summary JSON reactive fields are intentionally omitted for Demo 6. The Demo 6 scene definition opts out of the shared `xrStateSummaryJson` answer payload so the analytics table receives scalar game answers, while replay uses compact semantic provenance.
 
 ## Configuration
 
-- `demo6VisualConfig.js`: play room walls, target colors, HUD/buttons, ray hit tuning, live afterimages, audio volume, scoring, and desktop panel styling.
+- `demo6VisualConfig.js`: play room walls, target colors, HUD/buttons, ray hit tuning, live afterimages, slice particles, audio volume and replay-audio safeguards, scoring, and desktop panel styling.
 - `demo6LoggingConfig.js`: pointer/camera sampling, scene-state throttling, immediate semantic flush flags, coarse clock sampling, and stable labels.
-- `demo6Conditions.js`: round config, state normalization, and caps for compact target outcomes.
+- `demo6Conditions.js`: round config, state normalization, 25% smaller fruit/bomb radii, and caps for compact target outcomes.
 
 Audio lives in `demo6/audio/` and is loaded with module-relative URLs:
 

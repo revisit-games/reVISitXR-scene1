@@ -388,6 +388,9 @@ export const demo6SceneDefinition = Object.freeze( {
     vr: true,
   } ),
   loggingConfig: demo6LoggingConfig,
+  answerConfig: Object.freeze( {
+    includeStateSummaryJson: false,
+  } ),
   templateConfig: Object.freeze( {
     showFloor: false,
     showGrid: false,
@@ -424,6 +427,7 @@ export const demo6SceneDefinition = Object.freeze( {
     const root = new THREE.Group();
     const targetRoot = new THREE.Group();
     const bladeAfterimageRoot = new THREE.Group();
+    const sliceEffectRoot = new THREE.Group();
     const hudRoot = new THREE.Group();
     const controlRoot = new THREE.Group();
     const disposables = [];
@@ -440,7 +444,10 @@ export const demo6SceneDefinition = Object.freeze( {
     let lastClockSampleElapsedMs = 0;
     let bladeAfterimageGeometryDirty = true;
     const liveBladeAfterimageSegments = [];
-    const lastBladeBySource = new Map();
+    const liveSliceEffectBursts = [];
+    const lastBladeEndpointBySource = new Map();
+    let replayAudioCursor = null;
+    let replayAudioAnalysisIdentity = null;
 
     const previousCameraSettings = {
       near: context.camera.near,
@@ -455,9 +462,10 @@ export const demo6SceneDefinition = Object.freeze( {
     root.name = 'demo6-slice-rush-root';
     targetRoot.name = 'demo6-target-root';
     bladeAfterimageRoot.name = 'demo6-live-blade-afterimage-root';
+    sliceEffectRoot.name = 'demo6-live-slice-effect-root';
     hudRoot.name = 'demo6-hud-root';
     controlRoot.name = 'demo6-control-root';
-    root.add( targetRoot, bladeAfterimageRoot, hudRoot, controlRoot );
+    root.add( targetRoot, bladeAfterimageRoot, sliceEffectRoot, hudRoot, controlRoot );
 
     const hudPosition = vector3FromArray( demo6VisualConfig.hud.position );
     hudRoot.position.copy( hudPosition );
@@ -543,6 +551,130 @@ export const demo6SceneDefinition = Object.freeze( {
         playPromise.catch( () => {} );
 
       }
+
+    }
+
+    function getReplayAudioStateKey( sceneState ) {
+
+      return [
+        sceneState.roundSeed,
+        sceneState.roundConfigId,
+        sceneState.durationMs,
+      ].join( ':' );
+
+    }
+
+    function getReplayAudioOutcomeKey( outcome ) {
+
+      return `${outcome.id}:${outcome.status}:${outcome.atMs}`;
+
+    }
+
+    function createReplayAudioCursor( sceneState ) {
+
+      return {
+        stateKey: getReplayAudioStateKey( sceneState ),
+        elapsedMs: Math.round( sceneState.elapsedMs || 0 ),
+        outcomeKeys: new Set(
+          ( sceneState.targetOutcomes || [] )
+            .filter( ( outcome ) => (
+              outcome.status === DEMO6_TARGET_STATUSES.SLICED ||
+              outcome.status === DEMO6_TARGET_STATUSES.BOMB_HIT
+            ) )
+            .map( getReplayAudioOutcomeKey ),
+        ),
+      };
+
+    }
+
+    function resetReplayAudioState( sceneState = null ) {
+
+      replayAudioCursor = sceneState ? createReplayAudioCursor( sceneState ) : null;
+
+    }
+
+    function syncReplayAudioAnalysisIdentity( interactionPolicy ) {
+
+      const analysisControl = interactionPolicy?.analysisControl || {};
+      const nextIdentity = interactionPolicy?.isAnalysisSession === true
+        ? `${analysisControl.participantId || 'unknown'}:${analysisControl.trialId || 'unknown'}`
+        : null;
+
+      if ( nextIdentity !== replayAudioAnalysisIdentity ) {
+
+        replayAudioAnalysisIdentity = nextIdentity;
+        resetReplayAudioState();
+
+      }
+
+    }
+
+    function playReplayOutcomeAudio( outcome ) {
+
+      if ( outcome.status === DEMO6_TARGET_STATUSES.SLICED ) {
+
+        playSound( 'fruit' );
+        playSound( 'slicing' );
+        return;
+
+      }
+
+      if ( outcome.status === DEMO6_TARGET_STATUSES.BOMB_HIT ) {
+
+        playSound( 'bomb' );
+
+      }
+
+    }
+
+    function syncReplayAudioFromState( sceneState ) {
+
+      if ( ! sceneState || sceneState.roundState === DEMO6_ROUND_STATES.IDLE ) {
+
+        resetReplayAudioState();
+        return;
+
+      }
+
+      const nextCursor = createReplayAudioCursor( sceneState );
+      const maxDeltaMs = demo6VisualConfig.audio?.replayMaxDeltaMs ?? 2500;
+      const maxSounds = demo6VisualConfig.audio?.replayMaxSoundsPerApply ?? 4;
+
+      if (
+        ! replayAudioCursor ||
+        replayAudioCursor.stateKey !== nextCursor.stateKey ||
+        nextCursor.elapsedMs < replayAudioCursor.elapsedMs
+      ) {
+
+        replayAudioCursor = nextCursor;
+        return;
+
+      }
+
+      const deltaMs = nextCursor.elapsedMs - replayAudioCursor.elapsedMs;
+
+      if ( deltaMs <= 0 || deltaMs > maxDeltaMs ) {
+
+        replayAudioCursor = nextCursor;
+        return;
+
+      }
+
+      const replayAudioEvents = ( sceneState.targetOutcomes || [] )
+        .filter( ( outcome ) => (
+          (
+            outcome.status === DEMO6_TARGET_STATUSES.SLICED ||
+            outcome.status === DEMO6_TARGET_STATUSES.BOMB_HIT
+          ) &&
+          ! replayAudioCursor.outcomeKeys.has( getReplayAudioOutcomeKey( outcome ) ) &&
+          outcome.atMs > replayAudioCursor.elapsedMs &&
+          outcome.atMs <= nextCursor.elapsedMs
+        ) )
+        .sort( ( a, b ) => a.atMs - b.atMs )
+        .slice( 0, maxSounds );
+
+      replayAudioEvents.forEach( playReplayOutcomeAudio );
+      replayAudioCursor = nextCursor;
 
     }
 
@@ -942,7 +1074,7 @@ export const demo6SceneDefinition = Object.freeze( {
           },
           onSelectEnd( payload ) {
 
-            lastBladeBySource.delete( payload.source || INTERACTORS.DESKTOP_POINTER );
+            lastBladeEndpointBySource.delete( payload.source || INTERACTORS.DESKTOP_POINTER );
 
           },
         },
@@ -1139,16 +1271,167 @@ export const demo6SceneDefinition = Object.freeze( {
 
     }
 
+    function clearLiveBladeAfterimages() {
+
+      lastBladeEndpointBySource.clear();
+      liveBladeAfterimageSegments.length = 0;
+      bladeAfterimageGeometryDirty = true;
+
+    }
+
+    function disposeSliceEffectBurst( burst ) {
+
+      burst?.points?.removeFromParent();
+      burst?.geometry?.dispose?.();
+      burst?.material?.dispose?.();
+
+    }
+
+    function clearSliceEffects() {
+
+      liveSliceEffectBursts.splice( 0 ).forEach( disposeSliceEffectBurst );
+
+    }
+
+    function clearTransientVisuals( { resetReplayAudio = false } = {} ) {
+
+      clearLiveBladeAfterimages();
+      clearSliceEffects();
+
+      if ( resetReplayAudio ) {
+
+        resetReplayAudioState();
+
+      }
+
+    }
+
+    function spawnSliceEffect( target, hitPoint ) {
+
+      if ( target.type !== DEMO6_TARGET_TYPES.FRUIT || ! hitPoint ) {
+
+        return;
+
+      }
+
+      const effectConfig = demo6VisualConfig.sliceEffects || {};
+      const particleCount = Math.max( 1, Math.round( effectConfig.particleCount ?? 12 ) );
+      const positions = new Float32Array( particleCount * 3 );
+      const velocities = [];
+      const origin = hitPoint.clone();
+      const gravity = vector3FromArray( effectConfig.gravity, [ 0, - 0.85, 0 ] );
+      const color = new THREE.Color( target.color || 0xffffff ).lerp(
+        new THREE.Color( 0xffffff ),
+        THREE.MathUtils.clamp( effectConfig.brightenMix ?? 0.32, 0, 1 ),
+      );
+
+      for ( let index = 0; index < particleCount; index += 1 ) {
+
+        positions[ index * 3 ] = origin.x;
+        positions[ index * 3 + 1 ] = origin.y;
+        positions[ index * 3 + 2 ] = origin.z;
+
+        const angle = Math.random() * Math.PI * 2;
+        const lateralSpeed = THREE.MathUtils.lerp(
+          effectConfig.speedMin ?? 0.22,
+          effectConfig.speedMax ?? 0.56,
+          Math.random(),
+        );
+        const upwardSpeed = THREE.MathUtils.lerp(
+          effectConfig.upwardSpeedMin ?? 0.08,
+          effectConfig.upwardSpeedMax ?? 0.24,
+          Math.random(),
+        );
+
+        velocities.push( new THREE.Vector3(
+          Math.cos( angle ) * lateralSpeed,
+          upwardSpeed,
+          Math.sin( angle ) * lateralSpeed,
+        ) );
+
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+      geometry.computeBoundingSphere();
+      const material = new THREE.PointsMaterial( {
+        color,
+        size: effectConfig.particleSize ?? 0.036,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+        toneMapped: false,
+      } );
+      const points = new THREE.Points( geometry, material );
+      points.name = `demo6-slice-effect-${target.id}`;
+      points.renderOrder = 21;
+      sliceEffectRoot.add( points );
+      liveSliceEffectBursts.push( {
+        points,
+        geometry,
+        material,
+        positions,
+        velocities,
+        origin,
+        gravity,
+        baseSize: effectConfig.particleSize ?? 0.036,
+        createdAtMs: performance.now(),
+        lifetimeMs: effectConfig.lifetimeMs ?? 480,
+      } );
+
+    }
+
+    function syncSliceEffects() {
+
+      const nowMs = performance.now();
+
+      for ( let burstIndex = liveSliceEffectBursts.length - 1; burstIndex >= 0; burstIndex -= 1 ) {
+
+        const burst = liveSliceEffectBursts[ burstIndex ];
+        const lifetimeMs = Math.max( 1, burst.lifetimeMs );
+        const ageMs = nowMs - burst.createdAtMs;
+
+        if ( ageMs >= lifetimeMs ) {
+
+          disposeSliceEffectBurst( burst );
+          liveSliceEffectBursts.splice( burstIndex, 1 );
+          continue;
+
+        }
+
+        const ageSeconds = ageMs / 1000;
+        const fade = THREE.MathUtils.clamp( 1 - ageMs / lifetimeMs, 0, 1 );
+
+        burst.velocities.forEach( ( velocity, index ) => {
+
+          const offset = tempVectorA
+            .copy( velocity )
+            .multiplyScalar( ageSeconds )
+            .addScaledVector( burst.gravity, ageSeconds * ageSeconds * 0.5 );
+          burst.positions[ index * 3 ] = burst.origin.x + offset.x;
+          burst.positions[ index * 3 + 1 ] = burst.origin.y + offset.y;
+          burst.positions[ index * 3 + 2 ] = burst.origin.z + offset.z;
+
+        } );
+
+        burst.geometry.attributes.position.needsUpdate = true;
+        burst.geometry.computeBoundingSphere();
+        burst.material.opacity = fade * fade;
+        burst.material.size = burst.baseSize * ( 0.45 + fade * 0.75 );
+
+      }
+
+    }
+
     function syncHud() {
 
       const timeLeft = Math.max( 0, Math.ceil( ( currentSceneState.durationMs - currentSceneState.elapsedMs ) / 1000 ) );
       hudTextController?.setText(
         `Score ${currentSceneState.score}  Combo ${currentSceneState.combo}  Time ${timeLeft}s`,
       );
-      statusTextController?.setText( [
+      statusTextController?.setText(
         `Hits ${currentSceneState.hits} | Misses ${currentSceneState.misses} | Bombs ${currentSceneState.bombHits} | Accuracy ${formatAccuracy( currentSceneState.accuracy )}`,
-        `${currentSceneState.roundState.toUpperCase()} | Seed ${currentSceneState.roundSeed} | Last ${currentSceneState.lastEvent}`,
-      ].join( '\n' ) );
+      );
 
       if ( desktopRefs.status ) {
 
@@ -1172,12 +1455,13 @@ export const demo6SceneDefinition = Object.freeze( {
       syncTargets();
       pruneLiveBladeAfterimages();
       syncLiveBladeAfterimages();
+      syncSliceEffects();
       syncHud();
       syncButtons();
 
     }
 
-    function applyTargetHit( target, source ) {
+    function applyTargetHit( target, source, hitPoint = null ) {
 
       if ( target.type === DEMO6_TARGET_TYPES.BOMB ) {
 
@@ -1202,6 +1486,7 @@ export const demo6SceneDefinition = Object.freeze( {
       currentSceneState.hits += 1;
       setTargetOutcome( target, DEMO6_TARGET_STATUSES.SLICED, source );
       recomputeAccuracy();
+      spawnSliceEffect( target, hitPoint || getTargetPositionAt( target, currentSceneState.elapsedMs ) );
       playSound( 'fruit' );
       playSound( 'slicing' );
       syncTargets();
@@ -1248,6 +1533,7 @@ export const demo6SceneDefinition = Object.freeze( {
             target,
             ratio,
             source,
+            hitPoint: from.clone().lerp( to, ratio ),
           } );
 
         }
@@ -1288,6 +1574,7 @@ export const demo6SceneDefinition = Object.freeze( {
             target,
             ratio: distance,
             source,
+            hitPoint: point.clone(),
           } );
 
         }
@@ -1305,14 +1592,15 @@ export const demo6SceneDefinition = Object.freeze( {
 
       if ( ! range || ! Number.isFinite( range.far ) || range.far <= range.near ) {
 
-        return [];
+        return {
+          candidates: [],
+          endpoint: null,
+        };
 
       }
 
-      const from = tempVectorA.copy( origin ).addScaledVector( direction, range.near ).clone();
-      const to = tempVectorB.copy( origin ).addScaledVector( direction, range.far ).clone();
+      const endpoint = tempVectorA.copy( origin ).addScaledVector( direction, range.far ).clone();
       const candidates = [];
-      appendLiveBladeAfterimage( source, from, to );
 
       spawnPlan.forEach( ( target ) => {
 
@@ -1347,13 +1635,21 @@ export const demo6SceneDefinition = Object.freeze( {
             target,
             ratio: distance,
             source,
+            hitPoint: origin.clone().addScaledVector( direction, distance ),
           } );
 
         }
 
       } );
 
-      return candidates;
+      return {
+        candidates,
+        endpoint: candidates.length > 0
+          ? candidates.reduce( ( nearest, candidate ) => (
+              candidate.ratio < nearest.ratio ? candidate : nearest
+            ), candidates[ 0 ] ).hitPoint.clone()
+          : endpoint,
+      };
 
     }
 
@@ -1362,7 +1658,30 @@ export const demo6SceneDefinition = Object.freeze( {
       candidates
         .sort( ( a, b ) => a.ratio - b.ratio )
         .slice( 0, demo6VisualConfig.blade.maxHitsPerRay )
-        .some( ( candidate ) => applyTargetHit( candidate.target, candidate.source || source ) === true );
+        .some( ( candidate ) => applyTargetHit( candidate.target, candidate.source || source, candidate.hitPoint ) === true );
+
+    }
+
+    function updateBladeEndpointFromPoint( source, point ) {
+
+      if ( ! point || currentSceneState.roundState !== DEMO6_ROUND_STATES.RUNNING ) {
+
+        return;
+
+      }
+
+      const next = point.clone();
+      const previous = lastBladeEndpointBySource.get( source );
+      lastBladeEndpointBySource.set( source, {
+        position: next.clone(),
+        elapsedMs: currentSceneState.elapsedMs,
+      } );
+
+      if ( previous && previous.position.distanceToSquared( next ) > 0.000001 ) {
+
+        appendLiveBladeAfterimage( source, previous.position, next );
+
+      }
 
     }
 
@@ -1375,9 +1694,9 @@ export const demo6SceneDefinition = Object.freeze( {
       }
 
       const next = point.clone();
-      const previous = lastBladeBySource.get( source );
+      const previous = lastBladeEndpointBySource.get( source );
       const outcomeMap = getOutcomeMap();
-      lastBladeBySource.set( source, {
+      lastBladeEndpointBySource.set( source, {
         position: next.clone(),
         elapsedMs: currentSceneState.elapsedMs,
       } );
@@ -1402,20 +1721,43 @@ export const demo6SceneDefinition = Object.freeze( {
 
       }
 
+      const activeSources = new Set();
+
       context.getSceneInteractorPoseSnapshots?.().forEach( ( pose ) => {
 
         if ( pose.isPresenting !== true || pose.isConnected !== true ) {
 
+          lastBladeEndpointBySource.delete( pose.source );
           return;
 
         }
 
+        activeSources.add( pose.source );
         const origin = vector3FromArray( pose.rayOrigin );
         const direction = vector3FromArray( pose.rayDirection, [ 0, 0, - 1 ] ).normalize();
-        applySliceCandidates(
-          collectRaySliceCandidates( pose.source, origin, direction, getOutcomeMap() ),
-          pose.source,
-        );
+        const raySlice = collectRaySliceCandidates( pose.source, origin, direction, getOutcomeMap() );
+
+        if ( raySlice.endpoint ) {
+
+          updateBladeEndpointFromPoint( pose.source, raySlice.endpoint );
+
+        } else {
+
+          lastBladeEndpointBySource.delete( pose.source );
+
+        }
+
+        applySliceCandidates( raySlice.candidates, pose.source );
+
+      } );
+
+      lastBladeEndpointBySource.forEach( ( value, source ) => {
+
+        if ( source !== INTERACTORS.DESKTOP_POINTER && ! activeSources.has( source ) ) {
+
+          lastBladeEndpointBySource.delete( source );
+
+        }
 
       } );
 
@@ -1423,7 +1765,7 @@ export const demo6SceneDefinition = Object.freeze( {
 
     function beginDesktopSlice( payload ) {
 
-      lastBladeBySource.delete( payload.source || INTERACTORS.DESKTOP_POINTER );
+      lastBladeEndpointBySource.delete( payload.source || INTERACTORS.DESKTOP_POINTER );
       continueDesktopSlice( payload );
 
     }
@@ -1449,6 +1791,7 @@ export const demo6SceneDefinition = Object.freeze( {
       }
 
       const outcomeMap = getOutcomeMap();
+      let didExpireTargets = false;
 
       spawnPlan.forEach( ( target ) => {
 
@@ -1466,11 +1809,19 @@ export const demo6SceneDefinition = Object.freeze( {
         currentSceneState.combo = 0;
         setTargetOutcome( target, DEMO6_TARGET_STATUSES.MISSED, 'demo6-clock' );
         recomputeAccuracy();
+        didExpireTargets = true;
         recordSceneChange( 'missTarget', 'demo6-clock', {
           flushImmediately: getSceneStateLoggingConfig().flushOnMissTarget,
         } );
 
       } );
+
+      if ( didExpireTargets ) {
+
+        syncTargets();
+        syncHud();
+
+      }
 
     }
 
@@ -1491,10 +1842,8 @@ export const demo6SceneDefinition = Object.freeze( {
         lastEvent: 'round-start',
       }, currentSceneState );
       rebuildSpawnPlan();
-      lastBladeBySource.clear();
       lastClockSampleElapsedMs = 0;
-      liveBladeAfterimageSegments.length = 0;
-      bladeAfterimageGeometryDirty = true;
+      clearTransientVisuals( { resetReplayAudio: true } );
       syncVisuals();
       playSound( 'gamestart' );
       recordSceneChange( 'startRound', source, {
@@ -1519,6 +1868,7 @@ export const demo6SceneDefinition = Object.freeze( {
       currentSceneState.lastEventTargetId = null;
       currentSceneState.lastEventAtMs = currentSceneState.elapsedMs;
       recomputeAccuracy();
+      clearTransientVisuals( { resetReplayAudio: true } );
       syncVisuals();
 
       if ( shouldLog ) {
@@ -1547,9 +1897,7 @@ export const demo6SceneDefinition = Object.freeze( {
         lastEvent: 'reset',
       }, currentSceneState );
       rebuildSpawnPlan();
-      lastBladeBySource.clear();
-      liveBladeAfterimageSegments.length = 0;
-      bladeAfterimageGeometryDirty = true;
+      clearTransientVisuals( { resetReplayAudio: true } );
       syncVisuals();
       recordSceneChange( 'resetScene', source, {
         flushImmediately: getSceneStateLoggingConfig().flushOnResetScene,
@@ -1737,6 +2085,7 @@ export const demo6SceneDefinition = Object.freeze( {
 
         disposed = true;
         context.clearDesktopPanel?.();
+        clearTransientVisuals( { resetReplayAudio: true } );
         disposables.splice( 0 ).reverse().forEach( ( disposable ) => disposable.dispose?.() );
         targetRecords.forEach( ( record ) => disposeObjectTree( record.group, { disposeRoot: true } ) );
         targetRecords.clear();
@@ -1749,13 +2098,14 @@ export const demo6SceneDefinition = Object.freeze( {
         return normalizeDemo6SceneState( getSceneStateForStorage(), currentSceneState );
 
       },
-      applySceneStateFromReplay( sceneState ) {
+      applySceneStateFromReplay( sceneState, replayContext = {} ) {
 
-        currentSceneState = normalizeDemo6SceneState( sceneState, currentSceneState );
+        const nextSceneState = normalizeDemo6SceneState( sceneState, currentSceneState );
+        syncReplayAudioAnalysisIdentity( replayContext.interactionPolicy );
+        syncReplayAudioFromState( nextSceneState );
+        currentSceneState = nextSceneState;
         rebuildSpawnPlan();
-        lastBladeBySource.clear();
-        liveBladeAfterimageSegments.length = 0;
-        bladeAfterimageGeometryDirty = true;
+        clearTransientVisuals();
         syncVisuals();
 
       },
@@ -1788,6 +2138,7 @@ export const demo6SceneDefinition = Object.freeze( {
 
         currentPresentationMode = nextMode;
         applySceneEnvironment();
+        clearTransientVisuals( { resetReplayAudio: true } );
         syncVisuals();
 
       },

@@ -353,15 +353,24 @@ function normalizeSceneAnswerSummary( sceneAnswerSummary ) {
 
 }
 
-export function buildAnswerPayload( state, sceneAnswerSummary = null ) {
+export function buildAnswerPayload( state, sceneAnswerSummary = null, options = {} ) {
 
-  return {
+  const answerPayload = {
     [ SUMMARY_RESPONSE_KEYS.XR_MODE ]: state.presentationMode,
     [ SUMMARY_RESPONSE_KEYS.XR_INTERACTION_PHASE ]: state.interactionPhase,
     [ SUMMARY_RESPONSE_KEYS.XR_GRAB_COUNT ]: state.metrics.grabCount,
     [ SUMMARY_RESPONSE_KEYS.XR_SESSION_COUNT ]: state.metrics.sessionCount,
     [ SUMMARY_RESPONSE_KEYS.XR_LAST_EVENT ]: `${state.lastEvent.type}:${state.lastEvent.source}`,
-    [ SUMMARY_RESPONSE_KEYS.XR_STATE_SUMMARY_JSON ]: buildCompactStateSummary( state ),
+  };
+
+  if ( options?.includeStateSummaryJson !== false ) {
+
+    answerPayload[ SUMMARY_RESPONSE_KEYS.XR_STATE_SUMMARY_JSON ] = buildCompactStateSummary( state );
+
+  }
+
+  return {
+    ...answerPayload,
     ...normalizeSceneAnswerSummary( sceneAnswerSummary ),
   };
 
